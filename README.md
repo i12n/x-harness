@@ -22,7 +22,10 @@ Implemented in TypeScript (Node >= 18, ESM). The full plan lives in
 - Phase 5 (Verification): commands run per check in the run workspace; a run
   succeeds only when every check passes — done.
 - Phase 6 (Worker): claim/heartbeat/execute/complete with run leases — done.
-- Phase 7-8 (Scheduler, Loop): following the phase order in the plan.
+- Phase 7 (Scheduler): READY tasks -> QUEUED runs with max_concurrency — done.
+- Phase 8 (Loop): Observe/Reconcile/Schedule/Execute/Recover — done. The v0.1
+  MVP chain is complete; PostgreSQL store and real-codex end-to-end runs still
+  need a database and a machine with the codex CLI.
 
 ## Requirements
 
@@ -44,6 +47,8 @@ npm run demo:repository  # Phase 1 acceptance demo (in-memory, no DB)
 npm run demo:task        # Phase 2 acceptance demo (in-memory, no DB)
 npm run demo:workspace   # Phase 3 acceptance demo (git worktrees)
 npm run demo:run         # Phase 4 acceptance demo (stub agent)
+npm run demo:worker      # Phase 6 acceptance demo (worker + leases)
+npm run demo:loop        # Phase 7/8 acceptance demo (scheduler + loop)
 
 npm run db:migrate       # apply migrations/ against Postgres
 ```
@@ -92,8 +97,12 @@ src/
   config/       # yaml/env configuration
   db/           # postgres pool
   domain/       # domain models and validation
-  store/        # RepositoryStore + TaskStore: in-memory + postgres
+  loop/         # periodic reconcile loop (observe/schedule/recover)
+  scheduler/    # READY task scheduling with max_concurrency
+  store/        # repository/task/run stores: in-memory + postgres
   util/         # ids, slugs
+  verification/ # per-command verification runner
+  worker/       # run executor with leases and heartbeats
   workspace/    # git-worktree workspace isolation (one run = one worktree)
 config/         # config/config.yaml
 migrations/     # SQL schema (001_init.sql: 5 core tables)
