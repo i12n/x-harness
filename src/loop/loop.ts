@@ -3,6 +3,7 @@ import type { TaskStatus } from "../domain/task.js";
 import type { Scheduler } from "../scheduler/scheduler.js";
 import type { RunStore } from "../store/runStore.js";
 import type { TaskStore } from "../store/taskStore.js";
+import type { EventStore } from "../store/eventStore.js";
 import type { Worker } from "../worker/worker.js";
 
 export interface LoopOptions {
@@ -11,6 +12,7 @@ export interface LoopOptions {
   runStore: RunStore;
   taskStore: TaskStore;
   maxConcurrency?: number;
+  eventStore?: EventStore;
 }
 
 export interface TickReport {
@@ -30,6 +32,7 @@ export class Loop {
   private readonly taskStore: TaskStore;
   private readonly maxConcurrency: number;
   private running = false;
+  private readonly events: EventStore | undefined;
 
   constructor(options: LoopOptions) {
     this.scheduler = options.scheduler;
@@ -39,6 +42,7 @@ export class Loop {
     this.maxConcurrency =
       options.maxConcurrency ??
       Number(process.env.AI_MAX_CONCURRENCY ?? 2);
+    this.events = options.eventStore;
   }
 
   async start(intervalMs = 1_000): Promise<void> {
@@ -75,6 +79,18 @@ export class Loop {
         continue;
       }
       const lost = await this.runStore.updateRunStatus(run.id, "LOST");
+      if (this.events) {
+        try {
+          await this.events.record({
+            type: "RunLost",
+            taskId: run.taskId,
+            runId: run.id,
+            payload: { reason: "lease expired" },
+          });
+        } catch {
+          // History must never break recovery.
+        }
+      }
       const task = await this.taskStore.findTask(run.taskId);
       const nextStatus: TaskStatus = run.attempt >= task.maxAttempts ? "BLOCKED" : "READY";
       await this.taskStore.updateTaskStatus(task.id, nextStatus);

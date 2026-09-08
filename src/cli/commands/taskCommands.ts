@@ -1,6 +1,7 @@
 import type { CreateTaskInput, Task, TaskStatus } from "../../domain/task.js";
 import { assessTask } from "../../domain/task.js";
 import type { RepositoryStore } from "../../store/repositoryStore.js";
+import type { EventStore } from "../../store/eventStore.js";
 import type { TaskListFilter, TaskStore } from "../../store/taskStore.js";
 
 export interface TaskCreateOptions {
@@ -17,6 +18,7 @@ export async function createTaskCommand(
   tasks: TaskStore,
   repositories: RepositoryStore,
   options: TaskCreateOptions,
+  events?: EventStore,
 ): Promise<Task> {
   // Task must be bound to a registered repository (Phase 2 acceptance).
   await repositories.findRepository(options.repo);
@@ -29,7 +31,19 @@ export async function createTaskCommand(
     priority: options.priority,
     maxAttempts: options.maxAttempts,
   };
-  return tasks.createTask(input);
+  const created = await tasks.createTask(input);
+  if (events) {
+    try {
+      await events.record({
+        type: "TaskCreated",
+        taskId: created.id,
+        payload: { repositoryId: created.repositoryId, title: created.title },
+      });
+    } catch {
+      // History must never break task creation.
+    }
+  }
+  return created;
 }
 
 export async function listTasksCommand(
@@ -56,6 +70,7 @@ export async function validateTaskCommand(
   tasks: TaskStore,
   repositories: RepositoryStore,
   id: string,
+  events?: EventStore,
 ): Promise<ValidateTaskResult> {
   const task = await tasks.findTask(id);
   const issues: string[] = [];
@@ -70,5 +85,16 @@ export async function validateTaskCommand(
 
   const status: TaskStatus = issues.length === 0 ? "READY" : "BLOCKED";
   const updated = await tasks.updateTaskStatus(task.id, status);
+  if (events) {
+    try {
+      await events.record({
+        type: status === "READY" ? "TaskReady" : "TaskBlocked",
+        taskId: task.id,
+        payload: { issues },
+      });
+    } catch {
+      // History must never break intake validation.
+    }
+  }
   return { task: updated, issues };
 }

@@ -11,6 +11,7 @@ import { InMemoryTaskStore } from "../src/store/inMemoryTaskStore.js";
 import { Verifier } from "../src/verification/runner.js";
 import { Worker } from "../src/worker/worker.js";
 import { WorkspaceManager } from "../src/workspace/manager.js";
+import { InMemoryEventStore } from "../src/store/inMemoryEventStore.js";
 import {
   commitFile,
   createGitFixture,
@@ -46,6 +47,7 @@ describe("Loop", () => {
     const repositories = new InMemoryRepositoryStore();
     const tasks = new InMemoryTaskStore();
     const runs = new InMemoryRunStore();
+    const events = new InMemoryEventStore();
     await repositories.createRepository({
       id: "repo-001",
       name: "my-app",
@@ -87,8 +89,9 @@ describe("Loop", () => {
       runStore: runs,
       taskStore: tasks,
       maxConcurrency: 2,
+      eventStore: events,
     });
-    return { tasks, runs, loop };
+    return { tasks, runs, events, loop };
   }
 
   it("schedules, executes, verifies and moves a task to REVIEW in one tick", async () => {
@@ -122,7 +125,7 @@ describe("Loop", () => {
   });
 
   it("recovers runs whose lease expired and releases the task", async () => {
-    const { tasks, runs, loop } = await setup(IDLE_CODE);
+    const { tasks, runs, events, loop } = await setup(IDLE_CODE);
     await runs.createRun({
       id: "run-expired",
       taskId: "task-001",
@@ -139,5 +142,8 @@ describe("Loop", () => {
     expect(report.recovered.map((run) => run.id)).toEqual(["run-expired"]);
     expect((await runs.findRun("run-expired")).status).toBe("LOST");
     expect((await tasks.findTask("task-001")).status).toBe("READY");
+    expect(
+      (await events.listEvents({ runId: "run-expired", type: "RunLost" })).map((e) => e.type),
+    ).toEqual(["RunLost"]);
   });
 });

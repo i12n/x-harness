@@ -4,6 +4,7 @@ import type { Repository } from "../domain/repository.js";
 import type { Run } from "../domain/run.js";
 import type { Task } from "../domain/task.js";
 import { WorkerExecutionError } from "../errors.js";
+import type { EventStore } from "../store/eventStore.js";
 import type { RepositoryStore } from "../store/repositoryStore.js";
 import type { RunStore } from "../store/runStore.js";
 import type { TaskStore } from "../store/taskStore.js";
@@ -17,6 +18,7 @@ export interface WorkerOptions {
   workspaceManager: WorkspaceManager;
   agentEngine: AgentEngine;
   verifier: Verifier;
+  eventStore?: EventStore;
   workerId?: string;
   heartbeatMs?: number;
   leaseSeconds?: number;
@@ -42,6 +44,7 @@ export class Worker {
   private readonly workspaceManager: WorkspaceManager;
   private readonly agentEngine: AgentEngine;
   private readonly verifier: Verifier;
+  private readonly events: EventStore | undefined;
   private readonly workerId: string;
   private readonly heartbeatMs: number;
   private readonly leaseMs: number;
@@ -53,6 +56,7 @@ export class Worker {
     this.workspaceManager = options.workspaceManager;
     this.agentEngine = options.agentEngine;
     this.verifier = options.verifier;
+    this.events = options.eventStore;
     this.workerId =
       options.workerId ?? process.env.AI_WORKER_ID ?? `worker-${process.pid}`;
     this.heartbeatMs = options.heartbeatMs ?? 10_000;
@@ -65,6 +69,11 @@ export class Worker {
       this.workerId,
       isoIn(this.leaseMs),
     );
+    await this.emit("RunStarted", {
+      taskId: claimed.taskId,
+      runId,
+      payload: { workerId: this.workerId, attempt: claimed.attempt },
+    });
     const heartbeat = this.startHeartbeat(runId);
     try {
       const task = await this.taskStore.findTask(claimed.taskId);
@@ -83,14 +92,39 @@ export class Worker {
         repository,
         workspacePath: workspace.path,
       });
+      await this.emit("AgentStarted", {
+        taskId: task.id,
+        runId,
+        payload: { agent: "codex", engine: "codex", workspace: workspace.path },
+      });
       const agentResult = await this.agentEngine.execute(context);
+      await this.emit("AgentFinished", {
+        taskId: task.id,
+        runId,
+        payload: { exitCode: agentResult.exitCode, signal: agentResult.signal },
+      });
 
       await this.runStore.updateRunStatus(runId, "VERIFYING");
       await this.taskStore.updateTaskStatus(task.id, "VERIFYING");
+      await this.emit("VerificationStarted", { taskId: task.id, runId });
       const verification = await this.verifier.run({
         workspacePath: workspace.path,
         commands: repository.verificationCommands,
       });
+      await this.emit(
+        verification.passed ? "VerificationPassed" : "VerificationFailed",
+        {
+          taskId: task.id,
+          runId,
+          payload: {
+            passed: verification.passed,
+            checks: verification.checks.map((check) => ({
+              command: check.command,
+              status: check.status,
+            })),
+          },
+        },
+      );
 
       const finishedAt = new Date().toISOString();
       if (verification.passed) {
@@ -106,6 +140,8 @@ export class Worker {
           finishedAt,
         });
         await this.taskStore.updateTaskStatus(task.id, "REVIEW");
+        await this.emit("RunSucceeded", { taskId: task.id, runId });
+        await this.emit("TaskReview", { taskId: task.id, runId });
       } else {
         await this.failRun(
           runId,
@@ -116,6 +152,11 @@ export class Worker {
           verification,
           finishedAt,
         );
+        await this.emit("RunFailed", {
+          taskId: task.id,
+          runId,
+          payload: { reason: "verification failed" },
+        });
       }
 
       const finalRun = await this.runStore.findRun(runId);
@@ -135,6 +176,11 @@ export class Worker {
           status: "FAILED",
           error: { message },
           finishedAt: new Date().toISOString(),
+        });
+        await this.emit("RunFailed", {
+          taskId: claimed.taskId,
+          runId,
+          payload: { reason: message },
         });
         await this.recoverTask(task, claimed.attempt);
       } catch {
@@ -188,6 +234,20 @@ export class Worker {
         // A failed heartbeat is surfaced later by lease recovery.
       });
     }, this.heartbeatMs);
+  }
+
+  private async emit(
+    type: string,
+    input: { taskId: string; runId: string; payload?: unknown },
+  ): Promise<void> {
+    if (!this.events) {
+      return;
+    }
+    try {
+      await this.events.record({ type, taskId: input.taskId, runId: input.runId, payload: input.payload });
+    } catch {
+      // History must never break execution.
+    }
   }
 }
 

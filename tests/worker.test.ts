@@ -9,6 +9,7 @@ import { InMemoryRunStore } from "../src/store/inMemoryRunStore.js";
 import { InMemoryTaskStore } from "../src/store/inMemoryTaskStore.js";
 import { Verifier } from "../src/verification/runner.js";
 import { Worker } from "../src/worker/worker.js";
+import { InMemoryEventStore } from "../src/store/inMemoryEventStore.js";
 import { WorkspaceManager } from "../src/workspace/manager.js";
 import {
   commitFile,
@@ -45,6 +46,7 @@ describe("Worker", () => {
     const repositories = new InMemoryRepositoryStore();
     const tasks = new InMemoryTaskStore();
     const runs = new InMemoryRunStore();
+    const events = new InMemoryEventStore();
     await repositories.createRepository({
       id: "repo-001",
       name: "my-app",
@@ -71,11 +73,12 @@ describe("Worker", () => {
         spawnArgs: () => ["-e", engineCode],
       }),
       verifier: new Verifier(),
+      eventStore: events,
       workerId: "worker-test",
       heartbeatMs: 50,
       leaseSeconds: 1,
     });
-    return { fixture, repositories, tasks, runs, worker };
+    return { fixture, repositories, tasks, runs, events, worker };
   }
 
   it("claims, executes, verifies and completes a successful run", async () => {
@@ -128,5 +131,47 @@ describe("Worker", () => {
     await worker.executeRun("run-001");
 
     expect((await tasks.findTask("task-001")).status).toBe("BLOCKED");
+  });
+
+  it("records the full run lifecycle as events", async () => {
+    const { events, runs, worker } = await setup(WRITE_CODE);
+    await runs.createRun({
+      id: "run-001",
+      taskId: "task-001",
+      attempt: 1,
+      agent: "codex",
+      engine: "codex",
+    });
+
+    await worker.executeRun("run-001");
+
+    const types = (await events.listEvents({ runId: "run-001" })).map((e) => e.type);
+    expect(types).toEqual([
+      "RunStarted",
+      "AgentStarted",
+      "AgentFinished",
+      "VerificationStarted",
+      "VerificationPassed",
+      "RunSucceeded",
+      "TaskReview",
+    ]);
+  });
+
+  it("records failure events when verification fails", async () => {
+    const { events, runs, worker } = await setup(IDLE_CODE);
+    await runs.createRun({
+      id: "run-001",
+      taskId: "task-001",
+      attempt: 1,
+      agent: "codex",
+      engine: "codex",
+    });
+
+    await worker.executeRun("run-001");
+
+    const types = (await events.listEvents({ runId: "run-001" })).map((e) => e.type);
+    expect(types).toContain("VerificationFailed");
+    expect(types).toContain("RunFailed");
+    expect(types).not.toContain("RunSucceeded");
   });
 });

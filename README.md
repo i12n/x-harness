@@ -29,6 +29,9 @@ Implemented in TypeScript (Node >= 18, ESM). The full plan lives in
 - v0.2 (Review & Human Approval): reviewer agent over a succeeded run's diff +
   `task approve/reject` — done. Next per plan: Multi Repository Task,
   Dependency DAG, GitHub Integration.
+- v0.1 wrap-up: full event history (TaskCreated -> TaskDone) written by the
+  validate/scheduler/worker/loop/review/approval paths, browsable via
+  `ai event list` — done.
 
 ## Requirements
 
@@ -88,6 +91,9 @@ ai run <task-id>
 ai review <run-id>
 ai task approve <task-id> [--note "..."]
 ai task reject <task-id> [--feedback "..."]
+
+# event history (all state changes)
+ai event list [--task <id>] [--run <id>] [--type <type>] [--limit <n>]
 ```
 
 `ai run` defaults: `codex exec --sandbox workspace-write --json -`, cwd = the

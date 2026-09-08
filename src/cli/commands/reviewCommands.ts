@@ -4,6 +4,7 @@ import type { Run } from "../../domain/run.js";
 import type { Task, TaskReview } from "../../domain/task.js";
 import { HarnessError } from "../../errors.js";
 import type { RepositoryStore } from "../../store/repositoryStore.js";
+import type { EventStore } from "../../store/eventStore.js";
 import type { RunStore } from "../../store/runStore.js";
 import type { TaskStore } from "../../store/taskStore.js";
 import type { WorkspaceManager } from "../../workspace/manager.js";
@@ -15,6 +16,7 @@ export interface ReviewRunParams {
   workspaceManager: WorkspaceManager;
   engine: AgentEngine;
   runId: string;
+  events?: EventStore;
 }
 
 export interface ReviewOutcome {
@@ -63,6 +65,18 @@ export async function reviewRunCommand(params: ReviewRunParams): Promise<ReviewO
     text: truncate(text, 100_000),
   };
   const updated = await params.tasks.appendTaskReview(task.id, review);
+  if (params.events) {
+    try {
+      await params.events.record({
+        type: "TaskReview",
+        taskId: task.id,
+        runId: run.id,
+        payload: { text: review.text.slice(0, 2000) },
+      });
+    } catch {
+      // History must never break reviewing.
+    }
+  }
   return { task: updated, review, diff };
 }
 
@@ -70,6 +84,7 @@ export async function approveTaskCommand(
   tasks: TaskStore,
   taskId: string,
   note?: string,
+  events?: EventStore,
 ): Promise<Task> {
   const task = await tasks.findTask(taskId);
   if (task.status !== "REVIEW") {
@@ -85,6 +100,17 @@ export async function approveTaskCommand(
       text: `APPROVED: ${note.trim()}`,
     });
   }
+  if (events) {
+    try {
+      await events.record({
+        type: "TaskDone",
+        taskId,
+        payload: { note: note?.trim() ?? "" },
+      });
+    } catch {
+      // History must never break approval.
+    }
+  }
   return updated;
 }
 
@@ -93,6 +119,7 @@ export async function rejectTaskCommand(
   runs: RunStore,
   taskId: string,
   feedback?: string,
+  events?: EventStore,
 ): Promise<Task> {
   const task = await tasks.findTask(taskId);
   if (task.status !== "REVIEW") {
@@ -109,6 +136,17 @@ export async function rejectTaskCommand(
       runId: "human-rejection",
       text: `REJECTED: ${feedback.trim()}`,
     });
+  }
+  if (events) {
+    try {
+      await events.record({
+        type: "TaskRejected",
+        taskId,
+        payload: { status: updated.status, feedback: feedback?.trim() ?? "" },
+      });
+    } catch {
+      // History must never break rejection.
+    }
   }
   return updated;
 }

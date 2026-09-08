@@ -126,8 +126,8 @@ task
   .option("--priority <n>", "priority, higher first (default: 50)", parsePositiveInt)
   .option("--max-attempts <n>", "max retry attempts (default: 3)", parsePositiveInt)
   .action(async (options: TaskCreateOptions) => {
-    await withStores(async ({ tasks, repositories }) => {
-      const created = await createTaskCommand(tasks, repositories, options);
+    await withStores(async ({ tasks, repositories, events }) => {
+      const created = await createTaskCommand(tasks, repositories, options, events);
       console.log(`Created ${created.id} (${created.title})`);
       printTask(created);
     });
@@ -172,8 +172,8 @@ task
   .command("validate <id>")
   .description("task intake: move INBOX -> READY or -> BLOCKED")
   .action(async (id: string) => {
-    await withStores(async ({ tasks, repositories }) => {
-      const { task: item, issues } = await validateTaskCommand(tasks, repositories, id);
+    await withStores(async ({ tasks, repositories, events }) => {
+      const { task: item, issues } = await validateTaskCommand(tasks, repositories, id, events);
       console.log(`${item.id} -> ${item.status}`);
       if (issues.length === 0) {
         console.log("validation passed");
@@ -190,8 +190,8 @@ task
   .description("approve a REVIEW task -> DONE (human approval)")
   .option("--note <text>", "optional approval note")
   .action(async (id: string, options: { note?: string }) => {
-    await withStores(async ({ tasks }) => {
-      const updated = await approveTaskCommand(tasks, id, options.note);
+    await withStores(async ({ tasks, events }) => {
+      const updated = await approveTaskCommand(tasks, id, options.note, events);
       console.log(`${updated.id} -> ${updated.status}`);
     });
   });
@@ -201,8 +201,8 @@ task
   .description("reject a REVIEW task -> READY/BLOCKED with feedback")
   .option("--feedback <text>", "feedback for the next attempt")
   .action(async (id: string, options: { feedback?: string }) => {
-    await withStores(async ({ tasks, runs }) => {
-      const updated = await rejectTaskCommand(tasks, runs, id, options.feedback);
+    await withStores(async ({ tasks, runs, events }) => {
+      const updated = await rejectTaskCommand(tasks, runs, id, options.feedback, events);
       console.log(`${updated.id} -> ${updated.status}`);
     });
   });
@@ -211,7 +211,7 @@ program
   .command("review <run-id>")
   .description("run a reviewer agent over a SUCCEEDED run's workspace diff")
   .action(async (runId: string) => {
-    await withStores(async ({ tasks, runs, repositories }) => {
+    await withStores(async ({ tasks, runs, repositories, events }) => {
       const outcome = await reviewRunCommand({
         tasks,
         runs,
@@ -219,12 +219,40 @@ program
         workspaceManager: new WorkspaceManager(),
         engine: new CodexEngine({ sandbox: "read-only" }),
         runId,
+        events,
       });
       console.log(`reviewed run ${runId} -> task ${outcome.task.id} (${outcome.task.status})`);
       console.log("--- review ---");
       console.log(outcome.review.text);
       console.log("--------------");
       console.log(`reviews recorded: ${readTaskReviews(outcome.task).length}`);
+    });
+  });
+
+const event = program.command("event").description("inspect event history");
+event
+  .command("list")
+  .description("list recorded events (optionally filtered)")
+  .option("--task <id>", "only events for this task")
+  .option("--run <id>", "only events for this run")
+  .option("--type <type>", "only events of this type")
+  .option("--limit <n>", "number of most recent events to show", parsePositiveInt)
+  .action(async (options: { task?: string; run?: string; type?: string; limit?: number }) => {
+    await withStores(async ({ events }) => {
+      const list = await events.listEvents({
+        taskId: options.task,
+        runId: options.run,
+        type: options.type,
+        limit: options.limit,
+      });
+      if (list.length === 0) {
+        console.log("No events found.");
+        return;
+      }
+      console.log("ID\tTYPE\tTASK\tRUN\tCREATED");
+      for (const item of list) {
+        console.log(`${item.id}\t${item.type}\t${item.taskId ?? "-"}\t${item.runId ?? "-"}\t${item.createdAt}`);
+      }
     });
   });
 

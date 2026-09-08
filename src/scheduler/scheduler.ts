@@ -3,6 +3,7 @@ import type { Run } from "../domain/run.js";
 import type { Task } from "../domain/task.js";
 import type { RunStore } from "../store/runStore.js";
 import type { TaskStore } from "../store/taskStore.js";
+import type { EventStore } from "../store/eventStore.js";
 
 export interface SchedulerOptions {
   taskStore: TaskStore;
@@ -10,6 +11,7 @@ export interface SchedulerOptions {
   maxConcurrency?: number;
   agent?: string;
   engine?: string;
+  eventStore?: EventStore;
 }
 
 /**
@@ -22,6 +24,7 @@ export class Scheduler {
   private readonly maxConcurrency: number;
   private readonly agent: string;
   private readonly engine: string;
+  private readonly events: EventStore | undefined;
 
   constructor(options: SchedulerOptions) {
     this.taskStore = options.taskStore;
@@ -31,6 +34,7 @@ export class Scheduler {
       Number(process.env.AI_MAX_CONCURRENCY ?? 2);
     this.agent = options.agent ?? "codex";
     this.engine = options.engine ?? "codex";
+    this.events = options.eventStore;
   }
 
   async schedule(): Promise<Run[]> {
@@ -50,14 +54,25 @@ export class Scheduler {
         continue;
       }
       const previousRuns = await this.runStore.listRuns({ taskId: task.id });
-      created.push(
-        await this.runStore.createRun({
-          taskId: task.id,
-          attempt: previousRuns.length + 1,
-          agent: this.agent,
-          engine: this.engine,
-        }),
-      );
+      const run = await this.runStore.createRun({
+        taskId: task.id,
+        attempt: previousRuns.length + 1,
+        agent: this.agent,
+        engine: this.engine,
+      });
+      created.push(run);
+      if (this.events) {
+        try {
+          await this.events.record({
+            type: "RunCreated",
+            taskId: task.id,
+            runId: run.id,
+            payload: { attempt: run.attempt },
+          });
+        } catch {
+          // History must never break scheduling.
+        }
+      }
     }
     return created;
   }

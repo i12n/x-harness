@@ -8,6 +8,7 @@ import {
 } from "../src/cli/commands/taskCommands.js";
 import { InMemoryRepositoryStore } from "../src/store/inMemoryRepositoryStore.js";
 import { InMemoryTaskStore } from "../src/store/inMemoryTaskStore.js";
+import { InMemoryEventStore } from "../src/store/inMemoryEventStore.js";
 
 const VALID_URL = "git@github.com:example/my-app.git";
 
@@ -96,5 +97,21 @@ describe("task CLI commands", () => {
     expect(shown.title).toBe("one");
     const list = await listTasksCommand(tasks, { repositoryId: "repo-001" });
     expect(list.map((task) => task.id)).toEqual(["task-001"]);
+  });
+
+  it("records TaskCreated and TaskReady events", async () => {
+    const { repositories, tasks } = await setup();
+    const events = new InMemoryEventStore();
+    await createTaskCommand(tasks, repositories, {
+      id: "task-001",
+      repo: "repo-001",
+      title: "Add user avatar",
+      description: "Allow users to upload avatars.",
+      accept: ["Tests pass"],
+    }, events);
+    await validateTaskCommand(tasks, repositories, "task-001", events);
+
+    const types = (await events.listEvents({ taskId: "task-001" })).map((e) => e.type);
+    expect(types).toEqual(["TaskCreated", "TaskReady"]);
   });
 });
