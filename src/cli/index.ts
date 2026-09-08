@@ -2,13 +2,22 @@
 
 import { Command } from "commander";
 import type { Repository } from "../domain/repository.js";
-import { openRepositoryStore } from "../store/index.js";
+import type { Task, TaskStatus } from "../domain/task.js";
+import { TASK_STATUSES } from "../domain/task.js";
+import { openStores, type StoreHandle } from "../store/index.js";
 import {
   createRepositoryCommand,
   listRepositoriesCommand,
   showRepositoryCommand,
 } from "./commands/repositoryCommands.js";
 import type { RepositoryCreateOptions } from "./commands/repositoryCommands.js";
+import {
+  createTaskCommand,
+  listTasksCommand,
+  showTaskCommand,
+  validateTaskCommand,
+} from "./commands/taskCommands.js";
+import type { TaskCreateOptions } from "./commands/taskCommands.js";
 
 const program = new Command();
 program
@@ -20,16 +29,28 @@ function collect(value: string, previous: string[]): string[] {
   return previous.concat([value]);
 }
 
-async function withStore(
-  run: (handle: Awaited<ReturnType<typeof openRepositoryStore>>) => Promise<void>,
+function parsePositiveInt(value: string): number {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    throw new Error(`invalid positive integer: ${value}`);
+  }
+  return Math.trunc(parsed);
+}
+
+async function withStores(
+  run: (handle: StoreHandle) => Promise<void>,
 ): Promise<void> {
-  const handle = await openRepositoryStore();
+  const handle = await openStores();
   try {
     await run(handle);
   } finally {
     await handle.close();
   }
 }
+
+// ---------------------------------------------------------------------------
+// repository commands
+// ---------------------------------------------------------------------------
 
 const repository = program.command("repository").description("register and inspect repositories");
 
@@ -43,8 +64,8 @@ repository
   .option("--local-path <path>", "local checkout path (default: ~/ai-repos/<name>)")
   .option("--verify <command>", "verification command (repeatable)", collect, [])
   .action(async (options: RepositoryCreateOptions) => {
-    await withStore(async ({ store }) => {
-      const repo = await createRepositoryCommand(store, options);
+    await withStores(async ({ repositories }) => {
+      const repo = await createRepositoryCommand(repositories, options);
       console.log(`Created ${repo.id} (${repo.name})`);
       printRepository(repo);
     });
@@ -54,8 +75,8 @@ repository
   .command("list")
   .description("list registered repositories")
   .action(async () => {
-    await withStore(async ({ store }) => {
-      const repos = await listRepositoriesCommand(store);
+    await withStores(async ({ repositories }) => {
+      const repos = await listRepositoriesCommand(repositories);
       if (repos.length === 0) {
         console.log("No repositories registered.");
         return;
@@ -73,11 +94,91 @@ repository
   .command("show <id>")
   .description("show one repository")
   .action(async (id: string) => {
-    await withStore(async ({ store }) => {
-      const repo = await showRepositoryCommand(store, id);
+    await withStores(async ({ repositories }) => {
+      const repo = await showRepositoryCommand(repositories, id);
       printRepository(repo);
     });
   });
+
+// ---------------------------------------------------------------------------
+// task commands
+// ---------------------------------------------------------------------------
+
+const task = program.command("task").description("create and inspect tasks");
+
+task
+  .command("create")
+  .description("create a task bound to a repository (status: INBOX)")
+  .option("--id <id>", "task id (default: generated)")
+  .requiredOption("--repo <id>", "repository id the task belongs to")
+  .requiredOption("--title <title>", "task title")
+  .option("--description <text>", "task description")
+  .option("--accept <criterion>", "acceptance criterion (repeatable)", collect, [])
+  .option("--priority <n>", "priority, higher first (default: 50)", parsePositiveInt)
+  .option("--max-attempts <n>", "max retry attempts (default: 3)", parsePositiveInt)
+  .action(async (options: TaskCreateOptions) => {
+    await withStores(async ({ tasks, repositories }) => {
+      const created = await createTaskCommand(tasks, repositories, options);
+      console.log(`Created ${created.id} (${created.title})`);
+      printTask(created);
+    });
+  });
+
+task
+  .command("list")
+  .description("list tasks (optionally filtered by repository/status)")
+  .option("--repo <id>", "only tasks of this repository")
+  .option("--status <status>", `only tasks with this status (${TASK_STATUSES.join("|")})`)
+  .action(async (options: { repo?: string; status?: string }) => {
+    await withStores(async ({ tasks }) => {
+      const status = normalizeStatusOption(options.status);
+      const list = await listTasksCommand(tasks, {
+        repositoryId: options.repo,
+        status,
+      });
+      if (list.length === 0) {
+        console.log("No tasks found.");
+        return;
+      }
+      console.log("ID\tREPOSITORY\tSTATUS\tPRIORITY\tTITLE");
+      for (const item of list) {
+        console.log(
+          `${item.id}\t${item.repositoryId}\t${item.status}\t${item.priority}\t${item.title}`,
+        );
+      }
+    });
+  });
+
+task
+  .command("show <id>")
+  .description("show one task")
+  .action(async (id: string) => {
+    await withStores(async ({ tasks }) => {
+      const item = await showTaskCommand(tasks, id);
+      printTask(item);
+    });
+  });
+
+task
+  .command("validate <id>")
+  .description("task intake: move INBOX -> READY or -> BLOCKED")
+  .action(async (id: string) => {
+    await withStores(async ({ tasks, repositories }) => {
+      const { task: item, issues } = await validateTaskCommand(tasks, repositories, id);
+      console.log(`${item.id} -> ${item.status}`);
+      if (issues.length === 0) {
+        console.log("validation passed");
+      } else {
+        for (const issue of issues) {
+          console.log(`- ${issue}`);
+        }
+      }
+    });
+  });
+
+// ---------------------------------------------------------------------------
+// output helpers
+// ---------------------------------------------------------------------------
 
 function printRepository(repo: Repository): void {
   console.log(`id: ${repo.id}`);
@@ -93,6 +194,35 @@ function printRepository(repo: Repository): void {
       console.log(`  - ${command}`);
     }
   }
+}
+
+function printTask(item: Task): void {
+  console.log(`id: ${item.id}`);
+  console.log(`repository_id: ${item.repositoryId}`);
+  console.log(`title: ${item.title}`);
+  console.log(`status: ${item.status}`);
+  console.log(`priority: ${item.priority}`);
+  console.log(`max_attempts: ${item.maxAttempts}`);
+  console.log(`description: ${item.description || "(none)"}`);
+  console.log("acceptance:");
+  if (item.acceptance.length === 0) {
+    console.log("  (none)");
+  } else {
+    for (const criterion of item.acceptance) {
+      console.log(`  - ${criterion}`);
+    }
+  }
+}
+
+function normalizeStatusOption(value: string | undefined): TaskStatus | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  const upper = value.toUpperCase();
+  if (!(TASK_STATUSES as readonly string[]).includes(upper)) {
+    throw new Error(`invalid status '${value}' (use one of: ${TASK_STATUSES.join("|")})`);
+  }
+  return upper as TaskStatus;
 }
 
 async function main(): Promise<void> {

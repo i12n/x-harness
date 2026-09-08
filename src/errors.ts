@@ -20,3 +20,15 @@ export class RepositoryNotFoundError extends HarnessError {
     super(`repository not found: ${id}`);
   }
 }
+
+export class DuplicateTaskError extends HarnessError {
+  constructor(id: string) {
+    super(`task already exists: ${id}`);
+  }
+}
+
+export class TaskNotFoundError extends HarnessError {
+  constructor(id: string) {
+    super(`task not found: ${id}`);
+  }
+}

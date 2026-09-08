@@ -2,6 +2,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { ValidationError } from "../errors.js";
 import { makeId, slugify } from "../util/id.js";
+import { dedupeNonEmpty } from "../util/strings.js";
 
 /** A registered source repository the harness can drive tasks against. */
 export interface Repository {
@@ -31,19 +32,6 @@ export function assertValidRepositoryUrl(url: string): void {
   if (!SCP_LIKE_URL.test(url) && !URI_URL.test(url)) {
     throw new ValidationError(`invalid repository url: ${url}`);
   }
-}
-
-function dedupeNonEmpty(values: string[]): string[] {
-  const seen = new Set<string>();
-  const result: string[] = [];
-  for (const value of values) {
-    const command = value.trim();
-    if (command && !seen.has(command)) {
-      seen.add(command);
-      result.push(command);
-    }
-  }
-  return result;
 }
 
 /** Build a fully-populated Repository from create input, applying defaults. */

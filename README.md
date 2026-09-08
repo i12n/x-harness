@@ -13,8 +13,10 @@ Implemented in TypeScript (Node >= 18, ESM). The full plan lives in
 ## Status
 
 - Phase 1 (Repository): `repository create / list / show` — done.
-- Phase 2+ (Task, Workspace, Codex Adapter, Verification, Worker, Scheduler,
-  Loop): following the phase order in the plan.
+- Phase 2 (Task): `task create / list / show / validate` (INBOX -> READY /
+  BLOCKED intake) — done.
+- Phase 3+ (Workspace, Codex Adapter, Verification, Worker, Scheduler, Loop):
+  following the phase order in the plan.
 
 ## Requirements
 
@@ -33,6 +35,7 @@ npm test                 # vitest unit tests
 npm run typecheck        # strict TypeScript check
 npm run build            # compile to dist/
 npm run demo:repository  # Phase 1 acceptance demo (in-memory, no DB)
+npm run demo:task        # Phase 2 acceptance demo (in-memory, no DB)
 
 npm run db:migrate       # apply migrations/ against Postgres
 ```
@@ -49,6 +52,16 @@ ai repository create \
 
 ai repository list
 ai repository show <id>
+
+ai task create \
+  --repo <id> \
+  --title "Add user avatar" \
+  --description "Allow users to upload avatars." \
+  --accept "JPG supported" \
+  --accept "Tests pass"
+ai task validate <id>
+ai task list [--repo <id>] [--status READY]
+ai task show <id>
 ```
 
 `DATABASE_URL` overrides `config/config.yaml`; `AI_STORAGE=memory` bypasses the
@@ -62,7 +75,7 @@ src/
   config/       # yaml/env configuration
   db/           # postgres pool
   domain/       # domain models and validation
-  store/        # RepositoryStore: in-memory + postgres
+  store/        # RepositoryStore + TaskStore: in-memory + postgres
   util/         # ids, slugs
 config/         # config/config.yaml
 migrations/     # SQL schema (001_init.sql: 5 core tables)
