@@ -32,3 +32,5 @@ export class TaskNotFoundError extends HarnessError {
     super(`task not found: ${id}`);
   }
 }
+
+export class WorkspaceError extends HarnessError {}

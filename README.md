@@ -15,8 +15,9 @@ Implemented in TypeScript (Node >= 18, ESM). The full plan lives in
 - Phase 1 (Repository): `repository create / list / show` — done.
 - Phase 2 (Task): `task create / list / show / validate` (INBOX -> READY /
   BLOCKED intake) — done.
-- Phase 3+ (Workspace, Codex Adapter, Verification, Worker, Scheduler, Loop):
-  following the phase order in the plan.
+- Phase 3 (Workspace): one Run = one independent git worktree — done.
+- Phase 4+ (Codex Adapter, Verification, Worker, Scheduler, Loop): following
+  the phase order in the plan.
 
 ## Requirements
 
@@ -36,6 +37,7 @@ npm run typecheck        # strict TypeScript check
 npm run build            # compile to dist/
 npm run demo:repository  # Phase 1 acceptance demo (in-memory, no DB)
 npm run demo:task        # Phase 2 acceptance demo (in-memory, no DB)
+npm run demo:workspace   # Phase 3 acceptance demo (git worktrees)
 
 npm run db:migrate       # apply migrations/ against Postgres
 ```
