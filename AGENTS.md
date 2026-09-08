@@ -20,7 +20,7 @@ npm run typecheck        # strict TypeScript check
 npm run build            # compile to dist/
 npm run db:migrate       # apply migrations/ against Postgres
 
-ai repository|task ...          # CLI (or: AI_STORAGE=memory ...)
+ai repository|task|run ...     # CLI (or: AI_STORAGE=memory ...)
 ```
 
 ## Conventions

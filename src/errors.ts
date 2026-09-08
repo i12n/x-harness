@@ -34,3 +34,5 @@ export class TaskNotFoundError extends HarnessError {
 }
 
 export class WorkspaceError extends HarnessError {}
+
+export class AgentExecutionError extends HarnessError {}

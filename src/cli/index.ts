@@ -1,10 +1,12 @@
 #!/usr/bin/env node
 
 import { Command } from "commander";
+import { CodexEngine } from "../agent/codexEngine.js";
 import type { Repository } from "../domain/repository.js";
 import type { Task, TaskStatus } from "../domain/task.js";
 import { TASK_STATUSES } from "../domain/task.js";
 import { openStores, type StoreHandle } from "../store/index.js";
+import { WorkspaceManager } from "../workspace/manager.js";
 import {
   createRepositoryCommand,
   listRepositoriesCommand,
@@ -18,6 +20,7 @@ import {
   validateTaskCommand,
 } from "./commands/taskCommands.js";
 import type { TaskCreateOptions } from "./commands/taskCommands.js";
+import { runTaskCommand } from "./commands/runCommands.js";
 
 const program = new Command();
 program
@@ -173,6 +176,38 @@ task
           console.log(`- ${issue}`);
         }
       }
+    });
+  });
+
+program
+  .command("run <task-id>")
+  .description("manually run one task: workspace -> context -> codex -> result")
+  .action(async (taskId: string) => {
+    await withStores(async ({ tasks, repositories }) => {
+      const outcome = await runTaskCommand({
+        tasks,
+        repositories,
+        workspaceManager: new WorkspaceManager(),
+        engine: new CodexEngine(),
+        taskId,
+      });
+      console.log(`run id: ${outcome.runId}`);
+      console.log(`task: ${outcome.task.id} (${outcome.task.title})`);
+      console.log(`repository: ${outcome.repository.id} (${outcome.repository.name})`);
+      console.log(`workspace: ${outcome.workspace.path} [${outcome.workspace.branch}]`);
+      console.log(`agent exit code: ${outcome.result.exitCode ?? "null"}`);
+      const tail = outcome.result.stdout.trim().split("\n").slice(-10).join("\n");
+      if (tail) {
+        console.log("agent output:");
+        console.log(tail);
+      }
+      if (outcome.result.stderr.trim()) {
+        console.log("agent stderr:");
+        console.log(outcome.result.stderr.trim());
+      }
+      console.log(
+        "note: agent execution finished; task completion is decided by verification (Phase 5).",
+      );
     });
   });
 

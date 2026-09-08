@@ -16,8 +16,11 @@ Implemented in TypeScript (Node >= 18, ESM). The full plan lives in
 - Phase 2 (Task): `task create / list / show / validate` (INBOX -> READY /
   BLOCKED intake) — done.
 - Phase 3 (Workspace): one Run = one independent git worktree — done.
-- Phase 4+ (Codex Adapter, Verification, Worker, Scheduler, Loop): following
-  the phase order in the plan.
+- Phase 4 (Codex Adapter): `AgentEngine` + `CodexEngine` + Context Builder +
+  manual `ai run <task-id>` — done (verified with a stub engine; real `codex
+  exec` is wired with `--sandbox workspace-write`).
+- Phase 5+ (Verification, Worker, Scheduler, Loop): following the phase order
+  in the plan.
 
 ## Requirements
 
@@ -38,6 +41,7 @@ npm run build            # compile to dist/
 npm run demo:repository  # Phase 1 acceptance demo (in-memory, no DB)
 npm run demo:task        # Phase 2 acceptance demo (in-memory, no DB)
 npm run demo:workspace   # Phase 3 acceptance demo (git worktrees)
+npm run demo:run         # Phase 4 acceptance demo (stub agent)
 
 npm run db:migrate       # apply migrations/ against Postgres
 ```
@@ -64,7 +68,15 @@ ai task create \
 ai task validate <id>
 ai task list [--repo <id>] [--status READY]
 ai task show <id>
+
+# manual run (requires a registered repository whose local_path is a git
+# checkout and the `codex` CLI; prompts are sent on stdin)
+ai run <task-id>
 ```
+
+`ai run` defaults: `codex exec --sandbox workspace-write --json -`, cwd = the
+run workspace. Override the binary with `AI_CODEX_BIN`, the sandbox with
+`AI_CODEX_SANDBOX`, and the workspaces base dir with `AI_WORKSPACES_DIR`.
 
 `DATABASE_URL` overrides `config/config.yaml`; `AI_STORAGE=memory` bypasses the
 database entirely.
@@ -73,12 +85,14 @@ database entirely.
 
 ```text
 src/
+  agent/        # AgentEngine abstraction + CodexEngine + Context Builder
   cli/          # ai CLI and command handlers
   config/       # yaml/env configuration
   db/           # postgres pool
   domain/       # domain models and validation
   store/        # RepositoryStore + TaskStore: in-memory + postgres
   util/         # ids, slugs
+  workspace/    # git-worktree workspace isolation (one run = one worktree)
 config/         # config/config.yaml
 migrations/     # SQL schema (001_init.sql: 5 core tables)
 scripts/        # db:migrate runner
