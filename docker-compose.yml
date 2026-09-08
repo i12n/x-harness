@@ -1,0 +1,19 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ai
+      POSTGRES_PASSWORD: ai
+      POSTGRES_DB: ai_harness
+    ports:
+      - "5432:5432"
+    volumes:
+      - ai_harness_pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ai -d ai_harness"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  ai_harness_pg:

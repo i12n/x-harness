@@ -4,35 +4,38 @@ Guidance for AI coding agents and human contributors working in this repository.
 
 ## Project
 
-> TODO: what this project is — purpose, stack, and full layout once decided.
-
-## Task-driven workflow for AI coding
-
-- The repository is organized around tasks under `tasks/`, one directory per
-  task.
-- Each task is defined by `TASK.md` (context, starting state, objective,
-  constraints, acceptance criteria, verification).
-- A task may carry `workspace/` (starting code to edit) and `verify/`
-  (verification scripts/tests); their format is decided per task.
-- Execute a task: read `TASK.md`, touch only what the task allows, run the
-  task's verification, and finish only when its acceptance criteria pass.
-- When a task is done, summarize the outcome and record notes inside the task
-  directory.
-
-## Creating a task
-
-Copy `tasks/_template/` to `tasks/<task-id>-<short-name>/` and fill in
-`TASK.md`. See [tasks/README.md](tasks/README.md).
+`ai-harness`: an AI Coding Harness v0.1 (TypeScript, Node >= 18, ESM) that
+drives coding tasks end to end. The authoritative plan is
+[docs/ai-coding-harness-v0.1.md](docs/ai-coding-harness-v0.1.md); follow its
+module vocabulary (Task / Scheduler / Run / Worker / Workspace / Agent Adapter /
+Verification / Loop) and its Phase 1..8 implementation order — do not jump
+ahead of the phase being implemented.
 
 ## Commands
 
-> TODO: setup/run/verify commands matching the stack once chosen.
+```bash
+npm install
+npm test                 # vitest unit tests
+npm run typecheck        # strict TypeScript check
+npm run build            # compile to dist/
+npm run db:migrate       # apply migrations/ against Postgres
+
+ai repository create|list|show   # Phase 1 CLI (or: AI_STORAGE=memory ...)
+```
 
 ## Conventions
 
-> TODO: style, tests, docs, and anything agents must not do.
+- TypeScript strict mode, ESM (`NodeNext`); run `npm run typecheck` before
+  finishing.
+- Tests use Vitest and live in `tests/`; every new behavior adds a unit test.
+  Tests must not require a running Postgres — use `InMemoryRepositoryStore`.
+- Persistence goes through store interfaces (`src/store/`); Postgres stores
+  map rows to domain models and schema lives in `migrations/`.
+- Keep the core minimal: do not add RabbitMQ/Kafka, Kubernetes, RAG, vector
+  DBs, or a Web UI in v0.1 (see plan section 一).
 
-## Verification
+## Verification before finishing a change
 
-A change is complete when the task's acceptance criteria pass and its
-verification steps succeed.
+`npm run typecheck` and `npm test` must pass; when touching the schema, apply
+`npm run db:migrate` against a Postgres instance and exercise the affected CLI
+path.

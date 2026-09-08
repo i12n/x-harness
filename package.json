@@ -1,0 +1,33 @@
+{
+  "name": "ai-harness",
+  "version": "0.1.0",
+  "description": "AI Coding Harness v0.1 — Repository -> Task -> Run -> Workspace -> Codex CLI -> Verification -> Review",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "ai": "./dist/cli/index.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "demo:repository": "node scripts/demo-repository.mjs",
+    "start": "node dist/cli/index.js",
+    "db:migrate": "node scripts/migrate.mjs"
+  },
+  "dependencies": {
+    "commander": "^12.1.0",
+    "pg": "^8.13.1",
+    "yaml": "^2.5.1"
+  },
+  "devDependencies": {
+    "@types/node": "^18.19.50",
+    "@types/pg": "^8.11.10",
+    "typescript": "^5.6.3",
+    "vitest": "^1.6.0"
+  }
+}
