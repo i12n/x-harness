@@ -7,20 +7,22 @@
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { execFileSync } from "node:child_process";
+import { writeFileSync } from "node:fs";
 import { CodexEngine } from "../dist/agent/codexEngine.js";
 import { runTaskCommand } from "../dist/cli/commands/runCommands.js";
 import { InMemoryRepositoryStore } from "../dist/store/inMemoryRepositoryStore.js";
 import { InMemoryTaskStore } from "../dist/store/inMemoryTaskStore.js";
+import { Verifier } from "../dist/verification/runner.js";
 import { WorkspaceManager } from "../dist/workspace/manager.js";
 
 // Inline lightweight fixture (mirrors tests/helpers/gitFixture.mjs semantics).
-const { execFileSync } = await import("node:child_process");
 const repoPath = mkdtempSync(join(tmpdir(), "ai-harness-repo-"));
 execFileSync("git", ["init", "-b", "main"], { cwd: repoPath, stdio: "ignore" });
 execFileSync("git", ["config", "user.email", "demo@example.com"], { cwd: repoPath, stdio: "ignore" });
 execFileSync("git", ["config", "user.name", "Demo"], { cwd: repoPath, stdio: "ignore" });
-const { writeFileSync } = await import("node:fs");
 writeFileSync(join(repoPath, "README.md"), "# fixture\n");
+writeFileSync(join(repoPath, "checks.sh"), "test -f solution.txt && echo ok\n");
 execFileSync("git", ["add", "."], { cwd: repoPath, stdio: "ignore" });
 execFileSync("git", ["commit", "-m", "init"], { cwd: repoPath, stdio: "ignore" });
 
@@ -41,7 +43,7 @@ try {
     name: "my-app",
     url: "git@github.com:example/my-app.git",
     localPath: repoPath,
-    verificationCommands: ["npm test"],
+    verificationCommands: ["sh checks.sh"],
   });
   await tasks.createTask({
     id: "task-001",
@@ -60,6 +62,7 @@ try {
       executable: process.execPath,
       spawnArgs: () => ["-e", fakeCode],
     }),
+    verifier: new Verifier(),
     taskId: "task-001",
   });
 
@@ -70,6 +73,8 @@ try {
   console.log(`agent output: ${outcome.result.stdout.trim()}`);
   const marker = join(outcome.workspace.path, "solution.txt");
   console.log(`code changed (${existsSync(marker) ? "yes" : "no"}): solution.txt`);
+  console.log(`verification: ${outcome.verification.passed ? "PASSED" : "FAILED"}`);
+  console.log(`run ${outcome.succeeded ? "SUCCEEDED" : "FAILED"}`);
 } finally {
   rmSync(repoPath, { recursive: true, force: true });
   rmSync(workspaceBase, { recursive: true, force: true });

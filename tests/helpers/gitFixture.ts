@@ -33,3 +33,9 @@ export function createGitFixture(): GitFixture {
 export function runGit(args: string[], cwd: string): void {
   execFileSync("git", args, { cwd, stdio: "ignore" });
 }
+
+export function commitFile(fixturePath: string, name: string, content: string): void {
+  writeFileSync(join(fixturePath, name), content);
+  runGit(["add", "."], fixturePath);
+  runGit(["commit", "-m", `add ${name}`], fixturePath);
+}

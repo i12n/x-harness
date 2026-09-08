@@ -7,6 +7,7 @@ import type { Task, TaskStatus } from "../domain/task.js";
 import { TASK_STATUSES } from "../domain/task.js";
 import { openStores, type StoreHandle } from "../store/index.js";
 import { WorkspaceManager } from "../workspace/manager.js";
+import { Verifier } from "../verification/runner.js";
 import {
   createRepositoryCommand,
   listRepositoriesCommand,
@@ -189,6 +190,7 @@ program
         repositories,
         workspaceManager: new WorkspaceManager(),
         engine: new CodexEngine(),
+        verifier: new Verifier(),
         taskId,
       });
       console.log(`run id: ${outcome.runId}`);
@@ -205,8 +207,20 @@ program
         console.log("agent stderr:");
         console.log(outcome.result.stderr.trim());
       }
+      const passedChecks = outcome.verification.checks.filter(
+        (check) => check.status === "passed",
+      ).length;
       console.log(
-        "note: agent execution finished; task completion is decided by verification (Phase 5).",
+        `verification: ${outcome.verification.passed ? "PASSED" : "FAILED"} ` +
+          `(${passedChecks}/${outcome.verification.checks.length} checks passed)`,
+      );
+      for (const check of outcome.verification.checks) {
+        console.log(`- ${check.name} ${check.status} (${check.command || "no command"})`);
+      }
+      console.log(
+        outcome.succeeded
+          ? "run SUCCEEDED: verification passed"
+          : "run FAILED: verification failed (agent execution is not task completion)",
       );
     });
   });

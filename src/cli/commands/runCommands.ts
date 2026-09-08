@@ -6,6 +6,7 @@ import type { RepositoryStore } from "../../store/repositoryStore.js";
 import type { TaskStore } from "../../store/taskStore.js";
 import { makeId } from "../../util/id.js";
 import type { ManagedWorkspace, WorkspaceManager } from "../../workspace/manager.js";
+import type { VerificationResult, Verifier } from "../../verification/runner.js";
 
 export interface RunTaskOutcome {
   runId: string;
@@ -13,6 +14,8 @@ export interface RunTaskOutcome {
   repository: Repository;
   workspace: ManagedWorkspace;
   result: AgentResult;
+  verification: VerificationResult;
+  succeeded: boolean;
 }
 
 export interface RunTaskParams {
@@ -20,6 +23,7 @@ export interface RunTaskParams {
   repositories: RepositoryStore;
   workspaceManager: WorkspaceManager;
   engine: AgentEngine;
+  verifier: Verifier;
   taskId: string;
 }
 
@@ -44,5 +48,17 @@ export async function runTaskCommand(params: RunTaskParams): Promise<RunTaskOutc
     workspacePath: workspace.path,
   });
   const result = await params.engine.execute(context);
-  return { runId, task, repository, workspace, result };
+  const verification = await params.verifier.run({
+    workspacePath: workspace.path,
+    commands: repository.verificationCommands,
+  });
+  return {
+    runId,
+    task,
+    repository,
+    workspace,
+    result,
+    verification,
+    succeeded: verification.passed,
+  };
 }
