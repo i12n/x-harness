@@ -14,6 +14,7 @@
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
+    "test:postgres": "AI_TEST_POSTGRES=1 vitest run tests/postgres.integration.test.ts",
     "test:watch": "vitest",
     "demo:repository": "node scripts/demo-repository.mjs",
     "demo:task": "node scripts/demo-task.mjs",

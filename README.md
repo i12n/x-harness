@@ -24,14 +24,17 @@ Implemented in TypeScript (Node >= 18, ESM). The full plan lives in
 - Phase 6 (Worker): claim/heartbeat/execute/complete with run leases — done.
 - Phase 7 (Scheduler): READY tasks -> QUEUED runs with max_concurrency — done.
 - Phase 8 (Loop): Observe/Reconcile/Schedule/Execute/Recover — done. The v0.1
-  MVP chain is complete; PostgreSQL store and real-codex end-to-end runs still
-  need a database and a machine with the codex CLI.
+  MVP chain is complete; real-codex end-to-end runs still need a machine with
+  the codex CLI.
 - v0.2 (Review & Human Approval): reviewer agent over a succeeded run's diff +
   `task approve/reject` — done. Next per plan: Multi Repository Task,
   Dependency DAG, GitHub Integration.
 - v0.1 wrap-up: full event history (TaskCreated -> TaskDone) written by the
   validate/scheduler/worker/loop/review/approval paths, browsable via
   `ai event list` — done.
+- v0.1 wrap-up: verified against a real PostgreSQL 16 instance (migrations +
+  repository/task/run/event stores + full Loop end to end). The unit suite
+  stays offline; the Postgres test runs with `AI_TEST_POSTGRES=1`.
 
 ## Requirements
 
@@ -58,6 +61,10 @@ npm run demo:loop        # Phase 7/8 acceptance demo (scheduler + loop)
 npm run demo:review      # v0.2 acceptance demo (review + approval)
 
 npm run db:migrate       # apply migrations/ against Postgres
+
+# real-Postgres integration test (skipped by the plain unit suite)
+AI_TEST_POSTGRES=1 DATABASE_URL=postgres://ai:ai@localhost:5432/ai_harness \
+  npm run test:postgres
 ```
 
 ## Usage
