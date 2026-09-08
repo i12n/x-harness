@@ -19,6 +19,7 @@
     "demo:task": "node scripts/demo-task.mjs",
     "demo:workspace": "node scripts/demo-workspace.mjs",
     "demo:run": "node scripts/demo-run.mjs",
+    "demo:worker": "node scripts/demo-worker.mjs",
     "start": "node dist/cli/index.js",
     "db:migrate": "node scripts/migrate.mjs"
   },

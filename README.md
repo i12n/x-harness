@@ -19,8 +19,10 @@ Implemented in TypeScript (Node >= 18, ESM). The full plan lives in
 - Phase 4 (Codex Adapter): `AgentEngine` + `CodexEngine` + Context Builder +
   manual `ai run <task-id>` — done (verified with a stub engine; real `codex
   exec` is wired with `--sandbox workspace-write`).
-- Phase 5+ (Verification, Worker, Scheduler, Loop): following the phase order
-  in the plan.
+- Phase 5 (Verification): commands run per check in the run workspace; a run
+  succeeds only when every check passes — done.
+- Phase 6 (Worker): claim/heartbeat/execute/complete with run leases — done.
+- Phase 7-8 (Scheduler, Loop): following the phase order in the plan.
 
 ## Requirements
 

@@ -36,3 +36,17 @@ export class TaskNotFoundError extends HarnessError {
 export class WorkspaceError extends HarnessError {}
 
 export class AgentExecutionError extends HarnessError {}
+
+export class RunNotFoundError extends HarnessError {
+  constructor(id: string) {
+    super(`run not found: ${id}`);
+  }
+}
+
+export class RunConflictError extends HarnessError {
+  constructor(id: string, message: string) {
+    super(`run ${id} is not claimable: ${message}`);
+  }
+}
+
+export class WorkerExecutionError extends HarnessError {}
