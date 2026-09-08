@@ -96,6 +96,25 @@ export class WorkspaceManager {
     return canonical;
   }
 
+  /** Diff of the workspace against a base (used by reviewers), capped size. */
+  async showDiff(
+    workspacePath: string,
+    base = "HEAD",
+    maxBytes = 200_000,
+  ): Promise<string> {
+    const stat = await this.runGit(["diff", "--stat", base], workspacePath);
+    let body = "";
+    try {
+      body = (await this.runGit(["diff", base], workspacePath)).stdout;
+    } catch {
+      // A stat-only diff is still useful when the full diff is unavailable.
+    }
+    const combined = `${stat.stdout}\n${body}`.trim();
+    return combined.length <= maxBytes
+      ? combined
+      : `${combined.slice(0, maxBytes)}\n...[truncated]`;
+  }
+
   private async runGit(args: string[], cwd: string): Promise<{ stdout: string }> {
     try {
       const { stdout } = await execFileAsync(this.gitBinary, args, { cwd });

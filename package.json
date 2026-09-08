@@ -21,6 +21,7 @@
     "demo:run": "node scripts/demo-run.mjs",
     "demo:worker": "node scripts/demo-worker.mjs",
     "demo:loop": "node scripts/demo-loop.mjs",
+    "demo:review": "node scripts/demo-review.mjs",
     "start": "node dist/cli/index.js",
     "db:migrate": "node scripts/migrate.mjs"
   },

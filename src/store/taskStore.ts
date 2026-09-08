@@ -1,4 +1,9 @@
-import type { CreateTaskInput, Task, TaskStatus } from "../domain/task.js";
+import type {
+  CreateTaskInput,
+  Task,
+  TaskReview,
+  TaskStatus,
+} from "../domain/task.js";
 
 export interface TaskListFilter {
   repositoryId?: string;
@@ -11,4 +16,5 @@ export interface TaskStore {
   listTasks(filter?: TaskListFilter): Promise<Task[]>;
   findTask(id: string): Promise<Task>;
   updateTaskStatus(id: string, status: TaskStatus): Promise<Task>;
+  appendTaskReview(id: string, review: TaskReview): Promise<Task>;
 }

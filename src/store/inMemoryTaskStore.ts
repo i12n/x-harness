@@ -1,5 +1,10 @@
-import { buildTask } from "../domain/task.js";
-import type { CreateTaskInput, Task, TaskStatus } from "../domain/task.js";
+import { buildTask, withTaskReview } from "../domain/task.js";
+import type {
+  CreateTaskInput,
+  Task,
+  TaskReview,
+  TaskStatus,
+} from "../domain/task.js";
 import { DuplicateTaskError, TaskNotFoundError } from "../errors.js";
 import type { TaskListFilter, TaskStore } from "./taskStore.js";
 
@@ -42,6 +47,17 @@ export class InMemoryTaskStore implements TaskStore {
   async updateTaskStatus(id: string, status: TaskStatus): Promise<Task> {
     const current = await this.findTask(id);
     const updated: Task = { ...current, status, updatedAt: new Date().toISOString() };
+    this.tasks.set(id, updated);
+    return updated;
+  }
+
+  async appendTaskReview(id: string, review: TaskReview): Promise<Task> {
+    const current = await this.findTask(id);
+    const updated: Task = {
+      ...current,
+      constraints: withTaskReview(current, review),
+      updatedAt: new Date().toISOString(),
+    };
     this.tasks.set(id, updated);
     return updated;
   }

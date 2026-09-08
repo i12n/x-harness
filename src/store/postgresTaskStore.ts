@@ -1,8 +1,9 @@
 import { Pool } from "pg";
-import { buildTask } from "../domain/task.js";
+import { buildTask, withTaskReview } from "../domain/task.js";
 import type {
   CreateTaskInput,
   Task,
+  TaskReview,
   TaskStatus,
 } from "../domain/task.js";
 import { TaskNotFoundError } from "../errors.js";
@@ -90,6 +91,23 @@ export class PostgresTaskStore implements TaskStore {
     const { rows } = await this.pool.query<TaskRow>(
       `UPDATE tasks SET status = $1, updated_at = $2 WHERE id = $3 RETURNING *`,
       [status, now, id],
+    );
+    const row = rows[0];
+    if (!row) {
+      throw new TaskNotFoundError(id);
+    }
+    return rowToTask(row);
+  }
+
+  async appendTaskReview(id: string, review: TaskReview): Promise<Task> {
+    const current = await this.findTask(id);
+    const constraints = withTaskReview(current, review);
+    const now = new Date().toISOString();
+    const { rows } = await this.pool.query<TaskRow>(
+      `UPDATE tasks SET constraints = $1::jsonb, updated_at = $2
+       WHERE id = $3
+       RETURNING *`,
+      [JSON.stringify(constraints), now, id],
     );
     const row = rows[0];
     if (!row) {

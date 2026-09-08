@@ -98,6 +98,7 @@ export class Worker {
           status: "SUCCEEDED",
           exitCode: agentResult.exitCode,
           result: {
+            workspace: { path: workspace.path, branch: workspace.branch },
             agentStdout: truncate(agentResult.stdout, 100_000),
             agentStderr: truncate(agentResult.stderr, 100_000),
             verification,

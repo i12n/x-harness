@@ -4,7 +4,7 @@ import { Command } from "commander";
 import { CodexEngine } from "../agent/codexEngine.js";
 import type { Repository } from "../domain/repository.js";
 import type { Task, TaskStatus } from "../domain/task.js";
-import { TASK_STATUSES } from "../domain/task.js";
+import { readTaskReviews, TASK_STATUSES } from "../domain/task.js";
 import { openStores, type StoreHandle } from "../store/index.js";
 import { WorkspaceManager } from "../workspace/manager.js";
 import { Verifier } from "../verification/runner.js";
@@ -22,6 +22,11 @@ import {
 } from "./commands/taskCommands.js";
 import type { TaskCreateOptions } from "./commands/taskCommands.js";
 import { runTaskCommand } from "./commands/runCommands.js";
+import {
+  approveTaskCommand,
+  rejectTaskCommand,
+  reviewRunCommand,
+} from "./commands/reviewCommands.js";
 
 const program = new Command();
 program
@@ -180,6 +185,49 @@ task
     });
   });
 
+task
+  .command("approve <id>")
+  .description("approve a REVIEW task -> DONE (human approval)")
+  .option("--note <text>", "optional approval note")
+  .action(async (id: string, options: { note?: string }) => {
+    await withStores(async ({ tasks }) => {
+      const updated = await approveTaskCommand(tasks, id, options.note);
+      console.log(`${updated.id} -> ${updated.status}`);
+    });
+  });
+
+task
+  .command("reject <id>")
+  .description("reject a REVIEW task -> READY/BLOCKED with feedback")
+  .option("--feedback <text>", "feedback for the next attempt")
+  .action(async (id: string, options: { feedback?: string }) => {
+    await withStores(async ({ tasks, runs }) => {
+      const updated = await rejectTaskCommand(tasks, runs, id, options.feedback);
+      console.log(`${updated.id} -> ${updated.status}`);
+    });
+  });
+
+program
+  .command("review <run-id>")
+  .description("run a reviewer agent over a SUCCEEDED run's workspace diff")
+  .action(async (runId: string) => {
+    await withStores(async ({ tasks, runs, repositories }) => {
+      const outcome = await reviewRunCommand({
+        tasks,
+        runs,
+        repositories,
+        workspaceManager: new WorkspaceManager(),
+        engine: new CodexEngine({ sandbox: "read-only" }),
+        runId,
+      });
+      console.log(`reviewed run ${runId} -> task ${outcome.task.id} (${outcome.task.status})`);
+      console.log("--- review ---");
+      console.log(outcome.review.text);
+      console.log("--------------");
+      console.log(`reviews recorded: ${readTaskReviews(outcome.task).length}`);
+    });
+  });
+
 program
   .command("run <task-id>")
   .description("manually run one task: workspace -> context -> codex -> result")
@@ -260,6 +308,11 @@ function printTask(item: Task): void {
     for (const criterion of item.acceptance) {
       console.log(`  - ${criterion}`);
     }
+  }
+  const reviews = readTaskReviews(item);
+  console.log(`reviews: ${reviews.length}`);
+  for (const review of reviews) {
+    console.log(`  - [${review.at}] ${review.runId}: ${review.text.split("\n")[0] ?? ""}`);
   }
 }
 

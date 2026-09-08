@@ -26,6 +26,9 @@ Implemented in TypeScript (Node >= 18, ESM). The full plan lives in
 - Phase 8 (Loop): Observe/Reconcile/Schedule/Execute/Recover — done. The v0.1
   MVP chain is complete; PostgreSQL store and real-codex end-to-end runs still
   need a database and a machine with the codex CLI.
+- v0.2 (Review & Human Approval): reviewer agent over a succeeded run's diff +
+  `task approve/reject` — done. Next per plan: Multi Repository Task,
+  Dependency DAG, GitHub Integration.
 
 ## Requirements
 
@@ -49,6 +52,7 @@ npm run demo:workspace   # Phase 3 acceptance demo (git worktrees)
 npm run demo:run         # Phase 4 acceptance demo (stub agent)
 npm run demo:worker      # Phase 6 acceptance demo (worker + leases)
 npm run demo:loop        # Phase 7/8 acceptance demo (scheduler + loop)
+npm run demo:review      # v0.2 acceptance demo (review + approval)
 
 npm run db:migrate       # apply migrations/ against Postgres
 ```
@@ -79,6 +83,11 @@ ai task show <id>
 # manual run (requires a registered repository whose local_path is a git
 # checkout and the `codex` CLI; prompts are sent on stdin)
 ai run <task-id>
+
+# v0.2: review a succeeded run, then approve or reject the task
+ai review <run-id>
+ai task approve <task-id> [--note "..."]
+ai task reject <task-id> [--feedback "..."]
 ```
 
 `ai run` defaults: `codex exec --sandbox workspace-write --json -`, cwd = the

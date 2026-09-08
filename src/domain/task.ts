@@ -30,6 +30,40 @@ export interface Task {
   updatedAt: string;
 }
 
+/** Advisory review recorded against a task (human or reviewer agent). */
+export interface TaskReview {
+  at: string;
+  runId: string;
+  text: string;
+}
+
+const REVIEWS_KEY = "reviews";
+
+export function readTaskReviews(task: Pick<Task, "constraints">): TaskReview[] {
+  const raw = task.constraints[REVIEWS_KEY];
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+  return raw.filter(
+    (entry): entry is TaskReview =>
+      typeof entry === "object" &&
+      entry !== null &&
+      typeof (entry as TaskReview).at === "string" &&
+      typeof (entry as TaskReview).runId === "string" &&
+      typeof (entry as TaskReview).text === "string",
+  );
+}
+
+export function withTaskReview(
+  task: Pick<Task, "constraints">,
+  review: TaskReview,
+): Record<string, unknown> {
+  return {
+    ...task.constraints,
+    [REVIEWS_KEY]: [...readTaskReviews(task), review],
+  };
+}
+
 export interface CreateTaskInput {
   id?: string;
   repositoryId: string;
