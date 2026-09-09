@@ -150,6 +150,7 @@ export class Worker {
           repository,
           agentResult,
           verification,
+          workspace,
           finishedAt,
         );
         await this.emit("RunFailed", {
@@ -199,12 +200,14 @@ export class Worker {
     repository: Repository,
     agentResult: AgentResult,
     verification: VerificationResult,
+    workspace: ManagedWorkspace,
     finishedAt: string,
   ): Promise<void> {
     await this.runStore.completeRun(runId, {
       status: "FAILED",
       exitCode: agentResult.exitCode,
       result: {
+        workspace: { path: workspace.path, branch: workspace.branch },
         agentStdout: truncate(agentResult.stdout, 100_000),
         agentStderr: truncate(agentResult.stderr, 100_000),
       },

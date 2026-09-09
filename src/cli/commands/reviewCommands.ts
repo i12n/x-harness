@@ -8,6 +8,7 @@ import type { EventStore } from "../../store/eventStore.js";
 import type { RunStore } from "../../store/runStore.js";
 import type { TaskStore } from "../../store/taskStore.js";
 import type { WorkspaceManager } from "../../workspace/manager.js";
+import { extractWorkspaceInfo } from "../../workspace/info.js";
 
 export interface ReviewRunParams {
   tasks: TaskStore;
@@ -149,25 +150,6 @@ export async function rejectTaskCommand(
     }
   }
   return updated;
-}
-
-export function extractWorkspaceInfo(
-  run: Run,
-): { path: string; branch: string } | undefined {
-  const result = run.result;
-  if (!result || typeof result !== "object" || Array.isArray(result)) {
-    return undefined;
-  }
-  const workspace = (result as { workspace?: unknown }).workspace;
-  if (!workspace || typeof workspace !== "object" || Array.isArray(workspace)) {
-    return undefined;
-  }
-  const path = (workspace as { path?: unknown }).path;
-  const branch = (workspace as { branch?: unknown }).branch;
-  if (typeof path !== "string" || !path) {
-    return undefined;
-  }
-  return { path, branch: typeof branch === "string" ? branch : "" };
 }
 
 function composeReviewPrompt(

@@ -101,6 +101,13 @@ ai task reject <task-id> [--feedback "..."]
 
 # event history (all state changes)
 ai event list [--task <id>] [--run <id>] [--type <type>] [--limit <n>]
+
+# run the reconcile loop (single tick or resident; Ctrl-C to stop)
+ai loop --once
+ai loop --interval-ms 1000
+
+# remove worktrees of finished runs (evidence in run result stays in DB)
+ai workspace cleanup
 ```
 
 `ai run` defaults: `codex exec --sandbox workspace-write --json -`, cwd = the

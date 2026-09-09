@@ -2,12 +2,15 @@
 
 import { Command } from "commander";
 import { CodexEngine } from "../agent/codexEngine.js";
+import { Loop } from "../loop/loop.js";
+import { Scheduler } from "../scheduler/scheduler.js";
 import type { Repository } from "../domain/repository.js";
 import type { Task, TaskStatus } from "../domain/task.js";
 import { readTaskReviews, TASK_STATUSES } from "../domain/task.js";
 import { openStores, type StoreHandle } from "../store/index.js";
 import { WorkspaceManager } from "../workspace/manager.js";
 import { Verifier } from "../verification/runner.js";
+import { Worker } from "../worker/worker.js";
 import {
   createRepositoryCommand,
   listRepositoriesCommand,
@@ -27,6 +30,7 @@ import {
   rejectTaskCommand,
   reviewRunCommand,
 } from "./commands/reviewCommands.js";
+import { cleanupWorkspacesCommand } from "./commands/workspaceCommands.js";
 
 const program = new Command();
 program
@@ -299,6 +303,92 @@ program
           : "run FAILED: verification failed (agent execution is not task completion)",
       );
     });
+  });
+
+const workspace = program.command("workspace").description("manage run workspaces");
+workspace
+  .command("cleanup")
+  .description("remove worktrees of terminal runs (SUCCEEDED/FAILED/LOST/...)")
+  .action(async () => {
+    await withStores(async ({ runs, tasks, repositories }) => {
+      const report = await cleanupWorkspacesCommand({
+        runs,
+        tasks,
+        repositories,
+        workspaceManager: new WorkspaceManager(),
+      });
+      console.log(`removed ${report.removed.length} workspace(s)`);
+      for (const path of report.removed) {
+        console.log(`- removed ${path}`);
+      }
+      if (report.skipped.length > 0) {
+        console.log(`skipped ${report.skipped.length} run(s):`);
+        for (const entry of report.skipped) {
+          console.log(`- ${entry.runId}: ${entry.reason}`);
+        }
+      }
+    });
+  });
+
+program
+  .command("loop")
+  .description("run the reconcile loop (default: continuously; use --once)")
+  .option("--once", "run a single tick and exit")
+  .option("--interval-ms <n>", "tick interval in ms (default: 1000)", parsePositiveInt)
+  .action(async (options: { once?: boolean; intervalMs?: number }) => {
+    const handle = await openStores();
+    const workspaceManager = new WorkspaceManager();
+    const engine = new CodexEngine();
+    const worker = new Worker({
+      runStore: handle.runs,
+      taskStore: handle.tasks,
+      repositoryStore: handle.repositories,
+      workspaceManager,
+      agentEngine: engine,
+      verifier: new Verifier(),
+      eventStore: handle.events,
+    });
+    const loop = new Loop({
+      scheduler: new Scheduler({
+        taskStore: handle.tasks,
+        runStore: handle.runs,
+        eventStore: handle.events,
+      }),
+      worker,
+      runStore: handle.runs,
+      taskStore: handle.tasks,
+      eventStore: handle.events,
+    });
+
+    if (options.once) {
+      try {
+        const report = await loop.tick();
+        console.log(
+          `recovered=${report.recovered.length} scheduled=${report.scheduled.length} executed=${report.executed.length}`,
+        );
+      } finally {
+        await handle.close();
+      }
+      return;
+    }
+
+    console.log("loop started (Ctrl-C to stop)");
+    let stopping = false;
+    const stop = async (): Promise<void> => {
+      if (stopping) {
+        return;
+      }
+      stopping = true;
+      loop.stop();
+      await handle.close();
+      console.log("loop stopped");
+    };
+    process.on("SIGINT", () => void stop());
+    process.on("SIGTERM", () => void stop());
+    await loop.start(options.intervalMs ?? 1_000);
+    if (!stopping) {
+      await handle.close();
+    }
   });
 
 // ---------------------------------------------------------------------------
