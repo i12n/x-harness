@@ -60,6 +60,9 @@ npm run demo:worker      # Phase 6 acceptance demo (worker + leases)
 npm run demo:loop        # Phase 7/8 acceptance demo (scheduler + loop)
 npm run demo:review      # v0.2 acceptance demo (review + approval)
 
+# real Codex CLI end-to-end (requires: codex login)
+npm run demo:codex
+
 npm run db:migrate       # apply migrations/ against Postgres
 
 # real-Postgres integration test (skipped by the plain unit suite)
