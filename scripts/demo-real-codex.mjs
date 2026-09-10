@@ -25,7 +25,9 @@ import { Worker } from "../dist/worker/worker.js";
 import { WorkspaceManager } from "../dist/workspace/manager.js";
 
 const repoPath = mkdtempSync(join(tmpdir(), "ai-codex-repo-"));
-const workspaceBase = mkdtempSync(join(tmpdir(), "ai-workspaces-"));
+// Codex requires its cwd to be inside a trusted directory. The x-harness
+// project is trusted in ~/.codex/config.toml, so run the worktree here.
+const workspaceBase = join(process.cwd(), ".ai-workspaces-codex-demo");
 
 try {
   execFileSync("git", ["init", "-b", "main"], { cwd: repoPath, stdio: "ignore" });
@@ -38,6 +40,7 @@ try {
   );
   execFileSync("git", ["add", "."], { cwd: repoPath, stdio: "ignore" });
   execFileSync("git", ["commit", "-m", "init"], { cwd: repoPath, stdio: "ignore" });
+  rmSync(workspaceBase, { recursive: true, force: true });
 
   const repositories = new InMemoryRepositoryStore();
   const tasks = new InMemoryTaskStore();

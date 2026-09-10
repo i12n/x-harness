@@ -16,3 +16,6 @@ node_modules/
 dist/
 coverage/
 *.tsbuildinfo
+
+# Local codex demo workspace (created by npm run demo:codex)
+.ai-workspaces-codex-demo/
