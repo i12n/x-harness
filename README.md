@@ -140,5 +140,5 @@ config/         # config/config.yaml
 migrations/     # SQL schema (001_init.sql: 5 core tables)
 scripts/        # db:migrate runner
 tests/          # vitest unit tests
-docs/           # v0.1 plan
+docs/           # v0.1 plan + open design discussion notes
 ```
