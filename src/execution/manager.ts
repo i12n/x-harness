@@ -5,6 +5,7 @@ import type { ExecutionRecord, ExecutionStatus } from "../domain/execution.js";
 import { defaultExecutionProfile } from "../domain/executionProfile.js";
 import type { ExecutionProfile } from "../domain/executionProfile.js";
 import { HarnessError } from "../errors.js";
+import { killProcessGroup } from "../util/process.js";
 import { validateExecutionProfileContract } from "./contract.js";
 import type { EventStore } from "../store/eventStore.js";
 import type { ExecutionStore } from "../store/executionStore.js";
@@ -498,6 +499,7 @@ function runCommand(
       child = spawn(command[0] ?? "", command.slice(1), {
         cwd: dockerWrapper ? undefined : cwd,
         env: options.env ? { ...process.env, ...options.env } : process.env,
+        detached: process.platform !== "win32",
         stdio: ["pipe", "pipe", "pipe"],
       });
     } catch (error) {
@@ -528,11 +530,11 @@ function runCommand(
       options.timeoutMs && options.timeoutMs > 0
         ? setTimeout(() => {
             timedOut = true;
-            child.kill("SIGKILL");
+            killProcessGroup(child, "SIGKILL");
           }, options.timeoutMs)
         : undefined;
     const onAbort = (): void => {
-      child.kill("SIGTERM");
+      killProcessGroup(child, "SIGTERM");
     };
     options.signal?.addEventListener("abort", onAbort, { once: true });
 

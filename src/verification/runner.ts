@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import type { ExecutionExec } from "../execution/manager.js";
+import { killProcessGroup } from "../util/process.js";
 
 export interface VerificationCheck {
   name: string;
@@ -97,6 +98,7 @@ export class Verifier {
         cwd: params.workdir ?? params.workspacePath,
         env: { ...process.env, ...this.env },
         shell: true,
+        detached: process.platform !== "win32",
         stdio: ["ignore", "pipe", "pipe"],
       });
       let output = "";
@@ -110,7 +112,7 @@ export class Verifier {
       });
 
       const timeout = setTimeout(() => {
-        child.kill("SIGKILL");
+        killProcessGroup(child, "SIGKILL");
       }, timeoutMs);
 
       child.on("close", (exitCode: number | null) => {
@@ -151,6 +153,7 @@ export class Verifier {
     };
   }
 }
+
 
 function elapsedSeconds(startedAt: string, finishedAt: string): number {
   return Math.max(
