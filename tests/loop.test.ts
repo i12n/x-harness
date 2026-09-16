@@ -12,6 +12,14 @@ import { Verifier } from "../src/verification/runner.js";
 import { Worker } from "../src/worker/worker.js";
 import { WorkspaceManager } from "../src/workspace/manager.js";
 import { InMemoryEventStore } from "../src/store/inMemoryEventStore.js";
+import { InMemoryExecutionStore } from "../src/store/inMemoryExecutionStore.js";
+import {
+  ExecutionManager,
+  type ExecutionDriver,
+  type ExecutionEnvironment,
+  type ExecutionRequest,
+} from "../src/execution/manager.js";
+import { defaultExecutionProfile } from "../src/domain/executionProfile.js";
 import {
   commitFile,
   createGitFixture,
@@ -28,6 +36,40 @@ const WRITE_CODE = [
 
 const IDLE_CODE =
   "process.stdin.resume(); process.stdin.on('end', () => console.log('done'));";
+
+class CrashDriver implements ExecutionDriver {
+  readonly name = "crash";
+  cleanupCalls = 0;
+  private cleanupFailures: number;
+
+  constructor(cleanupFailures = 0) {
+    this.cleanupFailures = cleanupFailures;
+  }
+
+  async create(request: ExecutionRequest): Promise<ExecutionEnvironment> {
+    return {
+      id: `crash-${request.runId}`,
+      runId: request.runId,
+      workspacePath: request.workspacePath,
+      containerWorkspace: request.workspacePath,
+      profile: request.profile,
+      driver: this.name,
+      containerId: "ctr-crash-1",
+    };
+  }
+
+  async start(environment: ExecutionEnvironment): Promise<ExecutionEnvironment> {
+    return { ...environment, startedAt: new Date().toISOString() };
+  }
+
+  async cleanup(): Promise<void> {
+    this.cleanupCalls += 1;
+    if (this.cleanupFailures > 0) {
+      this.cleanupFailures -= 1;
+      throw new Error("cleanup boom");
+    }
+  }
+}
 
 describe("Loop", () => {
   const cleanups: (() => void)[] = [];
@@ -145,5 +187,106 @@ describe("Loop", () => {
     expect(
       (await events.listEvents({ runId: "run-expired", type: "RunLost" })).map((e) => e.type),
     ).toEqual(["RunLost"]);
+  });
+
+  async function crashedRun(cleanupFailures = 0) {
+    const fixture: GitFixture = createGitFixture();
+    cleanups.push(fixture.cleanup);
+    const workspaceBase = mkdtempSync(join(tmpdir(), "ai-workspaces-"));
+    cleanups.push(() => rmSync(workspaceBase, { recursive: true, force: true }));
+
+    const repositories = new InMemoryRepositoryStore();
+    const tasks = new InMemoryTaskStore();
+    const runs = new InMemoryRunStore();
+    const events = new InMemoryEventStore();
+    const executions = new InMemoryExecutionStore();
+    await repositories.createRepository({
+      id: "repo-001",
+      name: "my-app",
+      url: "git@github.com:example/my-app.git",
+      localPath: fixture.path,
+      verificationCommands: [],
+    });
+    await tasks.createTask({
+      id: "task-001",
+      repositoryId: "repo-001",
+      title: "crashed task",
+      description: "d",
+      acceptance: ["a"],
+      status: "RUNNING",
+      maxAttempts: 3,
+    });
+    await runs.createRun({
+      id: "run-001",
+      taskId: "task-001",
+      attempt: 1,
+      agent: "codex",
+      engine: "codex",
+    });
+    await runs.claimRun("run-001", "worker-dead", "2000-01-01T00:00:00.000Z");
+    await runs.markRunning("run-001", "2000-01-01T00:00:00.000Z");
+
+    const driver = new CrashDriver(cleanupFailures);
+    const executionManager = new ExecutionManager({ driver, executions, events });
+    await executionManager.prepare({
+      runId: "run-001",
+      workspacePath: fixture.path,
+      profile: defaultExecutionProfile(),
+    });
+
+    const worker = new Worker({
+      runStore: runs,
+      taskStore: tasks,
+      repositoryStore: repositories,
+      workspaceManager: new WorkspaceManager({ baseDir: workspaceBase }),
+      agentEngine: new CodexEngine({
+        executable: process.execPath,
+        spawnArgs: () => ["-e", IDLE_CODE],
+      }),
+      verifier: new Verifier(),
+      workerId: "worker-loop",
+      heartbeatMs: 50,
+      leaseSeconds: 1,
+    });
+    const loop = new Loop({
+      scheduler: new Scheduler({ taskStore: tasks, runStore: runs }),
+      worker,
+      runStore: runs,
+      taskStore: tasks,
+      eventStore: events,
+      executions,
+      executionManager,
+      maxConcurrency: 1,
+    });
+    return { tasks, runs, events, executions, driver, loop };
+  }
+
+  it("recovers a crashed worker by finishing and cleaning its execution", async () => {
+    const { tasks, runs, events, executions, driver, loop } = await crashedRun();
+
+    const report = await loop.tick();
+
+    expect(report.recovered.map((run) => run.id)).toEqual(["run-001"]);
+    expect((await runs.findRun("run-001")).status).toBe("LOST");
+    expect((await tasks.findTask("task-001")).status).toBe("READY");
+    expect((await executions.findLatestByRunId("run-001"))?.status).toBe("CLEANED");
+    expect(driver.cleanupCalls).toBe(1);
+    const types = (await events.listEvents({ runId: "run-001" })).map((e) => e.type);
+    expect(types).toContain("execution.cleaned");
+  });
+
+  it("retries cleanup failures on later ticks until the execution is CLEANED", async () => {
+    const { executions, driver, loop } = await crashedRun(2);
+
+    await loop.tick();
+    expect((await executions.findLatestByRunId("run-001"))?.status).toBe(
+      "CLEANUP_FAILED",
+    );
+    expect(driver.cleanupCalls).toBe(2);
+
+    const second = await loop.tick();
+    expect(second.cleanupRetries).toBeGreaterThanOrEqual(1);
+    expect((await executions.findLatestByRunId("run-001"))?.status).toBe("CLEANED");
+    expect(driver.cleanupCalls).toBe(3);
   });
 });

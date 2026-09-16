@@ -30,6 +30,8 @@ export const EVENT_TYPES = [
   "VerificationFailed",
   "RunSucceeded",
   "RunFailed",
+  "RunTimedOut",
+  "RunCancelled",
   "RunLost",
   "TaskReview",
   "TaskApproved",

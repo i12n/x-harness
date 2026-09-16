@@ -10,6 +10,11 @@ import { InMemoryTaskStore } from "../src/store/inMemoryTaskStore.js";
 import { Verifier } from "../src/verification/runner.js";
 import { Worker } from "../src/worker/worker.js";
 import { InMemoryEventStore } from "../src/store/inMemoryEventStore.js";
+import { InMemoryExecutionStore } from "../src/store/inMemoryExecutionStore.js";
+import {
+  ExecutionManager,
+  LocalExecutionDriver,
+} from "../src/execution/manager.js";
 import { WorkspaceManager } from "../src/workspace/manager.js";
 import {
   commitFile,
@@ -73,6 +78,11 @@ describe("Worker", () => {
         spawnArgs: () => ["-e", engineCode],
       }),
       verifier: new Verifier(),
+      executionManager: new ExecutionManager({
+        driver: new LocalExecutionDriver(),
+        executions: new InMemoryExecutionStore(),
+        events,
+      }),
       eventStore: events,
       workerId: "worker-test",
       heartbeatMs: 50,

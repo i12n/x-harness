@@ -1,6 +1,8 @@
 import type { Run } from "../domain/run.js";
 import type { TaskStatus } from "../domain/task.js";
+import type { ExecutionManager } from "../execution/manager.js";
 import type { Scheduler } from "../scheduler/scheduler.js";
+import type { ExecutionStore } from "../store/executionStore.js";
 import type { RunStore } from "../store/runStore.js";
 import type { TaskStore } from "../store/taskStore.js";
 import type { EventStore } from "../store/eventStore.js";
@@ -13,12 +15,15 @@ export interface LoopOptions {
   taskStore: TaskStore;
   maxConcurrency?: number;
   eventStore?: EventStore;
+  executions?: ExecutionStore;
+  executionManager?: ExecutionManager;
 }
 
 export interface TickReport {
   recovered: Run[];
   scheduled: Run[];
   executed: Run[];
+  cleanupRetries: number;
 }
 
 /**
@@ -33,6 +38,8 @@ export class Loop {
   private readonly maxConcurrency: number;
   private running = false;
   private readonly events: EventStore | undefined;
+  private readonly executions: ExecutionStore | undefined;
+  private readonly executionManager: ExecutionManager | undefined;
 
   constructor(options: LoopOptions) {
     this.scheduler = options.scheduler;
@@ -43,6 +50,8 @@ export class Loop {
       options.maxConcurrency ??
       Number(process.env.AI_MAX_CONCURRENCY ?? 2);
     this.events = options.eventStore;
+    this.executions = options.executions;
+    this.executionManager = options.executionManager;
   }
 
   async start(intervalMs = 1_000): Promise<void> {
@@ -62,9 +71,10 @@ export class Loop {
 
   async tick(): Promise<TickReport> {
     const recovered = await this.recoverExpiredRuns();
+    const cleanupRetries = await this.retryFailedCleanups();
     const scheduled = await this.scheduler.schedule();
     const executed = await this.executeQueued();
-    return { recovered, scheduled, executed };
+    return { recovered, scheduled, executed, cleanupRetries };
   }
 
   /** Recover runs whose lease expired: mark LOST and release the task. */
@@ -95,8 +105,39 @@ export class Loop {
       const nextStatus: TaskStatus = run.attempt >= task.maxAttempts ? "BLOCKED" : "READY";
       await this.taskStore.updateTaskStatus(task.id, nextStatus);
       recovered.push(lost);
+      await this.recoverExecution(run.id);
     }
     return recovered;
+  }
+
+  /**
+   * Worker crash recovery: the lease expiry makes the Run LOST, and the
+   * persisted execution record makes the container/worktree reclaimable.
+   */
+  private async recoverExecution(runId: string): Promise<void> {
+    if (!this.executions || !this.executionManager) {
+      return;
+    }
+    const record = await this.executions.findLatestByRunId(runId);
+    if (!record || record.status === "CLEANED") {
+      return;
+    }
+    await this.executionManager.finish(record, "LOST", "lease expired");
+    await this.executionManager.cleanupRecord(record);
+  }
+
+  /** Cleanup failures are recoverable: retry them on every tick. */
+  private async retryFailedCleanups(): Promise<number> {
+    if (!this.executions || !this.executionManager) {
+      return 0;
+    }
+    const failed = await this.executions.listExecutions({
+      statuses: ["CLEANUP_FAILED"],
+    });
+    for (const record of failed) {
+      await this.executionManager.cleanupRecord(record);
+    }
+    return failed.length;
   }
 
   private async executeQueued(): Promise<Run[]> {

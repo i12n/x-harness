@@ -15,6 +15,11 @@ import { cleanupWorkspacesCommand } from "../src/cli/commands/workspaceCommands.
 import { Loop } from "../src/loop/loop.js";
 import { Scheduler } from "../src/scheduler/scheduler.js";
 import { PostgresEventStore } from "../src/store/postgresEventStore.js";
+import { PostgresExecutionStore } from "../src/store/postgresExecutionStore.js";
+import {
+  ExecutionManager,
+  LocalExecutionDriver,
+} from "../src/execution/manager.js";
 import { PostgresRepositoryStore } from "../src/store/postgresRepositoryStore.js";
 import { PostgresRunStore } from "../src/store/postgresRunStore.js";
 import { PostgresTaskStore } from "../src/store/postgresTaskStore.js";
@@ -48,7 +53,7 @@ describeReal("v0.1 seal: real Postgres + real Codex end to end", () => {
     }
     rmSync(workspaceBase, { recursive: true, force: true });
     await pool?.query(
-      "DELETE FROM clarification_answers; DELETE FROM clarifications; DELETE FROM problem_analyses; DELETE FROM problems; DELETE FROM events; DELETE FROM workspaces; DELETE FROM runs; DELETE FROM tasks; DELETE FROM repositories;",
+      "DELETE FROM clarification_answers; DELETE FROM clarifications; DELETE FROM problem_analyses; DELETE FROM problems; DELETE FROM events; DELETE FROM executions; DELETE FROM workspaces; DELETE FROM runs; DELETE FROM tasks; DELETE FROM repositories;",
     );
   });
 
@@ -65,6 +70,7 @@ describeReal("v0.1 seal: real Postgres + real Codex end to end", () => {
     const tasks = new PostgresTaskStore(pool!);
     const runs = new PostgresRunStore(pool!);
     const events = new PostgresEventStore(pool!);
+    const executions = new PostgresExecutionStore(pool!);
     const workspaceManager = new WorkspaceManager({ baseDir: workspaceBase });
 
     await repositories.createRepository({
@@ -97,6 +103,11 @@ describeReal("v0.1 seal: real Postgres + real Codex end to end", () => {
       workspaceManager,
       agentEngine: new CodexEngine(), // real `codex exec`
       verifier: new Verifier(),
+      executionManager: new ExecutionManager({
+        driver: new LocalExecutionDriver(),
+        executions,
+        events,
+      }),
       eventStore: events,
       workerId: "worker-real-e2e",
       heartbeatMs: 5_000,
@@ -129,7 +140,7 @@ describeReal("v0.1 seal: real Postgres + real Codex end to end", () => {
     expect(workspacePath).toBeTruthy();
     expect(existsSync(join(workspacePath!, "solution.txt"))).toBe(true);
 
-    const types = (await events.listEvents({ taskId: "task-001" })).map((event) => event.type);
+    const types = (await events.listEvents({ runId: run?.id })).map((event) => event.type);
     expect(types).toEqual([
       "RunCreated",
       "RunStarted",

@@ -68,3 +68,21 @@ export class ClarificationNotFoundError extends HarnessError {
     super(`clarification not found: ${id}`);
   }
 }
+
+export class ExecutionNotFoundError extends HarnessError {
+  constructor(id: string) {
+    super(`execution not found: ${id}`);
+  }
+}
+
+export class ExecutionTimeoutError extends HarnessError {
+  constructor(runId: string) {
+    super(`execution timed out: ${runId}`);
+  }
+}
+
+export class ExecutionCancelledError extends HarnessError {
+  constructor(runId: string) {
+    super(`execution cancelled: ${runId}`);
+  }
+}

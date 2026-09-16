@@ -3,9 +3,11 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { CodexEngine } from "../src/agent/codexEngine.js";
+import type { AgentContext, AgentEngine, AgentResult } from "../src/agent/types.js";
 import type { ExecutionEnvironment, ExecutionRequest } from "../src/execution/manager.js";
 import { ExecutionManager } from "../src/execution/manager.js";
 import type { ExecutionDriver } from "../src/execution/manager.js";
+import { InMemoryExecutionStore } from "../src/store/inMemoryExecutionStore.js";
 import { InMemoryEventStore } from "../src/store/inMemoryEventStore.js";
 import { InMemoryRepositoryStore } from "../src/store/inMemoryRepositoryStore.js";
 import { InMemoryRunStore } from "../src/store/inMemoryRunStore.js";
@@ -24,6 +26,7 @@ const WRITE_CODE = [
 ].join("");
 
 class RecordingDriver implements ExecutionDriver {
+  readonly name = "recording";
   readonly calls: string[] = [];
   environment?: ExecutionEnvironment;
 
@@ -55,6 +58,33 @@ class RecordingDriver implements ExecutionDriver {
   }
 }
 
+/** Engine that never finishes until cancelled (timeout/cancel tests). */
+class SlowEngine implements AgentEngine {
+  private pending?: (result: AgentResult) => void;
+
+  async execute(context: AgentContext): Promise<AgentResult> {
+    return new Promise<AgentResult>((resolve) => {
+      this.pending = resolve;
+      void context;
+    });
+  }
+
+  async cancel(): Promise<void> {
+    const resolve = this.pending;
+    this.pending = undefined;
+    const now = new Date().toISOString();
+    resolve?.({
+      runId: "slow",
+      exitCode: null,
+      signal: "SIGTERM",
+      stdout: "",
+      stderr: "",
+      startedAt: now,
+      finishedAt: now,
+    });
+  }
+}
+
 describe("Worker + ExecutionManager (TASK-902)", () => {
   const cleanups: (() => void)[] = [];
   afterEach(() => {
@@ -67,6 +97,8 @@ describe("Worker + ExecutionManager (TASK-902)", () => {
     driver: ExecutionDriver,
     verificationCommands: string[],
     existingFixture?: GitFixture,
+    engine?: AgentEngine,
+    executionTimeoutMs?: number,
   ) {
     const fixture: GitFixture = existingFixture ?? createGitFixture();
     if (!existingFixture) {
@@ -105,16 +137,23 @@ describe("Worker + ExecutionManager (TASK-902)", () => {
       taskStore: tasks,
       repositoryStore: repositories,
       workspaceManager: new WorkspaceManager({ baseDir: workspaceBase }),
-      agentEngine: new CodexEngine({
-        executable: process.execPath,
-        spawnArgs: () => ["-e", WRITE_CODE],
-      }),
+      agentEngine:
+        engine ??
+        new CodexEngine({
+          executable: process.execPath,
+          spawnArgs: () => ["-e", WRITE_CODE],
+        }),
       verifier: new Verifier(),
-      executionManager: new ExecutionManager(driver),
+      executionManager: new ExecutionManager({
+        driver,
+        executions: new InMemoryExecutionStore(),
+        events,
+      }),
       eventStore: events,
       workerId: "worker-902",
       heartbeatMs: 50,
       leaseSeconds: 1,
+      executionTimeoutMs,
     });
     return { tasks, runs, events, worker };
   }
@@ -178,5 +217,52 @@ describe("Worker + ExecutionManager (TASK-902)", () => {
 
     expect((await runs.findRun("run-001")).status).toBe("FAILED");
     expect(driver.calls).toEqual(["create", "start", "cleanup"]);
+  });
+
+  it("times out: stops the execution, cleans up and returns the task to READY", async () => {
+    const fixture: GitFixture = createGitFixture();
+    cleanups.push(fixture.cleanup);
+    const driver = new RecordingDriver();
+    const { tasks, runs, events, worker } = await setup(
+      driver,
+      ["sh checks.sh"],
+      fixture,
+      new SlowEngine(),
+      150,
+    );
+
+    await expect(worker.executeRun("run-001")).rejects.toThrow(/timed_out/);
+
+    expect((await runs.findRun("run-001")).status).toBe("TIMED_OUT");
+    expect((await tasks.findTask("task-001")).status).toBe("READY");
+    expect(driver.calls).toEqual(["create", "start", "cleanup"]);
+    expect(
+      (await events.listEvents({ runId: "run-001" })).map((e) => e.type),
+    ).toContain("RunTimedOut");
+  });
+
+  it("cancels through AbortSignal with the same cleanup obligation", async () => {
+    const fixture: GitFixture = createGitFixture();
+    cleanups.push(fixture.cleanup);
+    const driver = new RecordingDriver();
+    const { tasks, runs, events, worker } = await setup(
+      driver,
+      ["sh checks.sh"],
+      fixture,
+      new SlowEngine(),
+    );
+    const controller = new AbortController();
+
+    const promise = worker.executeRun("run-001", { signal: controller.signal });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    controller.abort();
+
+    await expect(promise).rejects.toThrow(/cancelled/);
+    expect((await runs.findRun("run-001")).status).toBe("CANCELLED");
+    expect((await tasks.findTask("task-001")).status).toBe("READY");
+    expect(driver.calls).toEqual(["create", "start", "cleanup"]);
+    expect(
+      (await events.listEvents({ runId: "run-001" })).map((e) => e.type),
+    ).toContain("RunCancelled");
   });
 });

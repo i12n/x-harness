@@ -43,7 +43,10 @@ Implemented in TypeScript (Node >= 18, ESM). The full plan lives in
 - Phase 9 (Remote Execution & Isolation, in progress): ExecutionProfile /
   Policy / SecretStore / ExecutionManager + Docker 隔离参数规则、Repository
   executionProfile 绑定与 Worker 接入（ExecutionContext + 生命周期清理）
-  已实现并有单测；真 Docker E2E 待做（本机无 Docker），见
+  已实现并有单测；Execution 生命周期契约（CREATING→RUNNING→CLEANED、
+  cleanup obligation、`executions` 持久化、timeout/cancel、Worker 崩溃后
+  Loop 回收、CLEANUP_FAILED 重试）已完成；真 Docker E2E 待做（本机无
+  Docker），见
   [docs/remote-execution-isolation.md](docs/remote-execution-isolation.md)。
 
 ## Requirements

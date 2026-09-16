@@ -21,6 +21,11 @@ import { PostgresRepositoryStore } from "../src/store/postgresRepositoryStore.js
 import { PostgresRunStore } from "../src/store/postgresRunStore.js";
 import { PostgresTaskStore } from "../src/store/postgresTaskStore.js";
 import { PostgresEventStore } from "../src/store/postgresEventStore.js";
+import { PostgresExecutionStore } from "../src/store/postgresExecutionStore.js";
+import {
+  ExecutionManager,
+  LocalExecutionDriver,
+} from "../src/execution/manager.js";
 import { PostgresProblemStore } from "../src/store/postgresProblemStore.js";
 import { buildExecutionProfile } from "../src/domain/executionProfile.js";
 import { Verifier } from "../src/verification/runner.js";
@@ -70,7 +75,7 @@ describePostgres("PostgreSQL integration", () => {
       cleanup();
     }
     await pool?.query(
-      "DELETE FROM clarification_answers; DELETE FROM clarifications; DELETE FROM problem_analyses; DELETE FROM problems; DELETE FROM events; DELETE FROM workspaces; DELETE FROM runs; DELETE FROM tasks; DELETE FROM repositories;",
+      "DELETE FROM clarification_answers; DELETE FROM clarifications; DELETE FROM problem_analyses; DELETE FROM problems; DELETE FROM events; DELETE FROM executions; DELETE FROM workspaces; DELETE FROM runs; DELETE FROM tasks; DELETE FROM repositories;",
     );
   });
 
@@ -89,6 +94,7 @@ describePostgres("PostgreSQL integration", () => {
     const tasks = new PostgresTaskStore(pool!);
     const runs = new PostgresRunStore(pool!);
     const events = new PostgresEventStore(pool!);
+    const executions = new PostgresExecutionStore(pool!);
 
     const repo = await repositories.createRepository({
       id: "repo-001",
@@ -120,6 +126,11 @@ describePostgres("PostgreSQL integration", () => {
         spawnArgs: () => ["-e", WRITE_CODE],
       }),
       verifier: new Verifier(),
+      executionManager: new ExecutionManager({
+        driver: new LocalExecutionDriver(),
+        executions,
+        events,
+      }),
       eventStore: events,
       workerId: "worker-pg",
       heartbeatMs: 50,
@@ -137,9 +148,10 @@ describePostgres("PostgreSQL integration", () => {
     const report = await loop.tick();
     expect(report.executed).toHaveLength(1);
     expect((await tasks.findTask("task-001")).status).toBe("REVIEW");
-    expect((await runs.listRuns({ taskId: "task-001" }))[0]?.status).toBe("SUCCEEDED");
+    const run = (await runs.listRuns({ taskId: "task-001" }))[0];
+    expect(run?.status).toBe("SUCCEEDED");
 
-    const history = await events.listEvents({ taskId: "task-001" });
+    const history = await events.listEvents({ runId: run?.id });
     const types = history.map((event) => event.type);
     expect(types).toEqual([
       "RunCreated",

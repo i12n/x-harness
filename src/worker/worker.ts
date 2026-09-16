@@ -4,7 +4,13 @@ import type { Repository } from "../domain/repository.js";
 import { defaultExecutionProfile } from "../domain/executionProfile.js";
 import type { Run } from "../domain/run.js";
 import type { Task } from "../domain/task.js";
-import { HarnessError, WorkerExecutionError } from "../errors.js";
+import {
+  ExecutionCancelledError,
+  ExecutionTimeoutError,
+  HarnessError,
+  WorkerExecutionError,
+} from "../errors.js";
+import type { ExecutionStatus } from "../domain/execution.js";
 import {
   ExecutionManager,
   LocalExecutionDriver,
@@ -30,6 +36,7 @@ export interface WorkerOptions {
   workerId?: string;
   heartbeatMs?: number;
   leaseSeconds?: number;
+  executionTimeoutMs?: number;
 }
 
 export interface ExecuteRunOutcome {
@@ -57,6 +64,7 @@ export class Worker {
   private readonly workerId: string;
   private readonly heartbeatMs: number;
   private readonly leaseMs: number;
+  private readonly executionTimeoutMs: number;
 
   constructor(options: WorkerOptions) {
     this.runStore = options.runStore;
@@ -72,9 +80,15 @@ export class Worker {
       options.workerId ?? process.env.AI_WORKER_ID ?? `worker-${process.pid}`;
     this.heartbeatMs = options.heartbeatMs ?? 10_000;
     this.leaseMs = (options.leaseSeconds ?? 30) * 1000;
+    this.executionTimeoutMs =
+      options.executionTimeoutMs ??
+      Number(process.env.AI_RUN_TIMEOUT_MS ?? 0);
   }
 
-  async executeRun(runId: string): Promise<ExecuteRunOutcome> {
+  async executeRun(
+    runId: string,
+    options: { signal?: AbortSignal } = {},
+  ): Promise<ExecuteRunOutcome> {
     const claimed = await this.runStore.claimRun(
       runId,
       this.workerId,
@@ -86,6 +100,7 @@ export class Worker {
       payload: { workerId: this.workerId, attempt: claimed.attempt },
     });
     let environment: ExecutionEnvironment | undefined;
+    let terminalStatus: "TIMED_OUT" | "CANCELLED" | undefined;
     const heartbeat = this.startHeartbeat(runId);
     try {
       const task = await this.taskStore.findTask(claimed.taskId);
@@ -110,11 +125,6 @@ export class Worker {
         );
       }
       const execution = toExecutionContext(environment);
-      await this.emit("execution.prepared", {
-        taskId: task.id,
-        runId,
-        payload: { executionId: execution.executionId, driver: execution.driver },
-      });
 
       const context = {
         ...(await buildAgentContext({
@@ -130,7 +140,26 @@ export class Worker {
         runId,
         payload: { agent: "codex", engine: "codex", workspace: workspace.path },
       });
-      const agentResult = await this.agentEngine.execute(context);
+      const agentOutcome = await this.runAgent(runId, context, options.signal);
+      if (agentOutcome === "TIMED_OUT" || agentOutcome === "CANCELLED") {
+        terminalStatus = agentOutcome;
+        await this.executionManager.stop(environment);
+        await this.executionManager.finish(environment, agentOutcome, agentOutcome);
+        await this.runStore.completeRun(runId, {
+          status: agentOutcome,
+          error: { message: `execution ${agentOutcome.toLowerCase()}` },
+          finishedAt: new Date().toISOString(),
+        });
+        await this.emit(agentOutcome === "TIMED_OUT" ? "RunTimedOut" : "RunCancelled", {
+          taskId: task.id,
+          runId,
+        });
+        await this.recoverTask(task, claimed.attempt);
+        throw new WorkerExecutionError(
+          `run ${runId} ${agentOutcome.toLowerCase()}`,
+        );
+      }
+      const agentResult = agentOutcome;
       await this.emit("AgentFinished", {
         taskId: task.id,
         runId,
@@ -162,6 +191,7 @@ export class Worker {
 
       const finishedAt = new Date().toISOString();
       if (verification.passed) {
+        await this.executionManager.finish(environment, "SUCCEEDED");
         await this.runStore.completeRun(runId, {
           status: "SUCCEEDED",
           exitCode: agentResult.exitCode,
@@ -177,6 +207,7 @@ export class Worker {
         await this.emit("RunSucceeded", { taskId: task.id, runId });
         await this.emit("TaskReview", { taskId: task.id, runId });
       } else {
+        await this.executionManager.finish(environment, "FAILED", "verification failed");
         await this.failRun(
           runId,
           task,
@@ -204,9 +235,15 @@ export class Worker {
         workspace,
       };
     } catch (error) {
+      if (terminalStatus) {
+        throw error;
+      }
       const message = error instanceof Error ? error.message : String(error);
       try {
         const task = await this.taskStore.findTask(claimed.taskId);
+        if (environment) {
+          await this.executionManager.finish(environment, "FAILED", message);
+        }
         await this.runStore.completeRun(runId, {
           status: "FAILED",
           error: { message },
@@ -226,11 +263,6 @@ export class Worker {
       if (environment) {
         try {
           await this.executionManager.cleanup(environment);
-          await this.emit("execution.cleaned", {
-            taskId: claimed.taskId,
-            runId,
-            payload: { executionId: environment.id, driver: environment.driver },
-          });
         } catch {
           // Cleanup is best-effort; lease recovery handles leftovers.
         }
@@ -283,6 +315,67 @@ export class Worker {
         // A failed heartbeat is surfaced later by lease recovery.
       });
     }, this.heartbeatMs);
+  }
+
+  /**
+   * TASK-901: timeout / cancellation share one path — stop the execution,
+   * then let the finally-block cleanup obligation run.
+   */
+  private async runAgent(
+    runId: string,
+    context: Parameters<AgentEngine["execute"]>[0],
+    signal?: AbortSignal,
+  ): Promise<AgentResult | "TIMED_OUT" | "CANCELLED"> {
+    const guards: Promise<never>[] = [];
+    let timeout: NodeJS.Timeout | undefined;
+    let onAbort: (() => void) | undefined;
+
+    if (this.executionTimeoutMs > 0) {
+      guards.push(
+        new Promise<never>((_resolve, reject) => {
+          timeout = setTimeout(
+            () => reject(new ExecutionTimeoutError(runId)),
+            this.executionTimeoutMs,
+          );
+        }),
+      );
+    }
+    if (signal) {
+      guards.push(
+        new Promise<never>((_resolve, reject) => {
+          if (signal.aborted) {
+            reject(new ExecutionCancelledError(runId));
+            return;
+          }
+          onAbort = () => reject(new ExecutionCancelledError(runId));
+          signal.addEventListener("abort", onAbort, { once: true });
+        }),
+      );
+    }
+
+    try {
+      if (guards.length === 0) {
+        return await this.agentEngine.execute(context);
+      }
+      return await Promise.race([this.agentEngine.execute(context), ...guards]);
+    } catch (error) {
+      if (error instanceof ExecutionTimeoutError) {
+        await this.agentEngine.cancel(runId).catch(() => undefined);
+        return "TIMED_OUT";
+      }
+      if (error instanceof ExecutionCancelledError) {
+        await this.agentEngine.cancel(runId).catch(() => undefined);
+        return "CANCELLED";
+      }
+      throw error;
+    } finally {
+      if (timeout) {
+        clearTimeout(timeout);
+      }
+      if (signal && onAbort) {
+        signal.removeEventListener("abort", onAbort);
+      }
+    }
   }
 
   private async emit(

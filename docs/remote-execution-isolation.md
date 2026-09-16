@@ -191,8 +191,22 @@ Worker 崩溃后 Run 能恢复
   只接收 `ExecutionContext`（`workdir` 语义），Run 结束 best-effort 清理并
   记录 `execution.prepared/cleaned` 事件；用 fake driver 覆盖了
   Worker → ExecutionManager → Agent → Verification → cleanup 全链路
+- TASK-901 已完成：Execution 生命周期状态机
+  `CREATING → CREATED → STARTING → RUNNING → <terminal> → CLEANING →
+  CLEANED`（失败可落 `FAILED/TIMED_OUT/CANCELLED/LOST/CLEANUP_FAILED`），
+  并持久化到 `executions` 表（`migrations/004_executions.sql`）
+- TASK-908 已完成（本地语义层）：
+  - **Cleanup obligation**：`create()` 成功即产生最终清理责任；`start()`
+    失败也会清理
+  - **cleanup 失败不隐藏**：记录 `CLEANUP_FAILED` + `execution.cleanup_failed`
+    事件，Loop 每 tick 重试直到 `CLEANED`
+  - **timeout / cancel 同一路径**：stop → finish(TIMED_OUT/CANCELLED) →
+    Run 终态 → cleanup（`AI_RUN_TIMEOUT_MS` 超时；`executeRun(runId, {signal})`
+    取消）
+  - **Worker 崩溃恢复**：lease 过期 → Run LOST → 依据持久化的 execution
+    记录 finish(LOST) + cleanup（Execution Recovery），不依赖 Worker 的 finally
 - 安全守卫：容器化执行（存在 containerId）会显式失败并指向 TASK-910，
   避免在容器内执行通路未实现前误用
 - 待做：容器内执行 Codex/验证（`docker exec` 通路，TASK-910）、TASK-901
-  镜像约定、TASK-905 白名单的真实网络策略、TASK-908 真 Docker 回收验证
-  （本机无 Docker）
+  镜像与入口约定、TASK-905 白名单的真实网络策略、真 Docker 环境下的
+  TASK-908 回收验证（本机无 Docker）

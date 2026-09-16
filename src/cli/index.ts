@@ -29,6 +29,10 @@ import { WorkspaceManager } from "../workspace/manager.js";
 import { Verifier } from "../verification/runner.js";
 import { Worker } from "../worker/worker.js";
 import {
+  ExecutionManager,
+  LocalExecutionDriver,
+} from "../execution/manager.js";
+import {
   createRepositoryCommand,
   listRepositoriesCommand,
   showRepositoryCommand,
@@ -499,6 +503,11 @@ program
     const handle = await openStores();
     const workspaceManager = new WorkspaceManager();
     const engine = new CodexEngine();
+    const executionManager = new ExecutionManager({
+      driver: new LocalExecutionDriver(),
+      executions: handle.executions,
+      events: handle.events,
+    });
     const worker = new Worker({
       runStore: handle.runs,
       taskStore: handle.tasks,
@@ -506,6 +515,7 @@ program
       workspaceManager,
       agentEngine: engine,
       verifier: new Verifier(),
+      executionManager,
       eventStore: handle.events,
     });
     const loop = new Loop({
@@ -518,6 +528,8 @@ program
       runStore: handle.runs,
       taskStore: handle.tasks,
       eventStore: handle.events,
+      executions: handle.executions,
+      executionManager,
     });
 
     if (options.once) {
