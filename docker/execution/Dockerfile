@@ -22,8 +22,8 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends git ca-certificates \
     && rm -rf /var/lib/apt/lists/* \
     && npm install --global @openai/codex \
-    && useradd --uid 1000 --create-home --home-dir /home/agent --shell /bin/bash agent \
-    && mkdir -p /workspace \
+    && mkdir -p /workspace /home/agent \
+    && (id -u 1000 >/dev/null 2>&1 || useradd --uid 1000 --shell /bin/bash agent) \
     && chown -R 1000:1000 /workspace /home/agent
 
 USER 1000:1000
