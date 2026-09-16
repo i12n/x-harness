@@ -173,5 +173,5 @@ migrations/     # SQL schema (001 core, 002 problem confirmation)
 scripts/        # db:migrate runner
 tests/          # vitest unit tests
 docs/           # v0.1 plan, v0.2 roadmap, phase 9 isolation + acceptance, notes
-docker/         # execution image contract + Dockerfile template
+docker/         # execution image contract + Dockerfile + allow-list proxy
 ```

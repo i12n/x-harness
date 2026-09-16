@@ -539,8 +539,10 @@ describeNetwork("TASK-905 network enforcement spec (real Docker)", () => {
     }
   });
 
-  const fetchProbe = (url: string): string =>
-    `node -e "fetch('${url}',{signal:AbortSignal.timeout(5000)}).then(()=>process.exit(0)).catch(()=>process.exit(7))"`;
+  // `-f` makes HTTP 403 (proxy deny) a non-zero exit; curl honours the
+  // HTTP(S)_PROXY env injected by the restricted profile.
+  const curlProbe = (url: string, bypassProxy = false): string =>
+    `curl ${bypassProxy ? "--noproxy '*'" : ""} -fsS --max-time 8 -o /dev/null ${url}`;
 
   it("network:none really blocks egress", async () => {
     const workspace = mkdtempSync(join(tmpdir(), "ai-net-"));
@@ -563,9 +565,9 @@ describeNetwork("TASK-905 network enforcement spec (real Docker)", () => {
       const result = await manager.exec(environment, [
         "sh",
         "-lc",
-        fetchProbe("https://example.com"),
+        curlProbe("https://example.com"),
       ]);
-      expect(result.exitCode).toBe(7);
+      expect(result.exitCode).not.toBe(0);
     } finally {
       await manager.cleanup(environment);
     }
@@ -594,23 +596,39 @@ describeNetwork("TASK-905 network enforcement spec (real Docker)", () => {
       const allowedResult = await manager.exec(environment, [
         "sh",
         "-lc",
-        fetchProbe(`https://${allowed}`),
+        curlProbe(`https://${allowed}`),
       ]);
       expect(allowedResult.exitCode).toBe(0);
 
       const forbiddenResult = await manager.exec(environment, [
         "sh",
         "-lc",
-        fetchProbe(`https://${forbidden}`),
+        curlProbe(`https://${forbidden}`),
       ]);
-      expect(forbiddenResult.exitCode).toBe(7);
+      expect(forbiddenResult.exitCode).not.toBe(0);
 
       const directIp = await manager.exec(environment, [
         "sh",
         "-lc",
-        fetchProbe("http://1.1.1.1"),
+        curlProbe("http://1.1.1.1"),
       ]);
-      expect(directIp.exitCode).toBe(7);
+      expect(directIp.exitCode).not.toBe(0);
+
+      // Bypassing the proxy must not work: the run container has no route out.
+      const proxyBypass = await manager.exec(environment, [
+        "sh",
+        "-lc",
+        curlProbe(`https://${allowed}`, true),
+      ]);
+      expect(proxyBypass.exitCode).not.toBe(0);
+
+      // DNS bypass: the container cannot resolve external names itself.
+      const dnsBypass = await manager.exec(environment, [
+        "sh",
+        "-lc",
+        `getent hosts ${forbidden}`,
+      ]);
+      expect(dnsBypass.exitCode).not.toBe(0);
     } finally {
       await manager.cleanup(environment);
     }

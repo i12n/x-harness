@@ -19,7 +19,7 @@ ARG RUNTIME=node22
 LABEL org.opencontainers.image.title="harness/execution:${RUNTIME}"
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends git ca-certificates \
+    && apt-get install -y --no-install-recommends git ca-certificates curl \
     && rm -rf /var/lib/apt/lists/* \
     && npm install --global @openai/codex \
     && mkdir -p /workspace /home/agent \

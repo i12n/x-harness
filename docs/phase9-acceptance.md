@@ -17,6 +17,9 @@ docker build -f docker/execution/Dockerfile \
   --build-arg BASE_IMAGE=node:22-bookworm-slim \
   --build-arg RUNTIME=node22 \
   -t harness/execution:node22 .
+
+# allow-list 代理（TASK-905，方案 A）
+docker build -f docker/proxy/Dockerfile -t harness/execution-proxy:latest .
 ```
 
 ## 1. TASK-910 生命周期矩阵

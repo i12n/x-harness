@@ -80,6 +80,21 @@ describe("buildDockerRunArgs isolation rules", () => {
     expect(envPairs).toContain("GITHUB_TOKEN=value");
     expect(envPairs).toContain("HOME=/home/agent");
   });
+
+  it("uses the per-run internal network and proxy env for restricted mode", () => {
+    const args = buildDockerRunArgs({
+      runId: "run-004",
+      workspacePath: "/tmp/ws",
+      profile,
+      secrets: {},
+      networkName: "ai-net-run-004",
+      proxyUrl: "http://ai-proxy-run-004:3128",
+    });
+    const joined = args.join(" ");
+    expect(joined).toContain("--network ai-net-run-004");
+    expect(joined).toContain("--env HTTP_PROXY=http://ai-proxy-run-004:3128");
+    expect(joined).toContain("--env HTTPS_PROXY=http://ai-proxy-run-004:3128");
+  });
 });
 
 describe("EnvSecretStore", () => {

@@ -7,6 +7,10 @@ export interface DockerRunSpec {
   profile: ExecutionProfile;
   secrets: Record<string, string>;
   containerName?: string;
+  /** Explicit docker network; restricted mode uses a per-run --internal net. */
+  networkName?: string;
+  /** Proxy URL injected as HTTP(S)_PROXY when egress goes through a proxy. */
+  proxyUrl?: string;
 }
 
 export function containerNameFor(runId: string): string {
@@ -77,7 +81,28 @@ export function buildDockerRunArgs(spec: DockerRunSpec): string[] {
     `type=bind,src=${workspacePath},dst=${profile.workspace}`,
   ];
 
-  args.push("--network", profile.network.mode === "none" ? "none" : "bridge");
+  if (spec.networkName) {
+    args.push("--network", spec.networkName);
+  } else {
+    args.push("--network", profile.network.mode === "none" ? "none" : "bridge");
+  }
+
+  if (spec.proxyUrl) {
+    args.push(
+      "--env",
+      `HTTP_PROXY=${spec.proxyUrl}`,
+      "--env",
+      `HTTPS_PROXY=${spec.proxyUrl}`,
+      "--env",
+      `http_proxy=${spec.proxyUrl}`,
+      "--env",
+      `https_proxy=${spec.proxyUrl}`,
+      "--env",
+      "NO_PROXY=localhost,127.0.0.1",
+      "--env",
+      "no_proxy=localhost,127.0.0.1",
+    );
+  }
 
   for (const [key, value] of Object.entries(spec.secrets)) {
     args.push("--env", `${key}=${value}`);

@@ -223,3 +223,21 @@ Worker 崩溃后 Run 能恢复
 - 待做：TASK-910 真 Docker E2E（矩阵验收 + 隔离测试：跨 Run 读取、宿主文件、
   docker.sock、网络 none/白名单、资源限制）、TASK-905 网络白名单的真实强制
   （依赖 Linux + Docker 环境；本机无 Docker）
+
+### TASK-905 实现（方案 A：per-run internal network + allow-list proxy）
+
+不做宿主防火墙改动，保证与服务器上其他服务（如 xmusic）互不影响：
+
+```text
+Worker → ExecutionManager
+           ├── docker network create --internal ai-net-<run>
+           ├── proxy container: ai-proxy-<run>（bridge + 该 internal 网络）
+           └── run container: 只接入 ai-net-<run>，注入 HTTP(S)_PROXY
+                          ↓
+                  allow-list proxy（HTTP + CONNECT，白名单外一律 403）
+```
+
+- 容器无公网路由：直连 IP、绕过代理、外部 DNS 解析都会失败
+- 白名单由 `ExecutionProfile.network.allow` 生成，代理镜像
+  `harness/execution-proxy:latest`（`docker build -f docker/proxy/Dockerfile .`）
+- 代理容器与网络按 runId 命名，Worker 崩溃后 Loop 仍可回收（deterministic）

@@ -34,6 +34,10 @@ export interface ExecutionEnvironment {
   profile: ExecutionProfile;
   driver: string;
   containerId?: string;
+  /** Per-run internal network (restricted mode). */
+  networkName?: string;
+  /** Allow-list proxy container name (restricted mode). */
+  proxyContainerId?: string;
   startedAt?: string;
   /** Persisted lifecycle record id (when an ExecutionStore is configured). */
   executionRecordId?: string;
@@ -144,6 +148,7 @@ export class LocalExecutionDriver implements ExecutionDriver {
 export interface DockerExecutionDriverOptions {
   dockerBinary?: string;
   secretStore?: SecretStore;
+  proxyImage?: string;
 }
 
 /** One Run = one container, mounted with only that Run's worktree. */
@@ -151,10 +156,13 @@ export class DockerExecutionDriver implements ExecutionDriver {
   readonly name = "docker";
   private readonly dockerBinary: string;
   private readonly secretStore: SecretStore;
+  private readonly proxyImage: string;
 
   constructor(options: DockerExecutionDriverOptions = {}) {
     this.dockerBinary = options.dockerBinary ?? process.env.AI_DOCKER_BIN ?? "docker";
     this.secretStore = options.secretStore ?? new EnvSecretStore();
+    this.proxyImage =
+      options.proxyImage ?? process.env.AI_PROXY_IMAGE ?? "harness/execution-proxy:latest";
   }
 
   async create(request: ExecutionRequest): Promise<ExecutionEnvironment> {
@@ -172,17 +180,49 @@ export class DockerExecutionDriver implements ExecutionDriver {
     validateExecutionProfileContract(environment.profile);
     await ensureWorkspaceOwnership(environment.workspacePath);
     const secrets = await this.secretStore.resolve(environment.profile.secrets);
+    let networkName: string | undefined;
+    let proxyUrl: string | undefined;
+    let proxyContainerId: string | undefined;
+    if (environment.profile.network.mode === "restricted") {
+      networkName = networkNameFor(environment.runId);
+      proxyContainerId = proxyNameFor(environment.runId);
+      const allowList = environment.profile.network.allow.join(",");
+      await this.ensureNetwork(networkName);
+      await this.removeContainerIfPresent(proxyContainerId);
+      await this.runDocker([
+        "run",
+        "--detach",
+        "--rm",
+        "--name",
+        proxyContainerId,
+        "--label",
+        `ai-harness.run-id=${environment.runId}`,
+        "--network",
+        "bridge",
+        "--env",
+        `ALLOW_LIST=${allowList}`,
+        "--env",
+        "PROXY_PORT=3128",
+        this.proxyImage,
+      ]);
+      await this.runDocker(["network", "connect", networkName, proxyContainerId]);
+      proxyUrl = `http://${proxyContainerId}:3128`;
+    }
     const args = buildDockerRunArgs({
       runId: environment.runId,
       workspacePath: environment.workspacePath,
       profile: environment.profile,
       secrets,
+      networkName,
+      proxyUrl,
     });
     const { stdout } = await this.runDocker(args);
     return {
       ...environment,
       containerId: stdout.trim(),
       startedAt: new Date().toISOString(),
+      networkName,
+      proxyContainerId,
     };
   }
 
@@ -215,27 +255,51 @@ export class DockerExecutionDriver implements ExecutionDriver {
 
   async cleanup(environment: ExecutionEnvironment): Promise<void> {
     const containerId = environment.containerId ?? environment.id;
-    if (!containerId) {
-      return;
+    if (containerId) {
+      try {
+        await this.runDocker(["rm", "-f", containerId]);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        if (
+          !message.includes("No such container") &&
+          !(await this.containerMissing(containerId))
+        ) {
+          // `--rm` auto-removal can still be in progress right after stop.
+          await new Promise((resolve) => setTimeout(resolve, 1_000));
+          if (!(await this.containerMissing(containerId))) {
+            throw error;
+          }
+        }
+      }
     }
+    // Restricted-mode resources are named deterministically per Run so they
+    // can be reclaimed even after a worker crash.
+    const proxyName = environment.proxyContainerId ?? proxyNameFor(environment.runId);
+    await this.removeContainerIfPresent(proxyName);
+    const networkName = environment.networkName ?? networkNameFor(environment.runId);
     try {
-      await this.runDocker(["rm", "-f", containerId]);
-      return;
+      await this.runDocker(["network", "rm", networkName]);
+    } catch {
+      // Network may not exist (mode:none) or already be gone.
+    }
+  }
+
+  private async ensureNetwork(networkName: string): Promise<void> {
+    try {
+      await this.runDocker(["network", "create", "--internal", networkName]);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      if (message.includes("No such container")) {
-        return;
+      if (!message.includes("already exists")) {
+        throw error;
       }
-      // `--rm` auto-removal can still be in progress right after stop; wait a
-      // moment and confirm the container is really gone before failing.
-      if (await this.containerMissing(containerId)) {
-        return;
-      }
-      await new Promise((resolve) => setTimeout(resolve, 1_000));
-      if (await this.containerMissing(containerId)) {
-        return;
-      }
-      throw error;
+    }
+  }
+
+  private async removeContainerIfPresent(containerName: string): Promise<void> {
+    try {
+      await this.runDocker(["rm", "-f", containerName]);
+    } catch {
+      // Not running / already removed.
     }
   }
 
@@ -596,6 +660,18 @@ function runCommand(
 
 function elapsedSeconds(startedAt: number): number {
   return Math.max(0, (Date.now() - startedAt) / 1000);
+}
+
+function sanitizeId(value: string): string {
+  return value.replace(/[^a-zA-Z0-9_.-]/g, "-");
+}
+
+function networkNameFor(runId: string): string {
+  return `ai-net-${sanitizeId(runId)}`;
+}
+
+function proxyNameFor(runId: string): string {
+  return `ai-proxy-${sanitizeId(runId)}`;
 }
 
 /**
