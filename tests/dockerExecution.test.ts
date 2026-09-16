@@ -24,7 +24,7 @@ describe("buildDockerRunArgs isolation rules", () => {
 
     const mounts = args.filter((_, index) => args[index - 1] === "--mount");
     expect(mounts).toEqual([
-      `type=bind,src=${resolve(workspacePath)},dst=/workspace,rw`,
+      `type=bind,src=${resolve(workspacePath)},dst=/workspace`,
     ]);
     expect(args.join(" ")).not.toContain("/var/run/docker.sock");
     expect(mounts.some((mount) => mount.includes("src=/,"))).toBe(false);

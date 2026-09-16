@@ -68,7 +68,7 @@ describe("ExecutionManager", () => {
     const lines = readFileSync(logPath, "utf8").trim().split("\n");
     expect(lines[0]).toContain("run --detach");
     expect(lines[0]).toContain("GITHUB_TOKEN=token-123");
-    expect(lines[0]).toContain(`type=bind,src=${dir},dst=/workspace,rw`);
+    expect(lines[0]).toContain(`type=bind,src=${dir},dst=/workspace`);
     expect(lines[1]).toBe("rm -f fake-container-123");
   });
 });

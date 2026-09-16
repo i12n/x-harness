@@ -73,7 +73,8 @@ export function buildDockerRunArgs(spec: DockerRunSpec): string[] {
     "--env",
     "HOME=/home/agent",
     "--mount",
-    `type=bind,src=${workspacePath},dst=${profile.workspace},rw`,
+    // --mount uses key=value only; bind mounts are read-write by default.
+    `type=bind,src=${workspacePath},dst=${profile.workspace}`,
   ];
 
   args.push("--network", profile.network.mode === "none" ? "none" : "bridge");
