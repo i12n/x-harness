@@ -5,6 +5,9 @@
 
 ## 议题 1：需要决策时如何与 Codex 交互
 
+> 详细设计稿（2026-09-16）：
+> [Problem Confirmation Loop](problem-confirmation-loop.md)。
+
 **问题**：非交互式 `codex exec` 是一次性子进程，人在 loop 外；任务执行中
 Codex 遇到需要决策的场景（需求歧义、范围外改动、外部副作用、凭据、方案
 取舍）时，Harness 应该用什么方式与它交互？
