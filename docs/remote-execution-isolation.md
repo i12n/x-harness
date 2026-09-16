@@ -241,3 +241,11 @@ Worker → ExecutionManager
 - 白名单由 `ExecutionProfile.network.allow` 生成，代理镜像
   `harness/execution-proxy:latest`（`docker build -f docker/proxy/Dockerfile .`）
 - 代理容器与网络按 runId 命名，Worker 崩溃后 Loop 仍可回收（deterministic）
+
+**真机验收（2026-09-17，<验收主机>）**
+
+- TASK-910：生命周期矩阵 8/8 + 隔离 2/2
+- TASK-905：`network:none` 断网、allow-list 放行/拦截、IP 直连拦截、
+  代理绕过拦截、DNS 绕过拦截 —— 全部通过
+- 宿主回归：xmusic 等既有容器不受影响；无遗留容器/网络/代理
+- 结论：**Phase 9 DONE**（不再扩展 Phase 9 功能）

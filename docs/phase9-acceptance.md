@@ -87,7 +87,17 @@ AI_TEST_DOCKER=1 AI_TEST_CODEX=1 AI_EXECUTION_IMAGE=harness/execution:node22 \
 
 ## 5. Phase 9 封版清单
 
-全部满足才标记 `Phase 9 DONE`：
+**验收记录（2026-09-17）**
+
+- 环境：`<验收主机>`（Ubuntu / Docker 29.7.2 / 2C2G），镜像
+  `harness/execution:node22` + `harness/execution-proxy:latest`
+- 结果：`TASK-910` 生命周期矩阵 8/8、隔离 2/2；`TASK-905` 网络 2/2
+  （`network:none` 断网、allow-list 放行/拦截、IP 直连拦截、代理绕过拦截、
+  DNS 绕过拦截）；容器内真实 Codex 用例按约定跳过（不向服务器注入 API Key）
+- 宿主回归：`xmusic-app/-caddy/-db` 全部正常运行；验收后无遗留容器、
+  无遗留 `ai-net-*` 网络、无遗留 `ai-proxy-*` 容器
+
+**Phase 9 DONE**（以下 12 条全部满足）：
 
 1. Execution 生命周期可靠（状态机 + 持久化）
 2. Agent 在隔离环境执行

@@ -47,7 +47,8 @@ Implemented in TypeScript (Node >= 18, ESM). The full plan lives in
   cleanup obligation、`executions` 持久化、timeout/cancel、Worker 崩溃后
   Loop 回收、CLEANUP_FAILED 重试）已完成；Execution Image/Entry Contract、
   `ExecutionDriver.exec()`（`docker exec`）与 Codex/Verifier 的容器内执行
-  通路已完成；真 Docker E2E 待做（本机无 Docker），见
+  通路已完成；并已在真机（Linux + Docker）完成 TASK-910 生命周期/隔离矩阵
+  与 TASK-905 网络强制验收（12 passed / 1 skipped）—— **Phase 9 DONE**，见
   [docs/remote-execution-isolation.md](docs/remote-execution-isolation.md)。
   真机验收 runbook：[docs/phase9-acceptance.md](docs/phase9-acceptance.md)
   （`npm run test:docker` / `npm run test:docker:network`）。
