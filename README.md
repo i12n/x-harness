@@ -24,8 +24,8 @@ Implemented in TypeScript (Node >= 18, ESM). The full plan lives in
 - Phase 6 (Worker): claim/heartbeat/execute/complete with run leases — done.
 - Phase 7 (Scheduler): READY tasks -> QUEUED runs with max_concurrency — done.
 - Phase 8 (Loop): Observe/Reconcile/Schedule/Execute/Recover — done. The v0.1
-  MVP chain is complete; real-codex end-to-end runs still need a machine with
-  the codex CLI.
+  MVP chain is complete and sealed: real PostgreSQL + real Codex end-to-end
+  passes via `npm run test:e2e:real`.
 - v0.2 (Review & Human Approval): reviewer agent over a succeeded run's diff +
   `task approve/reject` — done. Next per plan: Multi Repository Task,
   Dependency DAG, GitHub Integration.
@@ -68,6 +68,9 @@ npm run db:migrate       # apply migrations/ against Postgres
 # real-Postgres integration test (skipped by the plain unit suite)
 AI_TEST_POSTGRES=1 DATABASE_URL=postgres://ai:ai@localhost:5432/ai_harness \
   npm run test:postgres
+
+# v0.1 seal: real PostgreSQL + real Codex, full loop end to end
+DATABASE_URL=postgres://ai:ai@localhost:5432/ai_harness npm run test:e2e:real
 ```
 
 ## Usage
@@ -140,5 +143,5 @@ config/         # config/config.yaml
 migrations/     # SQL schema (001_init.sql: 5 core tables)
 scripts/        # db:migrate runner
 tests/          # vitest unit tests
-docs/           # v0.1 plan + open design discussion notes
+docs/           # v0.1 plan, v0.2 roadmap, discussion notes
 ```

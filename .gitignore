@@ -19,3 +19,4 @@ coverage/
 
 # Local codex demo workspace (created by npm run demo:codex)
 .ai-workspaces-codex-demo/
+.ai-workspaces-e2e/
