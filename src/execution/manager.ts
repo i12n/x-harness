@@ -216,7 +216,15 @@ export class DockerExecutionDriver implements ExecutionDriver {
     if (!containerId) {
       return;
     }
-    await this.runDocker(["rm", "-f", containerId]);
+    try {
+      await this.runDocker(["rm", "-f", containerId]);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (message.includes("No such container")) {
+        return;
+      }
+      throw error;
+    }
   }
 
   private async runDocker(args: string[]): Promise<{ stdout: string }> {

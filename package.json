@@ -16,6 +16,8 @@
     "test": "vitest run",
     "test:postgres": "AI_TEST_POSTGRES=1 vitest run tests/postgres.integration.test.ts",
     "test:e2e:real": "AI_TEST_POSTGRES=1 AI_TEST_CODEX=1 vitest run tests/realE2E.integration.test.ts",
+    "test:docker": "AI_TEST_DOCKER=1 vitest run tests/dockerAcceptance.integration.test.ts",
+    "test:docker:network": "AI_TEST_DOCKER=1 AI_NETWORK_ENFORCEMENT=1 vitest run tests/dockerAcceptance.integration.test.ts",
     "test:watch": "vitest",
     "demo:repository": "node scripts/demo-repository.mjs",
     "demo:task": "node scripts/demo-task.mjs",
