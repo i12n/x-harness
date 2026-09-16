@@ -50,7 +50,12 @@ describe("buildDockerRunArgs isolation rules", () => {
     expect(args.join(" ")).toContain("--tmpfs /tmp:rw,noexec,nosuid,size=256m");
     expect(args.join(" ")).toContain("--network bridge");
     expect(args.join(" ")).toContain("ai-harness.run-id=run-001");
-    expect(args.slice(-2)).toEqual(["sleep", "infinity"]);
+    expect(args.slice(-4)).toEqual([
+      "--entrypoint",
+      "sleep",
+      "harness/node:22",
+      "infinity",
+    ]);
   });
 
   it("uses network none when the profile forbids network", () => {

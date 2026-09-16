@@ -82,6 +82,8 @@ export function buildDockerRunArgs(spec: DockerRunSpec): string[] {
     args.push("--env", `${key}=${value}`);
   }
 
-  args.push(profile.image, "sleep", "infinity");
+  // Override any image ENTRYPOINT so the run container is a long-lived
+  // sandbox driven via `docker exec` (see TASK-911 contract).
+  args.push("--entrypoint", "sleep", profile.image, "infinity");
   return args;
 }
