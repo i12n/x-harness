@@ -69,7 +69,7 @@ export function buildDockerRunArgs(spec: DockerRunSpec): string[] {
     "--tmpfs",
     "/tmp:rw,noexec,nosuid,size=256m",
     "--tmpfs",
-    "/home/agent:rw,noexec,nosuid,size=256m",
+    "/home/agent:rw,noexec,nosuid,size=256m,uid=1000,gid=1000,mode=0700",
     "--env",
     "HOME=/home/agent",
     "--mount",

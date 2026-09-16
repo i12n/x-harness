@@ -170,6 +170,7 @@ export class DockerExecutionDriver implements ExecutionDriver {
 
   async start(environment: ExecutionEnvironment): Promise<ExecutionEnvironment> {
     validateExecutionProfileContract(environment.profile);
+    await ensureWorkspaceOwnership(environment.workspacePath);
     const secrets = await this.secretStore.resolve(environment.profile.secrets);
     const args = buildDockerRunArgs({
       runId: environment.runId,
@@ -571,4 +572,20 @@ function runCommand(
 
 function elapsedSeconds(startedAt: number): number {
   return Math.max(0, (Date.now() - startedAt) / 1000);
+}
+
+/**
+ * The container runs as 1000:1000, so the host worktree must be writable by
+ * that uid (the harness itself usually runs as root on the server).
+ */
+async function ensureWorkspaceOwnership(workspacePath: string): Promise<void> {
+  if (process.platform === "win32" || process.getuid?.() !== 0) {
+    return;
+  }
+  try {
+    await execFileAsync("chown", ["-R", "1000:1000", workspacePath]);
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new HarnessError(`could not prepare workspace ownership: ${detail}`);
+  }
 }
