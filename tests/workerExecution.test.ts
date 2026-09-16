@@ -7,6 +7,7 @@ import type { AgentContext, AgentEngine, AgentResult } from "../src/agent/types.
 import type { ExecutionEnvironment, ExecutionRequest } from "../src/execution/manager.js";
 import { ExecutionManager } from "../src/execution/manager.js";
 import type { ExecutionDriver } from "../src/execution/manager.js";
+import { LocalExecutionDriver } from "../src/execution/manager.js";
 import { InMemoryExecutionStore } from "../src/store/inMemoryExecutionStore.js";
 import { InMemoryEventStore } from "../src/store/inMemoryEventStore.js";
 import { InMemoryRepositoryStore } from "../src/store/inMemoryRepositoryStore.js";
@@ -25,14 +26,17 @@ const WRITE_CODE = [
   "});",
 ].join("");
 
-class RecordingDriver implements ExecutionDriver {
+class RecordingDriver extends LocalExecutionDriver implements ExecutionDriver {
   readonly name = "recording";
+  readonly commands: string[][] = [];
   readonly calls: string[] = [];
+  private readonly options: { containerId?: string; workdir?: string };
   environment?: ExecutionEnvironment;
 
-  constructor(
-    private readonly options: { containerId?: string; workdir?: string } = {},
-  ) {}
+  constructor(options: { containerId?: string; workdir?: string } = {}) {
+    super();
+    this.options = options;
+  }
 
   async create(request: ExecutionRequest): Promise<ExecutionEnvironment> {
     this.calls.push("create");
@@ -55,6 +59,15 @@ class RecordingDriver implements ExecutionDriver {
 
   async cleanup(): Promise<void> {
     this.calls.push("cleanup");
+  }
+
+  async exec(
+    environment: ExecutionEnvironment,
+    command: string[],
+    options?: Parameters<ExecutionDriver["exec"]>[2],
+  ) {
+    this.commands.push(command);
+    return super.exec(environment, command, options);
   }
 }
 
@@ -206,17 +219,22 @@ describe("Worker + ExecutionManager (TASK-902)", () => {
     expect(existsSync(join(outcome.workspace.path, "solution.txt"))).toBe(false);
   });
 
-  it("refuses containerized execution until a container-aware agent exists", async () => {
+  it("runs agent and verification through driver exec when containerized", async () => {
     const fixture: GitFixture = createGitFixture();
     cleanups.push(fixture.cleanup);
-    commitFile(fixture.path, "checks.sh", "echo ok\n");
+    commitFile(fixture.path, "checks.sh", "test -f solution.txt && echo ok\n");
     const driver = new RecordingDriver({ containerId: "fake-container" });
-    const { runs, worker } = await setup(driver, ["sh checks.sh"], fixture);
+    const { worker } = await setup(driver, ["sh checks.sh"], fixture);
 
-    await expect(worker.executeRun("run-001")).rejects.toThrow(/TASK-910/);
+    const outcome = await worker.executeRun("run-001");
 
-    expect((await runs.findRun("run-001")).status).toBe("FAILED");
+    expect(outcome.run.status).toBe("SUCCEEDED");
     expect(driver.calls).toEqual(["create", "start", "cleanup"]);
+    // Both the agent and the verification went through the driver's exec.
+    expect(
+      driver.commands.some((command) => command.join(" ").includes("sh -lc")),
+    ).toBe(true);
+    expect(driver.commands.length).toBeGreaterThanOrEqual(2);
   });
 
   it("times out: stops the execution, cleans up and returns the task to READY", async () => {

@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import type { ExecutionExec } from "../execution/manager.js";
 
 export interface VerificationCheck {
   name: string;
@@ -21,6 +22,8 @@ export interface RunVerificationParams {
   workspacePath: string;
   /** Where to run checks; defaults to workspacePath (execution context). */
   workdir?: string;
+  /** When set, checks run through the execution driver (TASK-913). */
+  exec?: ExecutionExec;
   commands: string[];
   timeoutMs?: number;
   env?: Record<string, string>;
@@ -84,6 +87,9 @@ export class Verifier {
     index: number,
     params: RunVerificationParams,
   ): Promise<VerificationCheck> {
+    if (params.exec) {
+      return this.runCheckViaDriver(command, index, params);
+    }
     const timeoutMs = params.timeoutMs ?? this.defaultTimeoutMs;
     const startedAt = new Date().toISOString();
     return new Promise<VerificationCheck>((resolve) => {
@@ -121,6 +127,28 @@ export class Verifier {
         });
       });
     });
+  }
+
+  private async runCheckViaDriver(
+    command: string,
+    index: number,
+    params: RunVerificationParams,
+  ): Promise<VerificationCheck> {
+    const timeoutMs = params.timeoutMs ?? this.defaultTimeoutMs;
+    const startedAt = new Date().toISOString();
+    const result = await params.exec!(["sh", "-lc", command], {
+      cwd: params.workdir ?? params.workspacePath,
+      timeoutMs,
+    });
+    const finishedAt = new Date().toISOString();
+    return {
+      name: `check-${index}`,
+      command,
+      status: result.exitCode === 0 ? "passed" : "failed",
+      exitCode: result.exitCode,
+      output: `${result.stdout}${result.stderr}`.trim(),
+      durationSeconds: elapsedSeconds(startedAt, finishedAt),
+    };
   }
 }
 

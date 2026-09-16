@@ -13,6 +13,23 @@ export function containerNameFor(runId: string): string {
   return `ai-harness-${runId.replace(/[^a-zA-Z0-9_.-]/g, "-")}`;
 }
 
+export interface DockerExecSpec {
+  containerId: string;
+  command: string[];
+  cwd?: string;
+  env?: Record<string, string>;
+}
+
+/** `docker exec` args used to run the agent / verification inside the Run. */
+export function buildDockerExecArgs(spec: DockerExecSpec): string[] {
+  const args = ["exec", "--interactive", "--workdir", spec.cwd ?? "/workspace"];
+  for (const [key, value] of Object.entries(spec.env ?? {})) {
+    args.push("--env", `${key}=${value}`);
+  }
+  args.push(spec.containerId, ...spec.command);
+  return args;
+}
+
 /**
  * Build `docker run` args for one Run.
  *

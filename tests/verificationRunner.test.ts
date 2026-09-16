@@ -54,4 +54,32 @@ describe("Verifier", () => {
     expect(result.checks[0]?.status).toBe("failed");
     expect(result.checks[0]?.durationSeconds).toBeLessThan(10);
   });
+
+  it("runs checks through execution.exec when provided (TASK-913)", async () => {
+    const commands: string[][] = [];
+    const result = await new Verifier().run({
+      workspacePath: "/host/workspace",
+      workdir: "/workspace",
+      commands: ["npm test", "npm run build"],
+      exec: async (command) => {
+        commands.push(command);
+        const failed = command.join(" ").includes("npm test");
+        return {
+          exitCode: failed ? 1 : 0,
+          stdout: failed ? "boom" : "ok",
+          stderr: "",
+          durationSeconds: 0.1,
+          timedOut: false,
+        };
+      },
+    });
+
+    expect(commands).toEqual([
+      ["sh", "-lc", "npm test"],
+      ["sh", "-lc", "npm run build"],
+    ]);
+    expect(result.passed).toBe(false);
+    expect(result.checks.map((check) => check.status)).toEqual(["failed", "passed"]);
+    expect(result.checks[0]?.output).toContain("boom");
+  });
 });

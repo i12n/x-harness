@@ -205,8 +205,21 @@ Worker 崩溃后 Run 能恢复
     取消）
   - **Worker 崩溃恢复**：lease 过期 → Run LOST → 依据持久化的 execution
     记录 finish(LOST) + cleanup（Execution Recovery），不依赖 Worker 的 finally
-- 安全守卫：容器化执行（存在 containerId）会显式失败并指向 TASK-910，
-  避免在容器内执行通路未实现前误用
-- 待做：容器内执行 Codex/验证（`docker exec` 通路，TASK-910）、TASK-901
-  镜像与入口约定、TASK-905 白名单的真实网络策略、真 Docker 环境下的
-  TASK-908 回收验证（本机无 Docker）
+- TASK-911 已完成：Execution Image / Entry Contract —— `src/execution/contract.ts`
+  （硬约束：workspace 必须在 `/workspace` 之下、secret 名必须是合法环境变量；
+  镜像命名 `harness/execution:<runtime>` 作为 advisory）、
+  [docker/execution/Dockerfile](docker/execution/Dockerfile) 模板与
+  [docker/execution/README.md](docker/execution/README.md) 契约文档；
+  `DockerExecutionDriver.start()` 在起容器前强制校验硬约束
+- TASK-912 已完成：`ExecutionDriver.exec()` —— Local 用本地 spawn，Docker 用
+  `docker exec`（`buildDockerExecArgs`，纯函数可测）；统一
+  `ExecResult`（exitCode/stdout/stderr/duration/timedOut，支持 stdin、
+  timeout、AbortSignal）
+- TASK-913 已完成：Codex/Verifier 容器内执行通路 —— `ExecutionContext.exec`
+  由 Worker 绑定到 ExecutionManager；`CodexEngine` 优先走
+  `execution.exec`（不再自行 spawn），`Verifier` 的每个 check 也走
+  `sh -lc <command>` 经同一 driver；Agent 与 Verification 一定在同一执行
+  环境（不会再出现 Codex 在容器、Verifier 在宿主）
+- 待做：TASK-910 真 Docker E2E（矩阵验收 + 隔离测试：跨 Run 读取、宿主文件、
+  docker.sock、网络 none/白名单、资源限制）、TASK-905 网络白名单的真实强制
+  （依赖 Linux + Docker 环境；本机无 Docker）

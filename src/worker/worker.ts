@@ -7,7 +7,6 @@ import type { Task } from "../domain/task.js";
 import {
   ExecutionCancelledError,
   ExecutionTimeoutError,
-  HarnessError,
   WorkerExecutionError,
 } from "../errors.js";
 import type { ExecutionStatus } from "../domain/execution.js";
@@ -118,13 +117,12 @@ export class Worker {
         workspacePath: workspace.path,
         profile: repository.executionProfile ?? defaultExecutionProfile(),
       });
-      if (environment.containerId) {
-        throw new HarnessError(
-          `containerized execution requires a container-aware AgentEngine ` +
-            `(execution ${environment.id}); see TASK-910`,
-        );
-      }
-      const execution = toExecutionContext(environment);
+      const preparedEnvironment = environment;
+      const exec = (
+        command: string[],
+        options?: Parameters<ExecutionManager["exec"]>[2],
+      ) => this.executionManager.exec(preparedEnvironment, command, options);
+      const execution = toExecutionContext(preparedEnvironment, exec);
 
       const context = {
         ...(await buildAgentContext({
@@ -172,6 +170,7 @@ export class Worker {
       const verification = await this.verifier.run({
         workspacePath: workspace.path,
         workdir: execution.workdir,
+        exec,
         commands: repository.verificationCommands,
       });
       await this.emit(

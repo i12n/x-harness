@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { defaultExecutionProfile } from "../src/domain/executionProfile.js";
 import {
   ExecutionManager,
+  LocalExecutionDriver,
   type ExecutionDriver,
   type ExecutionEnvironment,
   type ExecutionRequest,
@@ -19,13 +20,16 @@ interface DriverBehavior {
   containerId?: string;
 }
 
-class ControlDriver implements ExecutionDriver {
+class ControlDriver extends LocalExecutionDriver implements ExecutionDriver {
   readonly name = "control";
   createCalls = 0;
   cleanupCalls = 0;
+  private readonly behavior: DriverBehavior;
   private cleanupFailures: number;
 
-  constructor(private readonly behavior: DriverBehavior = {}) {
+  constructor(behavior: DriverBehavior = {}) {
+    super();
+    this.behavior = behavior;
     this.cleanupFailures = behavior.cleanupFailures ?? 0;
   }
 

@@ -45,8 +45,9 @@ Implemented in TypeScript (Node >= 18, ESM). The full plan lives in
   executionProfile 绑定与 Worker 接入（ExecutionContext + 生命周期清理）
   已实现并有单测；Execution 生命周期契约（CREATING→RUNNING→CLEANED、
   cleanup obligation、`executions` 持久化、timeout/cancel、Worker 崩溃后
-  Loop 回收、CLEANUP_FAILED 重试）已完成；真 Docker E2E 待做（本机无
-  Docker），见
+  Loop 回收、CLEANUP_FAILED 重试）已完成；Execution Image/Entry Contract、
+  `ExecutionDriver.exec()`（`docker exec`）与 Codex/Verifier 的容器内执行
+  通路已完成；真 Docker E2E 待做（本机无 Docker），见
   [docs/remote-execution-isolation.md](docs/remote-execution-isolation.md)。
 
 ## Requirements
@@ -170,4 +171,5 @@ migrations/     # SQL schema (001 core, 002 problem confirmation)
 scripts/        # db:migrate runner
 tests/          # vitest unit tests
 docs/           # v0.1 plan, v0.2 roadmap, phase 9 isolation, discussion notes
+docker/         # execution image contract + Dockerfile template
 ```

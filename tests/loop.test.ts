@@ -15,6 +15,7 @@ import { InMemoryEventStore } from "../src/store/inMemoryEventStore.js";
 import { InMemoryExecutionStore } from "../src/store/inMemoryExecutionStore.js";
 import {
   ExecutionManager,
+  LocalExecutionDriver,
   type ExecutionDriver,
   type ExecutionEnvironment,
   type ExecutionRequest,
@@ -37,12 +38,13 @@ const WRITE_CODE = [
 const IDLE_CODE =
   "process.stdin.resume(); process.stdin.on('end', () => console.log('done'));";
 
-class CrashDriver implements ExecutionDriver {
+class CrashDriver extends LocalExecutionDriver implements ExecutionDriver {
   readonly name = "crash";
   cleanupCalls = 0;
   private cleanupFailures: number;
 
   constructor(cleanupFailures = 0) {
+    super();
     this.cleanupFailures = cleanupFailures;
   }
 

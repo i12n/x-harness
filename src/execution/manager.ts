@@ -1,14 +1,19 @@
-import { execFile } from "node:child_process";
+import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { resolve } from "node:path";
 import { promisify } from "node:util";
 import type { ExecutionRecord, ExecutionStatus } from "../domain/execution.js";
 import { defaultExecutionProfile } from "../domain/executionProfile.js";
 import type { ExecutionProfile } from "../domain/executionProfile.js";
 import { HarnessError } from "../errors.js";
+import { validateExecutionProfileContract } from "./contract.js";
 import type { EventStore } from "../store/eventStore.js";
 import type { ExecutionStore } from "../store/executionStore.js";
 import { makeId } from "../util/id.js";
-import { buildDockerRunArgs, containerNameFor } from "./dockerArgs.js";
+import {
+  buildDockerExecArgs,
+  buildDockerRunArgs,
+  containerNameFor,
+} from "./dockerArgs.js";
 import { EnvSecretStore, type SecretStore } from "./secrets.js";
 
 const execFileAsync = promisify(execFile);
@@ -43,10 +48,12 @@ export interface ExecutionContext {
   workdir: string;
   driver: string;
   containerId?: string;
+  exec?: ExecutionExec;
 }
 
 export function toExecutionContext(
   environment: ExecutionEnvironment,
+  exec?: ExecutionExec,
 ): ExecutionContext {
   return {
     runId: environment.runId,
@@ -55,14 +62,43 @@ export function toExecutionContext(
     workdir: environment.containerWorkspace || environment.workspacePath,
     driver: environment.driver,
     containerId: environment.containerId,
+    exec,
   };
 }
+
+export interface ExecOptions {
+  cwd?: string;
+  env?: Record<string, string>;
+  timeoutMs?: number;
+  stdin?: string;
+  signal?: AbortSignal;
+}
+
+export interface ExecResult {
+  exitCode: number | null;
+  signal?: string;
+  stdout: string;
+  stderr: string;
+  durationSeconds: number;
+  timedOut: boolean;
+}
+
+/** Bound "run this command inside my execution environment" capability. */
+export type ExecutionExec = (
+  command: string[],
+  options?: ExecOptions,
+) => Promise<ExecResult>;
 
 /** Execution Plane driver: local (no container) or docker (Phase 9). */
 export interface ExecutionDriver {
   readonly name: string;
   create(request: ExecutionRequest): Promise<ExecutionEnvironment>;
   start(environment: ExecutionEnvironment): Promise<ExecutionEnvironment>;
+  exec(
+    environment: ExecutionEnvironment,
+    command: string[],
+    options?: ExecOptions,
+  ): Promise<ExecResult>;
   stop?(environment: ExecutionEnvironment): Promise<void>;
   cleanup(environment: ExecutionEnvironment): Promise<void>;
 }
@@ -85,6 +121,18 @@ export class LocalExecutionDriver implements ExecutionDriver {
 
   async start(environment: ExecutionEnvironment): Promise<ExecutionEnvironment> {
     return { ...environment, startedAt: new Date().toISOString() };
+  }
+
+  async exec(
+    environment: ExecutionEnvironment,
+    command: string[],
+    options: ExecOptions = {},
+  ): Promise<ExecResult> {
+    return runCommand(
+      command,
+      options.cwd ?? environment.containerWorkspace ?? environment.workspacePath,
+      options,
+    );
   }
 
   async cleanup(): Promise<void> {
@@ -120,6 +168,7 @@ export class DockerExecutionDriver implements ExecutionDriver {
   }
 
   async start(environment: ExecutionEnvironment): Promise<ExecutionEnvironment> {
+    validateExecutionProfileContract(environment.profile);
     const secrets = await this.secretStore.resolve(environment.profile.secrets);
     const args = buildDockerRunArgs({
       runId: environment.runId,
@@ -133,6 +182,24 @@ export class DockerExecutionDriver implements ExecutionDriver {
       containerId: stdout.trim(),
       startedAt: new Date().toISOString(),
     };
+  }
+
+  async exec(
+    environment: ExecutionEnvironment,
+    command: string[],
+    options: ExecOptions = {},
+  ): Promise<ExecResult> {
+    const containerId = environment.containerId;
+    if (!containerId) {
+      throw new HarnessError("docker exec requires a running container");
+    }
+    const args = buildDockerExecArgs({
+      containerId,
+      command,
+      cwd: options.cwd ?? environment.containerWorkspace,
+      env: options.env,
+    });
+    return runCommand([this.dockerBinary, ...args], undefined, options, true);
   }
 
   async stop(environment: ExecutionEnvironment): Promise<void> {
@@ -262,6 +329,15 @@ export class ExecutionManager {
     } catch {
       // Stop is best-effort; cleanup remains the final obligation.
     }
+  }
+
+  /** TASK-912: agent/verifier run commands through the execution driver. */
+  async exec(
+    environment: ExecutionEnvironment,
+    command: string[],
+    options?: ExecOptions,
+  ): Promise<ExecResult> {
+    return this.driver.exec(environment, command, options);
   }
 
   /**
@@ -399,4 +475,90 @@ function isExecutionEnvironment(value: ExecutionRef): value is ExecutionEnvironm
 
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function runCommand(
+  command: string[],
+  cwd: string | undefined,
+  options: ExecOptions,
+  dockerWrapper = false,
+): Promise<ExecResult> {
+  const startedAt = Date.now();
+  return new Promise<ExecResult>((resolve) => {
+    let child: ChildProcess;
+    try {
+      child = spawn(command[0] ?? "", command.slice(1), {
+        cwd: dockerWrapper ? undefined : cwd,
+        env: options.env ? { ...process.env, ...options.env } : process.env,
+        stdio: ["pipe", "pipe", "pipe"],
+      });
+    } catch (error) {
+      resolve({
+        exitCode: null,
+        stdout: "",
+        stderr: String(error),
+        durationSeconds: elapsedSeconds(startedAt),
+        timedOut: false,
+      });
+      return;
+    }
+
+    let stdout = "";
+    let stderr = "";
+    let timedOut = false;
+    let settled = false;
+    child.stdout?.setEncoding("utf8");
+    child.stderr?.setEncoding("utf8");
+    child.stdout?.on("data", (chunk: string) => {
+      stdout += chunk;
+    });
+    child.stderr?.on("data", (chunk: string) => {
+      stderr += chunk;
+    });
+
+    const timeout =
+      options.timeoutMs && options.timeoutMs > 0
+        ? setTimeout(() => {
+            timedOut = true;
+            child.kill("SIGKILL");
+          }, options.timeoutMs)
+        : undefined;
+    const onAbort = (): void => {
+      child.kill("SIGTERM");
+    };
+    options.signal?.addEventListener("abort", onAbort, { once: true });
+
+    const finish = (exitCode: number | null, signal?: string): void => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      if (timeout) {
+        clearTimeout(timeout);
+      }
+      options.signal?.removeEventListener("abort", onAbort);
+      resolve({
+        exitCode,
+        signal,
+        stdout,
+        stderr,
+        durationSeconds: elapsedSeconds(startedAt),
+        timedOut,
+      });
+    };
+
+    child.on("error", (error) => finish(null, String(error)));
+    child.on("close", (code, signal) =>
+      finish(code, signal === null ? undefined : String(signal)),
+    );
+    if (options.stdin !== undefined) {
+      child.stdin?.end(options.stdin);
+    } else {
+      child.stdin?.end();
+    }
+  });
+}
+
+function elapsedSeconds(startedAt: number): number {
+  return Math.max(0, (Date.now() - startedAt) / 1000);
 }

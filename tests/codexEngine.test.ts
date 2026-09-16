@@ -77,4 +77,42 @@ describe("CodexEngine", () => {
     expect(result.exitCode).toBeNull();
     expect(result.signal).toBe("SIGTERM");
   });
+
+  it("runs through execution.exec instead of spawning locally (TASK-913)", async () => {
+    const calls: { command: string[]; stdin?: string; cwd?: string }[] = [];
+    const engine = new CodexEngine({
+      executable: "codex",
+      spawnArgs: () => ["exec", "--json", "-"],
+    });
+    const executionContext = {
+      runId: "run-009",
+      executionId: "exec-1",
+      workspacePath: "/host/workspace",
+      workdir: "/workspace",
+      driver: "docker",
+      exec: async (
+        command: string[],
+        options?: { stdin?: string; cwd?: string },
+      ) => {
+        calls.push({ command, stdin: options?.stdin, cwd: options?.cwd });
+        return {
+          exitCode: 0,
+          stdout: "agent done",
+          stderr: "",
+          durationSeconds: 0.1,
+          timedOut: false,
+        };
+      },
+    };
+    const base = context("run-009", "/host/workspace");
+
+    const result = await engine.execute({ ...base, execution: executionContext });
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.command).toEqual(["codex", "exec", "--json", "-"]);
+    expect(calls[0]?.stdin).toBe("hello agent");
+    expect(calls[0]?.cwd).toBe("/workspace");
+    expect(result.stdout).toBe("agent done");
+    expect(result.exitCode).toBe(0);
+  });
 });

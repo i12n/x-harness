@@ -26,6 +26,7 @@ export class CodexEngine implements AgentEngine {
   private readonly spawnArgs: (context: AgentContext) => string[];
   private readonly env: Record<string, string>;
   private readonly active = new Map<string, ActiveChild>();
+  private readonly activeExec = new Map<string, AbortController>();
 
   constructor(options: CodexEngineOptions = {}) {
     this.executable =
@@ -44,6 +45,9 @@ export class CodexEngine implements AgentEngine {
   }
 
   execute(context: AgentContext): Promise<AgentResult> {
+    if (context.execution?.exec) {
+      return this.executeViaDriver(context, context.execution.exec);
+    }
     return new Promise<AgentResult>((resolve, reject) => {
       const args = this.spawnArgs(context);
       const startedAt = new Date().toISOString();
@@ -98,6 +102,10 @@ export class CodexEngine implements AgentEngine {
   }
 
   async cancel(runId: string): Promise<void> {
+    const execController = this.activeExec.get(runId);
+    if (execController) {
+      execController.abort();
+    }
     const activeChild = this.active.get(runId);
     if (!activeChild) {
       return;
@@ -109,6 +117,46 @@ export class CodexEngine implements AgentEngine {
       activeChild.child.kill("SIGKILL");
     }, FORCE_KILL_DELAY_MS);
     activeChild.forceKill.unref();
+  }
+
+  /**
+   * TASK-913: run `codex exec` inside the execution environment (container or
+   * host) through the driver's exec capability. CodexEngine only sees
+   * `execution.workdir` / `execution.exec` — never docker specifics.
+   */
+  private async executeViaDriver(
+    context: AgentContext,
+    exec: NonNullable<AgentContext["execution"]>["exec"],
+  ): Promise<AgentResult> {
+    const startedAt = new Date().toISOString();
+    const controller = new AbortController();
+    this.activeExec.set(context.runId, controller);
+    try {
+      const result = await exec!(
+        [this.executable, ...this.spawnArgs(context)],
+        {
+          cwd: context.execution?.workdir,
+          env: { ...this.env },
+          stdin: context.prompt,
+          signal: controller.signal,
+        },
+      );
+      return {
+        runId: context.runId,
+        exitCode: result.exitCode,
+        signal: result.signal,
+        stdout: result.stdout,
+        stderr: result.stderr,
+        startedAt,
+        finishedAt: new Date().toISOString(),
+      };
+    } catch (error) {
+      throw new AgentExecutionError(
+        `agent execution failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    } finally {
+      this.activeExec.delete(context.runId);
+    }
   }
 }
 
