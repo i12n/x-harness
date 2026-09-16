@@ -133,12 +133,14 @@ describeReal("v0.1 seal: real Postgres + real Codex end to end", () => {
     expect(types).toEqual([
       "RunCreated",
       "RunStarted",
+      "execution.prepared",
       "AgentStarted",
       "AgentFinished",
       "VerificationStarted",
       "VerificationPassed",
       "RunSucceeded",
       "TaskReview",
+      "execution.cleaned",
     ]);
 
     // 封版验收最后一步：workspace cleanup 必须能回收 worktree。

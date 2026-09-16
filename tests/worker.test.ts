@@ -148,12 +148,14 @@ describe("Worker", () => {
     const types = (await events.listEvents({ runId: "run-001" })).map((e) => e.type);
     expect(types).toEqual([
       "RunStarted",
+      "execution.prepared",
       "AgentStarted",
       "AgentFinished",
       "VerificationStarted",
       "VerificationPassed",
       "RunSucceeded",
       "TaskReview",
+      "execution.cleaned",
     ]);
   });
 

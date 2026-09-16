@@ -1,6 +1,7 @@
 import type { Repository } from "../domain/repository.js";
 import type { Task } from "../domain/task.js";
 import type { Problem } from "../domain/problem.js";
+import type { ExecutionContext } from "../execution/manager.js";
 
 /** Fully assembled input handed to an agent engine. */
 export interface AgentContext {
@@ -10,6 +11,7 @@ export interface AgentContext {
   task?: Task;
   repository?: Repository;
   problem?: Problem;
+  execution?: ExecutionContext;
 }
 
 export interface AgentResult {

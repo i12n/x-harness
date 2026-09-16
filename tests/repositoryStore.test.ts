@@ -5,6 +5,7 @@ import {
   ValidationError,
 } from "../src/errors.js";
 import { InMemoryRepositoryStore } from "../src/store/inMemoryRepositoryStore.js";
+import { buildExecutionProfile } from "../src/domain/executionProfile.js";
 
 const VALID_URL = "git@github.com:example/my-app.git";
 
@@ -19,7 +20,28 @@ describe("InMemoryRepositoryStore", () => {
     expect(repo.defaultBranch).toBe("main");
     expect(repo.localPath).toMatch(/ai-repos\/my-app$/);
     expect(repo.verificationCommands).toEqual([]);
+    expect(repo.executionProfile.name).toBe("default");
+    expect(repo.executionProfile.network.mode).toBe("none");
+    expect(repo.executionProfile.policy.gitPush).toBe("deny");
     expect(repo.createdAt).toBe(repo.updatedAt);
+  });
+
+  it("stores a custom execution profile", async () => {
+    const store = new InMemoryRepositoryStore();
+    const executionProfile = buildExecutionProfile({
+      name: "frontend-node",
+      image: "harness/node:22",
+      network: { mode: "restricted", allow: ["registry.npmjs.org"] },
+      resources: { cpus: 4, memoryMb: 4096 },
+      secrets: ["GITHUB_TOKEN"],
+    });
+    const repo = await store.createRepository({
+      name: "my-app",
+      url: VALID_URL,
+      executionProfile,
+    });
+
+    expect(repo.executionProfile).toEqual(executionProfile);
   });
 
   it("registers multiple different repositories", async () => {

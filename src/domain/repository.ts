@@ -3,6 +3,8 @@ import { join } from "node:path";
 import { ValidationError } from "../errors.js";
 import { makeId, slugify } from "../util/id.js";
 import { dedupeNonEmpty } from "../util/strings.js";
+import { defaultExecutionProfile } from "./executionProfile.js";
+import type { ExecutionProfile } from "./executionProfile.js";
 
 /** A registered source repository the harness can drive tasks against. */
 export interface Repository {
@@ -12,6 +14,7 @@ export interface Repository {
   defaultBranch: string;
   localPath: string;
   verificationCommands: string[];
+  executionProfile: ExecutionProfile;
   createdAt: string;
   updatedAt: string;
 }
@@ -23,6 +26,7 @@ export interface CreateRepositoryInput {
   defaultBranch?: string;
   localPath?: string;
   verificationCommands?: string[];
+  executionProfile?: ExecutionProfile;
 }
 
 const SCP_LIKE_URL = /^[A-Za-z0-9._-]+@[A-Za-z0-9.-]+:.+$/;
@@ -57,6 +61,7 @@ export function buildRepository(input: CreateRepositoryInput): Repository {
     defaultBranch,
     localPath,
     verificationCommands,
+    executionProfile: input.executionProfile ?? defaultExecutionProfile(),
     createdAt: now,
     updatedAt: now,
   };

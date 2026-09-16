@@ -1,9 +1,16 @@
 import type { AgentEngine, AgentResult } from "../agent/types.js";
 import { buildAgentContext } from "../agent/contextBuilder.js";
 import type { Repository } from "../domain/repository.js";
+import { defaultExecutionProfile } from "../domain/executionProfile.js";
 import type { Run } from "../domain/run.js";
 import type { Task } from "../domain/task.js";
-import { WorkerExecutionError } from "../errors.js";
+import { HarnessError, WorkerExecutionError } from "../errors.js";
+import {
+  ExecutionManager,
+  LocalExecutionDriver,
+  toExecutionContext,
+} from "../execution/manager.js";
+import type { ExecutionEnvironment } from "../execution/manager.js";
 import type { EventStore } from "../store/eventStore.js";
 import type { RepositoryStore } from "../store/repositoryStore.js";
 import type { RunStore } from "../store/runStore.js";
@@ -18,6 +25,7 @@ export interface WorkerOptions {
   workspaceManager: WorkspaceManager;
   agentEngine: AgentEngine;
   verifier: Verifier;
+  executionManager?: ExecutionManager;
   eventStore?: EventStore;
   workerId?: string;
   heartbeatMs?: number;
@@ -44,6 +52,7 @@ export class Worker {
   private readonly workspaceManager: WorkspaceManager;
   private readonly agentEngine: AgentEngine;
   private readonly verifier: Verifier;
+  private readonly executionManager: ExecutionManager;
   private readonly events: EventStore | undefined;
   private readonly workerId: string;
   private readonly heartbeatMs: number;
@@ -56,6 +65,8 @@ export class Worker {
     this.workspaceManager = options.workspaceManager;
     this.agentEngine = options.agentEngine;
     this.verifier = options.verifier;
+    this.executionManager =
+      options.executionManager ?? new ExecutionManager(new LocalExecutionDriver());
     this.events = options.eventStore;
     this.workerId =
       options.workerId ?? process.env.AI_WORKER_ID ?? `worker-${process.pid}`;
@@ -74,6 +85,7 @@ export class Worker {
       runId,
       payload: { workerId: this.workerId, attempt: claimed.attempt },
     });
+    let environment: ExecutionEnvironment | undefined;
     const heartbeat = this.startHeartbeat(runId);
     try {
       const task = await this.taskStore.findTask(claimed.taskId);
@@ -86,12 +98,33 @@ export class Worker {
         taskId: task.id,
         runId,
       });
-      const context = await buildAgentContext({
+      environment = await this.executionManager.prepare({
         runId,
-        task,
-        repository,
         workspacePath: workspace.path,
+        profile: repository.executionProfile ?? defaultExecutionProfile(),
       });
+      if (environment.containerId) {
+        throw new HarnessError(
+          `containerized execution requires a container-aware AgentEngine ` +
+            `(execution ${environment.id}); see TASK-910`,
+        );
+      }
+      const execution = toExecutionContext(environment);
+      await this.emit("execution.prepared", {
+        taskId: task.id,
+        runId,
+        payload: { executionId: execution.executionId, driver: execution.driver },
+      });
+
+      const context = {
+        ...(await buildAgentContext({
+          runId,
+          task,
+          repository,
+          workspacePath: workspace.path,
+        })),
+        execution,
+      };
       await this.emit("AgentStarted", {
         taskId: task.id,
         runId,
@@ -109,6 +142,7 @@ export class Worker {
       await this.emit("VerificationStarted", { taskId: task.id, runId });
       const verification = await this.verifier.run({
         workspacePath: workspace.path,
+        workdir: execution.workdir,
         commands: repository.verificationCommands,
       });
       await this.emit(
@@ -189,6 +223,18 @@ export class Worker {
       }
       throw new WorkerExecutionError(`worker failed run ${runId}: ${message}`);
     } finally {
+      if (environment) {
+        try {
+          await this.executionManager.cleanup(environment);
+          await this.emit("execution.cleaned", {
+            taskId: claimed.taskId,
+            runId,
+            payload: { executionId: environment.id, driver: environment.driver },
+          });
+        } catch {
+          // Cleanup is best-effort; lease recovery handles leftovers.
+        }
+      }
       clearInterval(heartbeat);
     }
   }

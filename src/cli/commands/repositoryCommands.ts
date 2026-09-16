@@ -1,4 +1,5 @@
 import type { CreateRepositoryInput, Repository } from "../../domain/repository.js";
+import type { ExecutionProfile } from "../../domain/executionProfile.js";
 import type { RepositoryStore } from "../../store/repositoryStore.js";
 
 export interface RepositoryCreateOptions {
@@ -8,6 +9,7 @@ export interface RepositoryCreateOptions {
   defaultBranch?: string;
   localPath?: string;
   verify?: string[];
+  executionProfile?: ExecutionProfile;
 }
 
 export async function createRepositoryCommand(
@@ -21,6 +23,7 @@ export async function createRepositoryCommand(
     defaultBranch: options.defaultBranch,
     localPath: options.localPath,
     verificationCommands: options.verify ?? [],
+    executionProfile: options.executionProfile,
   };
   return store.createRepository(input);
 }

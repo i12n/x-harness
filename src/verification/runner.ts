@@ -19,6 +19,8 @@ export interface VerificationResult {
 
 export interface RunVerificationParams {
   workspacePath: string;
+  /** Where to run checks; defaults to workspacePath (execution context). */
+  workdir?: string;
   commands: string[];
   timeoutMs?: number;
   env?: Record<string, string>;
@@ -86,7 +88,7 @@ export class Verifier {
     const startedAt = new Date().toISOString();
     return new Promise<VerificationCheck>((resolve) => {
       const child = spawn(command, {
-        cwd: params.workspacePath,
+        cwd: params.workdir ?? params.workspacePath,
         env: { ...process.env, ...this.env },
         shell: true,
         stdio: ["ignore", "pipe", "pipe"],

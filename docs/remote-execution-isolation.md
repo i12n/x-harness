@@ -185,7 +185,14 @@ Worker 崩溃后 Run 能恢复
   `LocalExecutionDriver` + `DockerExecutionDriver`、Docker 运行参数隔离规则
   （只挂载当前 workspace、`--cap-drop ALL`、`no-new-privileges`、非 root、
   tmpfs、资源限制、network 模式、run 标签）
-- 待做：Repository 配置绑定 `executionProfile`、Worker 接入
-  ExecutionManager（TASK-902）、容器内执行 Codex/验证（需要 `docker exec`
-  通路）、TASK-905 白名单的真实网络策略、TASK-908/910 真 Docker 环境验证
+- TASK-902 已完成：Repository 绑定 `executionProfile`（含 Postgres JSONB
+  持久化与 CLI 参数：`--exec-image/--network/--allow/--secret/--cpus/...`）；
+  Worker 统一经 `ExecutionManager.prepare()` 进入执行环境，Agent/Verifier
+  只接收 `ExecutionContext`（`workdir` 语义），Run 结束 best-effort 清理并
+  记录 `execution.prepared/cleaned` 事件；用 fake driver 覆盖了
+  Worker → ExecutionManager → Agent → Verification → cleanup 全链路
+- 安全守卫：容器化执行（存在 containerId）会显式失败并指向 TASK-910，
+  避免在容器内执行通路未实现前误用
+- 待做：容器内执行 Codex/验证（`docker exec` 通路，TASK-910）、TASK-901
+  镜像约定、TASK-905 白名单的真实网络策略、TASK-908 真 Docker 回收验证
   （本机无 Docker）

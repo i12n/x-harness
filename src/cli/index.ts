@@ -9,6 +9,8 @@ import type { AnalyzeOutcome } from "../problem/confirmationLoop.js";
 import { Scheduler } from "../scheduler/scheduler.js";
 import type { Problem, ProblemStatus } from "../domain/problem.js";
 import { PROBLEM_STATUSES } from "../domain/problem.js";
+import { buildExecutionProfile } from "../domain/executionProfile.js";
+import type { ExecutionProfile } from "../domain/executionProfile.js";
 import type { Repository } from "../domain/repository.js";
 import type { ProblemDetail } from "./commands/problemCommands.js";
 import {
@@ -65,6 +67,14 @@ function parsePositiveInt(value: string): number {
   return Math.trunc(parsed);
 }
 
+function parsePositiveNumber(value: string): number {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    throw new Error(`invalid positive number: ${value}`);
+  }
+  return parsed;
+}
+
 async function withStores(
   run: (handle: StoreHandle) => Promise<void>,
 ): Promise<void> {
@@ -91,9 +101,21 @@ repository
   .option("--default-branch <branch>", "default branch (default: main)")
   .option("--local-path <path>", "local checkout path (default: ~/ai-repos/<name>)")
   .option("--verify <command>", "verification command (repeatable)", collect, [])
+  .option("--exec-image <image>", "container image for the execution profile")
+  .option("--exec-profile <name>", "execution profile name (default: default)")
+  .option("--network <mode>", "container network mode: none | restricted")
+  .option("--allow <host>", "allowed egress host in restricted mode (repeatable)", collect, [])
+  .option("--secret <name>", "secret NAME injected per run (repeatable)", collect, [])
+  .option("--cpus <n>", "container CPU limit (e.g. 2 or 0.5)", parsePositiveNumber)
+  .option("--memory-mb <n>", "container memory limit in MB", parsePositiveInt)
+  .option("--pids-limit <n>", "container pids limit", parsePositiveInt)
   .action(async (options: RepositoryCreateOptions) => {
     await withStores(async ({ repositories }) => {
-      const repo = await createRepositoryCommand(repositories, options);
+      const executionProfile = buildExecutionProfileFromCliOptions(options);
+      const repo = await createRepositoryCommand(repositories, {
+        ...options,
+        executionProfile,
+      });
       console.log(`Created ${repo.id} (${repo.name})`);
       printRepository(repo);
     });
@@ -539,6 +561,16 @@ function printRepository(repo: Repository): void {
   console.log(`url: ${repo.url}`);
   console.log(`default_branch: ${repo.defaultBranch}`);
   console.log(`local_path: ${repo.localPath}`);
+  const profile = repo.executionProfile;
+  const allowedHosts =
+    profile.network.allow.length > 0 ? `(${profile.network.allow.join(",")})` : "";
+  console.log(
+    `execution_profile: ${profile.name} image=${profile.image} ` +
+      `network=${profile.network.mode}${allowedHosts} ` +
+      `cpus=${profile.resources.cpus} memory=${profile.resources.memoryMb}MB ` +
+      `pids=${profile.resources.pidsLimit} ` +
+      `secrets=${profile.secrets.length > 0 ? profile.secrets.join(",") : "(none)"}`,
+  );
   console.log("verification:");
   if (repo.verificationCommands.length === 0) {
     console.log("  (none)");
@@ -580,6 +612,56 @@ function confirmationLoop(handle: StoreHandle): ConfirmationLoop {
     analyzer: new ProblemAnalyzer(
       new CodexEngine({ sandbox: process.env.AI_ANALYZER_SANDBOX ?? "read-only" }),
     ),
+  });
+}
+
+type RepositoryCreateCliOptions = RepositoryCreateOptions & {
+  execImage?: string;
+  execProfile?: string;
+  network?: string;
+  allow?: string[];
+  secret?: string[];
+  cpus?: number;
+  memoryMb?: number;
+  pidsLimit?: number;
+};
+
+/**
+ * TASK-902: repository -> execution profile binding. Only build a custom
+ * profile when the user actually passed execution flags; otherwise the domain
+ * default (most restrictive) applies.
+ */
+function buildExecutionProfileFromCliOptions(
+  options: RepositoryCreateCliOptions,
+): ExecutionProfile | undefined {
+  const hasOptions = Boolean(
+    options.execImage ||
+      options.execProfile ||
+      options.network ||
+      options.cpus ||
+      options.memoryMb ||
+      options.pidsLimit ||
+      (options.allow?.length ?? 0) > 0 ||
+      (options.secret?.length ?? 0) > 0,
+  );
+  if (!hasOptions) {
+    return undefined;
+  }
+  return buildExecutionProfile({
+    name: options.execProfile?.trim() || "default",
+    image: options.execImage?.trim() || "harness/execution:base",
+    network: {
+      mode:
+        (options.network as "none" | "restricted" | undefined) ??
+        ((options.allow?.length ?? 0) > 0 ? "restricted" : "none"),
+      allow: options.allow ?? [],
+    },
+    resources: {
+      cpus: options.cpus,
+      memoryMb: options.memoryMb,
+      pidsLimit: options.pidsLimit,
+    },
+    secrets: options.secret ?? [],
   });
 }
 

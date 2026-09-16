@@ -1,6 +1,14 @@
 import { Pool } from "pg";
 import { buildRepository } from "../domain/repository.js";
 import type { CreateRepositoryInput, Repository } from "../domain/repository.js";
+import {
+  buildExecutionProfile,
+  defaultExecutionProfile,
+} from "../domain/executionProfile.js";
+import type {
+  CreateExecutionProfileInput,
+  ExecutionProfile,
+} from "../domain/executionProfile.js";
 import { RepositoryNotFoundError } from "../errors.js";
 import type { RepositoryStore } from "./repositoryStore.js";
 
@@ -17,6 +25,7 @@ interface RepositoryRow {
 
 interface StoredConfig {
   verification?: { commands?: unknown };
+  executionProfile?: unknown;
 }
 
 /** PostgreSQL-backed repository store (see migrations/001_init.sql). */
@@ -27,6 +36,7 @@ export class PostgresRepositoryStore implements RepositoryStore {
     const repository = buildRepository(input);
     const config = JSON.stringify({
       verification: { commands: repository.verificationCommands },
+      executionProfile: repository.executionProfile,
     });
     const { rows } = await this.pool.query<RepositoryRow>(
       `INSERT INTO repositories
@@ -82,9 +92,21 @@ function rowToRepository(row: RepositoryRow): Repository {
     verificationCommands: Array.isArray(commands)
       ? commands.filter((command): command is string => typeof command === "string")
       : [],
+    executionProfile: parseExecutionProfile(stored.executionProfile),
     createdAt: toIso(row.created_at),
     updatedAt: toIso(row.updated_at),
   };
+}
+
+function parseExecutionProfile(raw: unknown): ExecutionProfile {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    return defaultExecutionProfile();
+  }
+  try {
+    return buildExecutionProfile(raw as CreateExecutionProfileInput);
+  } catch {
+    return defaultExecutionProfile();
+  }
 }
 
 function parseStoredConfig(raw: unknown): StoredConfig {

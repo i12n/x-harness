@@ -50,7 +50,7 @@ export class CodexEngine implements AgentEngine {
       let child: ChildProcess;
       try {
         child = spawn(this.executable, args, {
-          cwd: context.workspacePath,
+          cwd: context.execution?.workdir ?? context.workspacePath,
           env: { ...process.env, ...this.env },
           stdio: ["pipe", "pipe", "pipe"],
         });

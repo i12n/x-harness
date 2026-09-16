@@ -41,8 +41,9 @@ Implemented in TypeScript (Node >= 18, ESM). The full plan lives in
   repository/task/run/event stores + full Loop end to end). The unit suite
   stays offline; the Postgres test runs with `AI_TEST_POSTGRES=1`.
 - Phase 9 (Remote Execution & Isolation, in progress): ExecutionProfile /
-  Policy / SecretStore / ExecutionManager + Docker 隔离参数规则已实现并有
-  单测；Worker 接入与真 Docker E2E 待做（本机无 Docker），见
+  Policy / SecretStore / ExecutionManager + Docker 隔离参数规则、Repository
+  executionProfile 绑定与 Worker 接入（ExecutionContext + 生命周期清理）
+  已实现并有单测；真 Docker E2E 待做（本机无 Docker），见
   [docs/remote-execution-isolation.md](docs/remote-execution-isolation.md)。
 
 ## Requirements
@@ -90,7 +91,11 @@ ai repository create \
   --url git@github.com:example/my-app.git \
   --verify "npm run lint" \
   --verify "npm test" \
-  --verify "npm run build"
+  --verify "npm run build" \
+  --exec-image harness/node:22 \
+  --network restricted --allow registry.npmjs.org \
+  --secret GITHUB_TOKEN \
+  --cpus 2 --memory-mb 4096 --pids-limit 512
 
 ai repository list
 ai repository show <id>

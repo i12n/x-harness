@@ -22,6 +22,7 @@ import { PostgresRunStore } from "../src/store/postgresRunStore.js";
 import { PostgresTaskStore } from "../src/store/postgresTaskStore.js";
 import { PostgresEventStore } from "../src/store/postgresEventStore.js";
 import { PostgresProblemStore } from "../src/store/postgresProblemStore.js";
+import { buildExecutionProfile } from "../src/domain/executionProfile.js";
 import { Verifier } from "../src/verification/runner.js";
 import { Worker } from "../src/worker/worker.js";
 import { WorkspaceManager } from "../src/workspace/manager.js";
@@ -143,12 +144,14 @@ describePostgres("PostgreSQL integration", () => {
     expect(types).toEqual([
       "RunCreated",
       "RunStarted",
+      "execution.prepared",
       "AgentStarted",
       "AgentFinished",
       "VerificationStarted",
       "VerificationPassed",
       "RunSucceeded",
       "TaskReview",
+      "execution.cleaned",
     ]);
 
     // In-memory reviewer + approval against the same Postgres task row.
@@ -162,12 +165,23 @@ describePostgres("PostgreSQL integration", () => {
   it("persists the problem confirmation data", async () => {
     const repositories = new PostgresRepositoryStore(pool!);
     const problems = new PostgresProblemStore(pool!);
+    const executionProfile = buildExecutionProfile({
+      name: "frontend-node",
+      image: "harness/node:22",
+      network: { mode: "restricted", allow: ["registry.npmjs.org"] },
+      resources: { cpus: 4 },
+      secrets: ["GITHUB_TOKEN"],
+    });
     await repositories.createRepository({
       id: "repo-001",
       name: "my-app",
       url: "git@github.com:example/my-app.git",
       localPath: "/tmp/repos/my-app",
+      executionProfile,
     });
+    expect((await repositories.findRepository("repo-001")).executionProfile).toEqual(
+      executionProfile,
+    );
 
     const problem = await problems.createProblem({
       id: "prob-001",

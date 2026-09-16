@@ -18,10 +18,37 @@ export interface ExecutionEnvironment {
   id: string;
   runId: string;
   workspacePath: string;
+  /** Path the agent/verifier should run in (host path or container path). */
   containerWorkspace: string;
   profile: ExecutionProfile;
+  driver: string;
   containerId?: string;
   startedAt?: string;
+}
+
+/** What Agent/Verifier see — they never care whether it is host or docker. */
+export interface ExecutionContext {
+  runId: string;
+  executionId: string;
+  /** Host-side workspace path (worktree). */
+  workspacePath: string;
+  /** Working directory for agent/verifier commands. */
+  workdir: string;
+  driver: string;
+  containerId?: string;
+}
+
+export function toExecutionContext(
+  environment: ExecutionEnvironment,
+): ExecutionContext {
+  return {
+    runId: environment.runId,
+    executionId: environment.id,
+    workspacePath: environment.workspacePath,
+    workdir: environment.containerWorkspace || environment.workspacePath,
+    driver: environment.driver,
+    containerId: environment.containerId,
+  };
 }
 
 /** Execution Plane driver: local (no container) or docker (Phase 9). */
@@ -41,6 +68,7 @@ export class LocalExecutionDriver implements ExecutionDriver {
       workspacePath,
       containerWorkspace: workspacePath,
       profile: request.profile,
+      driver: "local",
     };
   }
 
@@ -75,6 +103,7 @@ export class DockerExecutionDriver implements ExecutionDriver {
       workspacePath: resolve(request.workspacePath),
       containerWorkspace: request.profile.workspace,
       profile: request.profile,
+      driver: "docker",
     };
   }
 
