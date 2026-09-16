@@ -126,7 +126,7 @@ class FlakyCleanupDriver extends DockerExecutionDriver {
 
   async cleanup(environment: ExecutionEnvironment): Promise<void> {
     this.attempts += 1;
-    if (this.attempts === 1) {
+    if (this.attempts <= 2) {
       throw new Error("flaky cleanup (intentional first failure)");
     }
     return super.cleanup(environment);

@@ -220,12 +220,36 @@ export class DockerExecutionDriver implements ExecutionDriver {
     }
     try {
       await this.runDocker(["rm", "-f", containerId]);
+      return;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       if (message.includes("No such container")) {
         return;
       }
+      // `--rm` auto-removal can still be in progress right after stop; wait a
+      // moment and confirm the container is really gone before failing.
+      if (await this.containerMissing(containerId)) {
+        return;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 1_000));
+      if (await this.containerMissing(containerId)) {
+        return;
+      }
       throw error;
+    }
+  }
+
+  private async containerMissing(containerId: string): Promise<boolean> {
+    try {
+      await execFileAsync(this.dockerBinary, [
+        "inspect",
+        "--format",
+        "{{.Id}}",
+        containerId,
+      ]);
+      return false;
+    } catch {
+      return true;
     }
   }
 
