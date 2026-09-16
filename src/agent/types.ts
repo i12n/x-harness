@@ -1,13 +1,15 @@
 import type { Repository } from "../domain/repository.js";
 import type { Task } from "../domain/task.js";
+import type { Problem } from "../domain/problem.js";
 
 /** Fully assembled input handed to an agent engine. */
 export interface AgentContext {
   runId: string;
-  task: Task;
-  repository: Repository;
   workspacePath: string;
   prompt: string;
+  task?: Task;
+  repository?: Repository;
+  problem?: Problem;
 }
 
 export interface AgentResult {

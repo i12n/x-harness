@@ -3,8 +3,23 @@
 import { Command } from "commander";
 import { CodexEngine } from "../agent/codexEngine.js";
 import { Loop } from "../loop/loop.js";
+import { ProblemAnalyzer } from "../problem/analyzer.js";
+import { ConfirmationLoop } from "../problem/confirmationLoop.js";
+import type { AnalyzeOutcome } from "../problem/confirmationLoop.js";
 import { Scheduler } from "../scheduler/scheduler.js";
+import type { Problem, ProblemStatus } from "../domain/problem.js";
+import { PROBLEM_STATUSES } from "../domain/problem.js";
 import type { Repository } from "../domain/repository.js";
+import type { ProblemDetail } from "./commands/problemCommands.js";
+import {
+  analyzeProblemCommand,
+  answerProblemCommand,
+  confirmProblemCommand,
+  convertProblemToTaskCommand,
+  createProblemCommand,
+  listProblemsCommand,
+  showProblemCommand,
+} from "./commands/problemCommands.js";
 import type { Task, TaskStatus } from "../domain/task.js";
 import { readTaskReviews, TASK_STATUSES } from "../domain/task.js";
 import { openStores, type StoreHandle } from "../store/index.js";
@@ -211,6 +226,125 @@ task
     });
   });
 
+const problemGroup = program.command("problem").description("problem confirmation loop");
+
+problemGroup
+  .command("create")
+  .description("record a raw problem (status: INBOX)")
+  .option("--id <id>", "problem id (default: generated)")
+  .requiredOption("--title <title>", "short problem title")
+  .requiredOption("--statement <text>", "raw problem statement")
+  .option("--repo <id>", "optional target repository id")
+  .action(async (options: { id?: string; title: string; statement: string; repo?: string }) => {
+    await withStores(async ({ problems, events }) => {
+      const problem = await createProblemCommand(problems, options, events);
+      console.log(`Created ${problem.id} (${problem.title})`);
+      printProblemDetail({ problem, analyses: [], clarifications: [] });
+    });
+  });
+
+problemGroup
+  .command("list")
+  .description("list problems")
+  .option("--status <status>", "only problems with this status")
+  .option("--repo <id>", "only problems for this repository")
+  .action(async (options: { status?: string; repo?: string }) => {
+    await withStores(async ({ problems }) => {
+      const status = options.status ? normalizeProblemStatus(options.status) : undefined;
+      const list = await listProblemsCommand(problems, {
+        status,
+        repositoryId: options.repo,
+      });
+      if (list.length === 0) {
+        console.log("No problems found.");
+        return;
+      }
+      console.log("ID\tSTATUS\tREPO\tTITLE");
+      for (const item of list) {
+        console.log(`${item.id}\t${item.status}\t${item.repositoryId ?? "-"}\t${item.title}`);
+      }
+    });
+  });
+
+problemGroup
+  .command("show <id>")
+  .description("show one problem with analyses and clarifications")
+  .action(async (id: string) => {
+    await withStores(async ({ problems }) => {
+      printProblemDetail(await showProblemCommand(problems, id));
+    });
+  });
+
+problemGroup
+  .command("analyze <id>")
+  .description("run one analysis round; creates clarifications when needed")
+  .action(async (id: string) => {
+    await withStores(async (handle) => {
+      const outcome = await analyzeProblemCommand(confirmationLoop(handle), id);
+      printAnalyzeOutcome(outcome);
+    });
+  });
+
+problemGroup
+  .command("answer <problem-id> <clarification-id>")
+  .description("answer a clarification and re-run analysis")
+  .option("--option <id>", "choose one of the offered options")
+  .option("--text <text>", "free-text answer (the \"other\" case)")
+  .action(async (
+    problemId: string,
+    clarificationId: string,
+    options: { option?: string; text?: string },
+  ) => {
+    await withStores(async (handle) => {
+      const outcome = await answerProblemCommand(
+        confirmationLoop(handle),
+        problemId,
+        clarificationId,
+        options,
+      );
+      printAnalyzeOutcome(outcome);
+    });
+  });
+
+problemGroup
+  .command("confirm <id>")
+  .description("manually confirm a problem (optionally recording the spec)")
+  .option("--problem <text>", "confirmed problem statement")
+  .option("--expected <text>", "expected behaviour")
+  .option("--scope <text>", "scope")
+  .option("--investigation <text>", "investigation notes")
+  .action(async (
+    id: string,
+    options: { problem?: string; expected?: string; scope?: string; investigation?: string },
+  ) => {
+    await withStores(async (handle) => {
+      const confirmed = await confirmProblemCommand(confirmationLoop(handle), id, options);
+      console.log(`${confirmed.id} -> ${confirmed.status}`);
+      if (confirmed.confirmedSpec) {
+        printProblemSpec(confirmed);
+      }
+    });
+  });
+
+problemGroup
+  .command("task <id>")
+  .description("convert a CONFIRMED problem into an executable Task")
+  .requiredOption("--repo <id>", "repository the task targets")
+  .action(async (id: string, options: { repo: string }) => {
+    await withStores(async ({ problems, tasks, repositories, events }) => {
+      const outcome = await convertProblemToTaskCommand({
+        problems,
+        tasks,
+        repositories,
+        events,
+        problemId: id,
+        repositoryId: options.repo,
+      });
+      console.log(`task created: ${outcome.task.id} (${outcome.task.title})`);
+      console.log(`problem ${outcome.problem.id} -> ${outcome.problem.status}`);
+    });
+  });
+
 program
   .command("review <run-id>")
   .description("run a reviewer agent over a SUCCEEDED run's workspace diff")
@@ -239,13 +373,15 @@ event
   .description("list recorded events (optionally filtered)")
   .option("--task <id>", "only events for this task")
   .option("--run <id>", "only events for this run")
+  .option("--problem <id>", "only events for this problem")
   .option("--type <type>", "only events of this type")
   .option("--limit <n>", "number of most recent events to show", parsePositiveInt)
-  .action(async (options: { task?: string; run?: string; type?: string; limit?: number }) => {
+  .action(async (options: { task?: string; run?: string; problem?: string; type?: string; limit?: number }) => {
     await withStores(async ({ events }) => {
       const list = await events.listEvents({
         taskId: options.task,
         runId: options.run,
+        problemId: options.problem,
         type: options.type,
         limit: options.limit,
       });
@@ -253,9 +389,11 @@ event
         console.log("No events found.");
         return;
       }
-      console.log("ID\tTYPE\tTASK\tRUN\tCREATED");
+      console.log("ID\tTYPE\tTASK\tRUN\tPROBLEM\tCREATED");
       for (const item of list) {
-        console.log(`${item.id}\t${item.type}\t${item.taskId ?? "-"}\t${item.runId ?? "-"}\t${item.createdAt}`);
+        console.log(
+          `${item.id}\t${item.type}\t${item.taskId ?? "-"}\t${item.runId ?? "-"}\t${item.problemId ?? "-"}\t${item.createdAt}`,
+        );
       }
     });
   });
@@ -431,6 +569,93 @@ function printTask(item: Task): void {
   console.log(`reviews: ${reviews.length}`);
   for (const review of reviews) {
     console.log(`  - [${review.at}] ${review.runId}: ${review.text.split("\n")[0] ?? ""}`);
+  }
+}
+
+function confirmationLoop(handle: StoreHandle): ConfirmationLoop {
+  return new ConfirmationLoop({
+    problems: handle.problems,
+    repositories: handle.repositories,
+    events: handle.events,
+    analyzer: new ProblemAnalyzer(
+      new CodexEngine({ sandbox: process.env.AI_ANALYZER_SANDBOX ?? "read-only" }),
+    ),
+  });
+}
+
+function normalizeProblemStatus(value: string): ProblemStatus {
+  const upper = value.toUpperCase();
+  if (!(PROBLEM_STATUSES as readonly string[]).includes(upper)) {
+    throw new Error(
+      `invalid problem status '${value}' (use one of: ${PROBLEM_STATUSES.join("|")})`,
+    );
+  }
+  return upper as ProblemStatus;
+}
+
+function printProblemSpec(problem: Problem): void {
+  const spec = problem.confirmedSpec;
+  if (!spec) {
+    return;
+  }
+  console.log("confirmed_spec:");
+  console.log(`  problem: ${spec.problem}`);
+  console.log(`  expected: ${spec.expected}`);
+  if (spec.scope) {
+    console.log(`  scope: ${spec.scope}`);
+  }
+  if (spec.investigation) {
+    console.log(`  investigation: ${spec.investigation}`);
+  }
+}
+
+function printProblemDetail(detail: ProblemDetail): void {
+  const { problem, analyses, clarifications } = detail;
+  console.log(`id: ${problem.id}`);
+  console.log(`title: ${problem.title}`);
+  console.log(`status: ${problem.status}`);
+  console.log(`repository_id: ${problem.repositoryId ?? "-"}`);
+  console.log(`statement: ${problem.statement}`);
+  printProblemSpec(problem);
+  console.log(`analyses: ${analyses.length}`);
+  for (const analysis of analyses) {
+    console.log(
+      `  - [${analysis.createdAt}] needsInput=${analysis.needsInput} ${analysis.summary}`,
+    );
+  }
+  console.log(`clarifications: ${clarifications.length}`);
+  for (const clarification of clarifications) {
+    console.log(
+      `  - ${clarification.id} [${clarification.status}] (${clarification.type}) ${clarification.question}`,
+    );
+    for (const option of clarification.options) {
+      console.log(`      ○ ${option.id}: ${option.label}`);
+    }
+    if (clarification.answer) {
+      console.log(
+        `    answer: ${clarification.answer.optionId ?? clarification.answer.text ?? "-"}`,
+      );
+    }
+  }
+}
+
+function printAnalyzeOutcome(outcome: AnalyzeOutcome): void {
+  console.log(`${outcome.problem.id} -> ${outcome.problem.status}`);
+  if (outcome.analysis) {
+    console.log(`analysis: ${outcome.analysis.summary}`);
+  }
+  if (!outcome.needsInput) {
+    console.log("confirmed: no open clarifications");
+    return;
+  }
+  for (const clarification of outcome.clarifications) {
+    console.log(`- ${clarification.id} (${clarification.type}) ${clarification.question}`);
+    for (const option of clarification.options) {
+      console.log(`    ○ ${option.id}: ${option.label}`);
+    }
+    if (clarification.reason) {
+      console.log(`  why: ${clarification.reason}`);
+    }
   }
 }
 

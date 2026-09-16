@@ -4,6 +4,7 @@ export interface EventRecord {
   type: string;
   taskId?: string;
   runId?: string;
+  problemId?: string;
   payload: unknown;
   createdAt: string;
 }
@@ -12,6 +13,7 @@ export interface RecordEventInput {
   type: string;
   taskId?: string;
   runId?: string;
+  problemId?: string;
   payload?: unknown;
 }
 

@@ -12,6 +12,7 @@ export class InMemoryEventStore implements EventStore {
       type: input.type,
       taskId: input.taskId,
       runId: input.runId,
+      problemId: input.problemId,
       payload: input.payload ?? {},
       createdAt: new Date().toISOString(),
     };
@@ -25,6 +26,7 @@ export class InMemoryEventStore implements EventStore {
       (event) =>
         (filter.taskId === undefined || event.taskId === filter.taskId) &&
         (filter.runId === undefined || event.runId === filter.runId) &&
+        (filter.problemId === undefined || event.problemId === filter.problemId) &&
         (filter.type === undefined || event.type === filter.type),
     );
     if (filter.limit !== undefined && filter.limit > 0) {

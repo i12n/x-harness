@@ -7,6 +7,7 @@ interface EventRow {
   type: string;
   task_id: string | null;
   run_id: string | null;
+  problem_id: string | null;
   payload: unknown;
   created_at: Date | string;
 }
@@ -17,13 +18,14 @@ export class PostgresEventStore implements EventStore {
 
   async record(input: RecordEventInput): Promise<EventRecord> {
     const { rows } = await this.pool.query<EventRow>(
-      `INSERT INTO events (type, task_id, run_id, payload, created_at)
-       VALUES ($1, $2, $3, $4, $5)
+      `INSERT INTO events (type, task_id, run_id, problem_id, payload, created_at)
+       VALUES ($1, $2, $3, $4, $5, $6)
        RETURNING *`,
       [
         input.type,
         input.taskId ?? null,
         input.runId ?? null,
+        input.problemId ?? null,
         JSON.stringify(input.payload ?? {}),
         new Date().toISOString(),
       ],
@@ -50,6 +52,10 @@ export class PostgresEventStore implements EventStore {
       params.push(filter.type);
       conditions.push(`type = $${params.length}`);
     }
+    if (filter.problemId !== undefined) {
+      params.push(filter.problemId);
+      conditions.push(`problem_id = $${params.length}`);
+    }
     const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
     const limit =
       filter.limit !== undefined && filter.limit > 0 ? `LIMIT ${filter.limit}` : "";
@@ -67,6 +73,7 @@ function rowToEvent(row: EventRow): EventRecord {
     type: row.type,
     taskId: row.task_id ?? undefined,
     runId: row.run_id ?? undefined,
+    problemId: row.problem_id ?? undefined,
     payload: parseJson(row.payload),
     createdAt: toIso(row.created_at),
   };

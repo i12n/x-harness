@@ -11,7 +11,10 @@ import { join } from "node:path";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { Pool } from "pg";
 import { CodexEngine } from "../src/agent/codexEngine.js";
+import type { AgentContext, AgentEngine, AgentResult } from "../src/agent/types.js";
 import { Loop } from "../src/loop/loop.js";
+import { ProblemAnalyzer } from "../src/problem/analyzer.js";
+import { ConfirmationLoop } from "../src/problem/confirmationLoop.js";
 import { Scheduler } from "../src/scheduler/scheduler.js";
 import { InMemoryEventStore } from "../src/store/inMemoryEventStore.js";
 import { PostgresRepositoryStore } from "../src/store/postgresRepositoryStore.js";
@@ -40,6 +43,22 @@ const WRITE_CODE = [
   "  console.log('changes made');",
   "});",
 ].join("");
+
+class QueueEngine implements AgentEngine {
+  constructor(private readonly outputs: string[]) {}
+  async execute(context: AgentContext): Promise<AgentResult> {
+    return {
+      runId: context.runId,
+      exitCode: 0,
+      signal: undefined,
+      stdout: this.outputs.shift() ?? "",
+      stderr: "",
+      startedAt: new Date().toISOString(),
+      finishedAt: new Date().toISOString(),
+    };
+  }
+  async cancel(): Promise<void> {}
+}
 
 describePostgres("PostgreSQL integration", () => {
   const pool = enabled ? new Pool({ connectionString: dbUrl }) : null;
@@ -192,5 +211,54 @@ describePostgres("PostgreSQL integration", () => {
     expect((await problems.listClarifications("prob-001"))[0]?.answer?.optionId).toBe(
       "all_users",
     );
+  });
+
+  it("runs the confirmation loop and persists problem events", async () => {
+    const problems = new PostgresProblemStore(pool!);
+    const events = new PostgresEventStore(pool!);
+    const needsInput = JSON.stringify({
+      summary: "需要确认类型",
+      needsInput: true,
+      uncertainties: ["类型"],
+      clarifications: [
+        {
+          question: "慢是指首屏还是操作？",
+          type: "scope",
+          required: true,
+          options: [{ id: "initial", label: "首屏" }],
+          reason: "调查路径不同",
+        },
+      ],
+    });
+    const sufficient = JSON.stringify({
+      summary: "已明确",
+      needsInput: false,
+      uncertainties: [],
+      clarifications: [],
+    });
+    const loop = new ConfirmationLoop({
+      problems,
+      events,
+      analyzer: new ProblemAnalyzer(new QueueEngine([needsInput, sufficient])),
+    });
+
+    await problems.createProblem({ id: "prob-001", title: "t", statement: "s" });
+    const first = await loop.analyze("prob-001");
+    expect(first.problem.status).toBe("NEEDS_INPUT");
+    const confirmed = await loop.answer("prob-001", first.clarifications[0]!.id, {
+      optionId: "initial",
+    });
+    expect(confirmed.problem.status).toBe("CONFIRMED");
+
+    const types = (await events.listEvents({ problemId: "prob-001" })).map(
+      (event) => event.type,
+    );
+    expect(types).toEqual([
+      "problem.analysis.updated",
+      "problem.clarification.created",
+      "problem.clarification.answered",
+      "problem.analysis.updated",
+      "problem.confirmed",
+    ]);
   });
 });

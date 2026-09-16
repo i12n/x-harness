@@ -31,8 +31,9 @@ Implemented in TypeScript (Node >= 18, ESM). The full plan lives in
   Dependency DAG, GitHub Integration.
 - v0.2 P1 (Problem Confirmation, in progress): `problems` /
   `problem_analyses` / `clarifications` / `clarification_answers` schema +
-  domain model + in-memory/Postgres stores — done; analyzer, confirmation
-  loop, events and Problem -> Task conversion next.
+  domain model + in-memory/Postgres stores, Problem Analyzer, Confirmation
+  Loop, `problem.*` events and Problem -> Task conversion — done. Next:
+  automated Investigation/Specification, then Multi Repository Task.
 - v0.1 wrap-up: full event history (TaskCreated -> TaskDone) written by the
   validate/scheduler/worker/loop/review/approval paths, browsable via
   `ai event list` — done.
@@ -103,6 +104,15 @@ ai task show <id>
 # manual run (requires a registered repository whose local_path is a git
 # checkout and the `codex` CLI; prompts are sent on stdin)
 ai run <task-id>
+
+# v0.2 P1: problem confirmation loop (AI analyzes, human confirms)
+ai problem create --title "首页加载很慢" --statement "用户反馈加载慢" [--repo <id>]
+ai problem analyze <problem-id>          # creates structured clarifications
+ai problem answer <problem-id> <clarification-id> --option <option-id>
+ai problem answer <problem-id> <clarification-id> --text "其他说明"
+ai problem confirm <problem-id> [--problem ... --expected ... --scope ...]
+ai problem task <problem-id> --repo <id> # CONFIRMED -> executable Task
+ai problem list [--status NEEDS_INPUT] / ai problem show <problem-id>
 
 # v0.2: review a succeeded run, then approve or reject the task
 ai review <run-id>
