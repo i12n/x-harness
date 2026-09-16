@@ -40,6 +40,10 @@ Implemented in TypeScript (Node >= 18, ESM). The full plan lives in
 - v0.1 wrap-up: verified against a real PostgreSQL 16 instance (migrations +
   repository/task/run/event stores + full Loop end to end). The unit suite
   stays offline; the Postgres test runs with `AI_TEST_POSTGRES=1`.
+- Phase 9 (Remote Execution & Isolation, in progress): ExecutionProfile /
+  Policy / SecretStore / ExecutionManager + Docker 隔离参数规则已实现并有
+  单测；Worker 接入与真 Docker E2E 待做（本机无 Docker），见
+  [docs/remote-execution-isolation.md](docs/remote-execution-isolation.md)。
 
 ## Requirements
 
@@ -157,5 +161,5 @@ config/         # config/config.yaml
 migrations/     # SQL schema (001 core, 002 problem confirmation)
 scripts/        # db:migrate runner
 tests/          # vitest unit tests
-docs/           # v0.1 plan, v0.2 roadmap, discussion notes
+docs/           # v0.1 plan, v0.2 roadmap, phase 9 isolation, discussion notes
 ```

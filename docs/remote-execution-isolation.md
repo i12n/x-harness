@@ -1,0 +1,191 @@
+# Phase 9 — Remote Execution & Isolation（服务器化与隔离）
+
+> 来源：2026-09-16 讨论。状态：路线已确定，按 TASK-901..910 分步实现。
+> 原则：**服务器负责调度，容器负责执行，Workspace 负责代码隔离，
+> Policy 负责权限隔离。**
+
+## 1. 两条边界：Control Plane / Execution Plane
+
+```text
+Control Plane（长期运行，持有权威状态）
+  API / PostgreSQL / Scheduler / Loop / Worker Manager
+
+Execution Plane（一次 Run 一个，用完销毁）
+  Container(Codex CLI, Git, Node/pnpm, Gradle, 测试, 构建) + Workspace
+```
+
+不要混在一起：control plane 不执行用户代码，execution plane 不持有业务状态。
+
+## 2. 部署形态（v0.1/v0.2 不上 Kubernetes）
+
+单台 Linux 服务器 + Docker + Docker Compose 足够：
+
+```text
+/srv/ai-harness/
+  compose.yaml           # api / scheduler / loop / worker / postgres
+  .env                   # 只放控制面配置，不放任务密钥
+  app/                   # 控制面服务
+  postgres/
+  repositories/          # 每个 repository 的本地 clone
+  runs/                  # 每个 Run 的 worktree
+```
+
+Execution Container 不进 compose.yaml，由 Worker 动态 `docker run` 创建。
+满足以下条件前不考虑 Kubernetes：几十/几百并发 Run、多执行节点、跨地区
+Worker、GPU Worker、Control Plane 高可用。
+
+## 3. 隔离单位是 Run，不是 Task
+
+```text
+Task
+ ├── Run #1 → Container + Worktree
+ ├── Run #2 → Container + Worktree
+ └── Run #3 → Container + Worktree
+```
+
+一个 Run = 一次独立执行环境；默认不共享文件系统、进程、环境变量、工作目录、
+Git 状态、临时文件。
+
+## 4. Git Worktree 仍要保留
+
+容器隔离不能代替 Git 隔离：
+
+```text
+/srv/harness/repositories/repo-001/worktrees/RUN-001  --mount-->  /workspace
+```
+
+Codex 只看到 `/workspace`（当前 Run 的 worktree），看不到整个服务器。
+
+## 5. 安全边界（Docker 不是绝对安全）
+
+本质上是让 AI 自动执行任意代码，必须假设它会执行恶意命令：
+
+- **绝对禁止** 挂载 `/var/run/docker.sock`（等于交出宿主机控制权）
+- **绝对禁止** 挂载宿主 `/`、`/etc`、`/root`、`/home`、`/srv/harness`
+- 只允许：`/workspace`（当前 Run worktree，读写）+ `/tmp`（tmpfs）
+- 不允许访问：其他 Run 的 workspace、PostgreSQL、生产环境
+- 建议默认：`--cap-drop ALL`、`no-new-privileges`、非 root 用户、
+  只读根文件系统 + tmpfs
+
+## 6. 网络隔离
+
+默认 restricted：允许 Git server / npm registry / 必要 API，而不是全开放。
+依赖源因技术栈而异（npm/PyPI/Maven/Gradle/Cargo/私有 GitLab），
+所以 **白名单属于 Repository / Execution Profile 配置，不写死在 Harness 核心**。
+
+## 7. Secrets 不进 Repository，也不进任务数据
+
+- 不写进 `.env`（仓库内）、`AGENTS.md`、`PROJECT.md`、Task、Run、Event
+- 流向：Secret Store → Worker → 只注入当前 Run 的 Execution Container
+- Run 结束即销毁；日志与轨迹中不得出现明文
+
+## 8. Worker 生命周期（与现有 lease/heartbeat 对齐）
+
+```text
+Run
+ ↓ create worktree      (WorkspaceManager)
+ ↓ create container     (ExecutionManager)
+ ↓ start
+ ↓ agent (Codex)
+ ↓ verification
+ ↓ collect evidence
+ ↓ destroy container
+ ↓ cleanup worktree
+ ↓ Run result -> PostgreSQL
+```
+
+Worker 无业务状态；权威状态在 PostgreSQL。Worker 崩溃时 Loop 依据
+`lease_until < now()` 将 Run 标记 LOST 并重试——这与已实现的 lease 机制一致。
+
+## 9. Execution Profile（按 Repository 选择运行环境）
+
+```yaml
+# frontend-node
+name: frontend-node
+image: harness/node:22
+workspace: /workspace
+commands: { install: pnpm install, test: pnpm test, build: pnpm build }
+
+# backend-java
+name: backend-java
+image: harness/java:21
+workspace: /workspace
+commands: { test: ./gradlew test, build: ./gradlew build }
+```
+
+Repository → Execution Profile → Container Image，而不是所有项目共用一个镜像。
+
+## 10. Policy（Agent 能做什么）
+
+```yaml
+policy:
+  filesystem: { workspace: read_write, host: deny }
+  git:        { status: allow, diff: allow, commit: allow, push: deny }
+  network:    { outbound: restricted }
+  docker:     { access: deny }
+  production: { access: deny }
+```
+
+Codex 可以改代码/跑测试/commit；不能 push、不能用 docker、不能碰生产与宿主
+文件系统。Policy 是 Harness 的组成部分，不是容器的副产品。
+
+## 11. 目标架构（服务器部署后）
+
+```text
+Internet → Reverse Proxy → Harness API
+                              │
+        ┌─────────────────────┼─────────────────────┐
+        ▼                     ▼                     ▼
+   PostgreSQL          Scheduler / Loop        Worker Manager
+                              │
+                 ┌────────────┼────────────┐
+                 ▼            ▼            ▼
+              Worker-1     Worker-2     Worker-3
+                 ▼            ▼            ▼
+              Container    Container    Container
+                 ▼            ▼            ▼
+              RUN-001      RUN-002      RUN-003（各自 worktree + Codex + verify）
+```
+
+## 12. Phase 9 任务拆分
+
+```text
+TASK-901  Execution Container（镜像与入口约定）
+TASK-902  Run → Container lifecycle（Worker 接入 ExecutionManager）
+TASK-903  Worktree → Container mount（只挂当前 Run）
+TASK-904  Container filesystem isolation（cap-drop / no-new-privileges / 非 root）
+TASK-905  Container network policy（per-profile allow-list）
+TASK-906  Secret injection（SecretStore → 仅当前 Run）
+TASK-907  Resource limits（cpus / memory / pids）
+TASK-908  Container cleanup / recovery（异常退出也能回收）
+TASK-909  Worker crash recovery（lease + LOST + retry，已具备基础）
+TASK-910  Real server E2E
+```
+
+关键验收链：
+
+```text
+Task → Run → Worktree → Container → Codex → Verification
+     → Container destroyed → Run SUCCEEDED
+```
+
+隔离测试（必须在真 Docker 环境跑）：
+
+```text
+RUN-001 不能读取 RUN-002 / Host / Docker Socket / PostgreSQL
+RUN-001 超 CPU/Memory 限制会被终止
+RUN-001 超时会被 Harness 回收
+Worker 崩溃后 Run 能恢复
+```
+
+## 13. 本仓库进展（滚动更新）
+
+- 已实现（代码级、单元测试覆盖）：`ExecutionProfile` / `Policy` 域模型、
+  `SecretStore`（环境变量实现，仅按名注入）、`ExecutionManager` +
+  `LocalExecutionDriver` + `DockerExecutionDriver`、Docker 运行参数隔离规则
+  （只挂载当前 workspace、`--cap-drop ALL`、`no-new-privileges`、非 root、
+  tmpfs、资源限制、network 模式、run 标签）
+- 待做：Repository 配置绑定 `executionProfile`、Worker 接入
+  ExecutionManager（TASK-902）、容器内执行 Codex/验证（需要 `docker exec`
+  通路）、TASK-905 白名单的真实网络策略、TASK-908/910 真 Docker 环境验证
+  （本机无 Docker）
