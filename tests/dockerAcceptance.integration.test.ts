@@ -480,18 +480,17 @@ describeDocker("TASK-910 filesystem / privilege isolation", () => {
     const workspaceBase = mkdtempSync(join(tmpdir(), "ai-docker-iso-"));
     cleanups.push(() => rmSync(workspaceBase, { recursive: true, force: true }));
     const workspaceManager = new WorkspaceManager({ baseDir: workspaceBase });
-    const [workspaceA, workspaceB] = await Promise.all([
-      workspaceManager.createWorkspace({
-        repositoryLocalPath: fixture.path,
-        taskId: "task-a",
-        runId: "run-a",
-      }),
-      workspaceManager.createWorkspace({
-        repositoryLocalPath: fixture.path,
-        taskId: "task-b",
-        runId: "run-b",
-      }),
-    ]);
+    // Sequential: concurrent `git worktree add` on the same repo can race.
+    const workspaceA = await workspaceManager.createWorkspace({
+      repositoryLocalPath: fixture.path,
+      taskId: "task-a",
+      runId: "run-a",
+    });
+    const workspaceB = await workspaceManager.createWorkspace({
+      repositoryLocalPath: fixture.path,
+      taskId: "task-b",
+      runId: "run-b",
+    });
     writeFileSync(join(workspaceA.path, "marker-a.txt"), "a");
 
     const executions = new InMemoryExecutionStore();
