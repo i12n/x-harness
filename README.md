@@ -29,6 +29,10 @@ Implemented in TypeScript (Node >= 18, ESM). The full plan lives in
 - v0.2 (Review & Human Approval): reviewer agent over a succeeded run's diff +
   `task approve/reject` — done. Next per plan: Multi Repository Task,
   Dependency DAG, GitHub Integration.
+- v0.2 P1 (Problem Confirmation, in progress): `problems` /
+  `problem_analyses` / `clarifications` / `clarification_answers` schema +
+  domain model + in-memory/Postgres stores — done; analyzer, confirmation
+  loop, events and Problem -> Task conversion next.
 - v0.1 wrap-up: full event history (TaskCreated -> TaskDone) written by the
   validate/scheduler/worker/loop/review/approval paths, browsable via
   `ai event list` — done.
@@ -140,7 +144,7 @@ src/
   worker/       # run executor with leases and heartbeats
   workspace/    # git-worktree workspace isolation (one run = one worktree)
 config/         # config/config.yaml
-migrations/     # SQL schema (001_init.sql: 5 core tables)
+migrations/     # SQL schema (001 core, 002 problem confirmation)
 scripts/        # db:migrate runner
 tests/          # vitest unit tests
 docs/           # v0.1 plan, v0.2 roadmap, discussion notes

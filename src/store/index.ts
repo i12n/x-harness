@@ -2,31 +2,42 @@ import { loadAppConfig } from "../config/config.js";
 import { createPool } from "../db/pool.js";
 import { InMemoryRepositoryStore } from "./inMemoryRepositoryStore.js";
 import { InMemoryEventStore } from "./inMemoryEventStore.js";
+import { InMemoryProblemStore } from "./inMemoryProblemStore.js";
 import { InMemoryRunStore } from "./inMemoryRunStore.js";
 import { InMemoryTaskStore } from "./inMemoryTaskStore.js";
 import { PostgresEventStore } from "./postgresEventStore.js";
 import { PostgresRepositoryStore } from "./postgresRepositoryStore.js";
+import { PostgresProblemStore } from "./postgresProblemStore.js";
 import { PostgresRunStore } from "./postgresRunStore.js";
 import { PostgresTaskStore } from "./postgresTaskStore.js";
 import type { RepositoryStore } from "./repositoryStore.js";
 import type { RunStore } from "./runStore.js";
 import type { TaskStore } from "./taskStore.js";
 import type { EventStore } from "./eventStore.js";
+import type { ProblemStore } from "./problemStore.js";
 
 export type { RepositoryStore } from "./repositoryStore.js";
 export type { TaskStore } from "./taskStore.js";
 export type { RunStore } from "./runStore.js";
 export type { EventStore } from "./eventStore.js";
+export type { ProblemStore } from "./problemStore.js";
 export type { Repository } from "../domain/repository.js";
 export type { Task, TaskStatus } from "../domain/task.js";
 export type { Run, RunStatus } from "../domain/run.js";
 export type { EventRecord } from "../domain/event.js";
+export type {
+  Problem,
+  ProblemStatus,
+  Clarification,
+  ClarificationType,
+} from "../domain/problem.js";
 
 export interface StoreHandle {
   repositories: RepositoryStore;
   tasks: TaskStore;
   runs: RunStore;
   events: EventStore;
+  problems: ProblemStore;
   close(): Promise<void>;
 }
 
@@ -42,6 +53,7 @@ export async function openStores(): Promise<StoreHandle> {
       tasks: new InMemoryTaskStore(),
       runs: new InMemoryRunStore(),
       events: new InMemoryEventStore(),
+      problems: new InMemoryProblemStore(),
       close: async () => {},
     };
   }
@@ -55,6 +67,7 @@ export async function openStores(): Promise<StoreHandle> {
     tasks: new PostgresTaskStore(pool),
     runs: new PostgresRunStore(pool),
     events: new PostgresEventStore(pool),
+    problems: new PostgresProblemStore(pool),
     close: async () => {
       await pool.end();
     },

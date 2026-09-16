@@ -50,3 +50,21 @@ export class RunConflictError extends HarnessError {
 }
 
 export class WorkerExecutionError extends HarnessError {}
+
+export class DuplicateProblemError extends HarnessError {
+  constructor(id: string) {
+    super(`problem already exists: ${id}`);
+  }
+}
+
+export class ProblemNotFoundError extends HarnessError {
+  constructor(id: string) {
+    super(`problem not found: ${id}`);
+  }
+}
+
+export class ClarificationNotFoundError extends HarnessError {
+  constructor(id: string) {
+    super(`clarification not found: ${id}`);
+  }
+}

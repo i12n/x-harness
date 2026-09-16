@@ -18,6 +18,7 @@ import { PostgresRepositoryStore } from "../src/store/postgresRepositoryStore.js
 import { PostgresRunStore } from "../src/store/postgresRunStore.js";
 import { PostgresTaskStore } from "../src/store/postgresTaskStore.js";
 import { PostgresEventStore } from "../src/store/postgresEventStore.js";
+import { PostgresProblemStore } from "../src/store/postgresProblemStore.js";
 import { Verifier } from "../src/verification/runner.js";
 import { Worker } from "../src/worker/worker.js";
 import { WorkspaceManager } from "../src/workspace/manager.js";
@@ -48,7 +49,9 @@ describePostgres("PostgreSQL integration", () => {
     for (const cleanup of cleanups.splice(0)) {
       cleanup();
     }
-    await pool?.query("DELETE FROM events; DELETE FROM workspaces; DELETE FROM runs; DELETE FROM tasks; DELETE FROM repositories;");
+    await pool?.query(
+      "DELETE FROM clarification_answers; DELETE FROM clarifications; DELETE FROM problem_analyses; DELETE FROM problems; DELETE FROM events; DELETE FROM workspaces; DELETE FROM runs; DELETE FROM tasks; DELETE FROM repositories;",
+    );
   });
 
   afterAll(async () => {
@@ -135,5 +138,59 @@ describePostgres("PostgreSQL integration", () => {
     await inMemoryEvents.record({ type: "TaskDone", taskId: "task-001" });
     expect(done.status).toBe("DONE");
     expect((await inMemoryEvents.listEvents()).map((e) => e.type)).toEqual(["TaskDone"]);
+  });
+
+  it("persists the problem confirmation data", async () => {
+    const repositories = new PostgresRepositoryStore(pool!);
+    const problems = new PostgresProblemStore(pool!);
+    await repositories.createRepository({
+      id: "repo-001",
+      name: "my-app",
+      url: "git@github.com:example/my-app.git",
+      localPath: "/tmp/repos/my-app",
+    });
+
+    const problem = await problems.createProblem({
+      id: "prob-001",
+      repositoryId: "repo-001",
+      title: "登录刷新后掉线",
+      statement: "登录成功后，刷新页面变成未登录。",
+    });
+    expect(problem.status).toBe("INBOX");
+
+    await problems.addAnalysis({
+      problemId: "prob-001",
+      summary: "需要确认影响范围",
+      uncertainties: ["影响范围"],
+      needsInput: true,
+    });
+    const clarification = await problems.createClarification({
+      id: "clar-001",
+      problemId: "prob-001",
+      question: "是所有用户都会发生吗？",
+      type: "fact",
+      options: [
+        { id: "all_users", label: "所有用户" },
+        { id: "some_users", label: "部分用户" },
+      ],
+      reason: "决定是环境问题还是代码问题",
+    });
+    expect(clarification.status).toBe("OPEN");
+
+    const answered = await problems.answerClarification("clar-001", {
+      optionId: "all_users",
+    });
+    expect(answered.status).toBe("ANSWERED");
+    expect(answered.answer?.optionId).toBe("all_users");
+
+    const confirmed = await problems.setProblemSpec("prob-001", {
+      problem: "刷新后登录状态丢失",
+      expected: "刷新后仍保持登录",
+      scope: "所有用户",
+    });
+    expect(confirmed.confirmedSpec?.expected).toBe("刷新后仍保持登录");
+    expect((await problems.listClarifications("prob-001"))[0]?.answer?.optionId).toBe(
+      "all_users",
+    );
   });
 });
