@@ -87,6 +87,32 @@
   - 数据隔离：target 的 check/output/workdir 只出现在自己的 section 中
 - 下一步：TASK-1106 Intent → Command
 
+- TASK-1106 ✅ Intent → Command（离线，2026-09-19）：
+  - `src/command/`：`types` / `schema` / `validation` / `authorization` /
+    `idempotency` / `dispatcher` / `engine` / `index`
+  - Command 目录（9 个）：problem.create|confirm、task.show|run、
+    run.show|cancel、review.show|approve|request_changes；每个都有显式
+    payload schema 与允许角色
+  - 严格校验：未知 command / payload 类型错误 / 缺字段 / 未知字段 /
+    不支持的 version 一律 `rejected`（不进 Application）
+  - Authorization 在 Harness 内（Dispatcher 中）执行：guest 可查询类命令，
+    developer+ 可执行类，review.approve / request_changes 需要 reviewer/admin
+  - Command 幂等：Dispatcher 层 `idempotencyKey` 去重，重放返回第一次结果
+    （`replayed: true`）；task.run / review.approve 不会二次执行
+  - Dispatcher 只做显式 handler map 路由，禁止动态方法调用；handler 异常
+    转成 `CommandResult(failed)`
+  - Intent：`IntentEngine` 接口 + `ScriptedIntentEngine`（离线）；
+    `handleIntent()` 把 message 的 channel/sender/conversation/messageId
+    注入为**可信字段**（引擎伪造的 actor/idempotencyKey 被忽略）；
+    引擎无法绕过 Authorization
+  - 边界守卫：`src/command/**` 不 import channel/store/worker/loop/
+    execution/workspace/agent/verification/problem；Intent Engine 只能产出
+    Command，永远拿不到内部能力
+  - 未做（按边界）：真实 LLM / Function Calling / MCP / Feishu 部署 /
+    审批或 Merge 业务实现
+- 下一步：TASK-1107 Problem Confirmation 接入（Conversation → Command →
+  Problem）
+
 ## 1. 定位
 
 ```text

@@ -42,6 +42,17 @@ describe("Channel boundary (TASK-1101)", () => {
     }
   });
 
+  it("the command layer never imports transports or Harness internals", () => {
+    const forbidden =
+      /from\s+"\.\.\/(channel|store|worker|loop|scheduler|verification|execution|workspace|agent|problem|config)\//;
+    for (const file of filesUnder(join(SRC, "command"))) {
+      const source = readFileSync(file, "utf8");
+      expect(source, `${file} must stay free of transports/internals`).not.toMatch(
+        forbidden,
+      );
+    }
+  });
+
   it("the Harness core never imports channels", () => {
     const coreDirs = [
       "domain",
