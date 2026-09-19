@@ -75,6 +75,9 @@ Implemented in TypeScript (Node >= 18, ESM). The full plan lives in
   runnable 查询，依赖不占并发额度；迁移 011 保证每 Task 至多一个 active Run）
   、TASK-1205 Delivery / Release Model（迁移 012：Delivery 按 required Task
   状态聚合、每次读取重算，Release 只是人工记录；`ai delivery show|release`）
+  、TASK-1206 Delivery Reconciliation Loop（`Loop.tick()` 调度前后各做一次
+  Delivery 聚合，只在 READY_FOR_RELEASE / BLOCKED 迁移时通过 DeliveryNotifier
+  通知，绝不自动 release）
   已完成 —— 见
   [docs/engineering-delivery-loop.md](docs/engineering-delivery-loop.md)。
 

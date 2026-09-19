@@ -5,7 +5,7 @@
 > TASK-1201（Specification Model）、TASK-1202（Specification → Task
 > Planning）、TASK-1203（Task Dependency / DAG）、TASK-1204
 > （Dependency-aware Scheduler）、TASK-1205（Delivery / Release Model）
-> 已实现；TASK-1206 起尚未开始。
+> 、TASK-1206（Delivery Reconciliation Loop）已实现；TASK-1207 起尚未开始。
 
 ## 目标链路
 
@@ -25,8 +25,8 @@ TASK-1202  Specification → Task Planning            ✅ 完成
 TASK-1203  Task Dependency / DAG                    ✅ 完成
 TASK-1204  Dependency-aware Scheduler               ✅ 完成
 TASK-1205  Delivery / Release Model                 ✅ 完成
-TASK-1206  Delivery Loop                            ← 当前
-TASK-1207  Failure / Retry / Recovery Hardening
+TASK-1206  Delivery Loop                            ✅ 完成
+TASK-1207  Failure / Retry / Recovery Hardening     ← 当前
 TASK-1208  Phase 12 Generic E2E Acceptance
 ```
 
@@ -122,8 +122,8 @@ TASK-1202  Specification → Task Planning       ✅ 实现完成（迁移 009 +
 TASK-1203  Task Dependency / DAG               ✅ 实现完成（迁移 010 + Service + E2E）
 TASK-1204  Dependency-aware Scheduler          ✅ 实现完成（迁移 011 + Scheduler + E2E）
 TASK-1205  Delivery / Release Model            ✅ 实现完成（迁移 012 + Command/CLI + E2E）
-TASK-1206  Delivery Loop                       ← 下一步
-TASK-1207  Failure / Retry / Recovery Hardening
+TASK-1206  Delivery Loop                       ✅ 实现完成（Loop 接入 + Notifier + E2E）
+TASK-1207  Failure / Retry / Recovery Hardening ← 下一步
 TASK-1208  Phase 12 Generic E2E Acceptance
 ```
 
@@ -358,3 +358,45 @@ DB 兜底：READY_FOR_RELEASE → RELEASED 用 compare-and-set 抢占；
 `UNIQUE(specification_id)`）。
 
 刻意未做：GitHub/GitLab/PR/Merge/Push/Deploy/CI-CD/自动发布/回滚/版本化发布流水线。
+
+## TASK-1206 Delivery Reconciliation Loop（已完成）
+
+```text
+Loop.tick()
+├── recover expired runs / consume cancel requests
+├── reconcile deliveries        ← 观察外部/恢复带来的 Task 变化
+├── schedule tasks               ← DAG-aware（1204）
+├── execute queued runs
+└── reconcile deliveries        ← 同 tick 内 Run 完成 → Task DONE 也能被看到
+   （两次调用合并成一份 report；幂等所以不会重复事件）
+```
+
+实现：
+
+```text
+src/delivery/application/service.ts      # reconcile / reconcileAll（唯一聚合权威）
+src/delivery/application/notifier.ts     # DeliveryNotifier + Noop/Recording
+src/delivery/application/reconciler.ts   # DeliveryReconciler（聚合 → 变更 → 通知）
+src/loop/loop.ts                         # DeliveryReconcilerPort + TickReport 字段
+src/cli/index.ts                         # ai loop 注入 reconciler（CLI notifier）
+```
+
+语义：
+
+```text
+聚合规则只有一处权威实现（DeliveryService），Loop/Reconciler 不复制规则
+只有真正发生状态迁移才产生 Event 与通知：
+  IN_PROGRESS → READY_FOR_RELEASE → 通知（delivery.ready_for_release）
+  → BLOCKED                       → 通知（delivery.blocked）
+  created / in_progress / release.* → 只记录，不通知
+RELEASED 不被聚合覆盖（Release 是人工记录）
+通知失败：记录在 TickReport.deliveryNotificationFailures，
+          **不回滚** 已持久化的状态迁移；失败的通知进入 pending，
+          下一次 reconcile 重试（只重发消息，不重复状态迁移 Event）
+```
+
+`TickReport` 新增：`deliveryTransitions` / `deliveryNotifications` /
+`deliveryNotificationFailures`；`ai loop --once` 输出对应计数。
+
+刻意未做：自动 release、自动 merge/deploy、修改 Scheduler/Worker 语义、
+创建 Task/Run、修改 Task 状态、Notification Queue（失败重试只在内存 pending 中）。

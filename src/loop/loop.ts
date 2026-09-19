@@ -25,11 +25,32 @@ export interface LoopOptions {
   executionManager?: ExecutionManager;
   repositories?: RepositoryStore;
   workspaceManager?: WorkspaceManager;
+  /**
+   * TASK-1206: delivery reconciliation. Optional so existing deployments (and
+   * tests) keep the pre-1206 tick; the port keeps Loop free of delivery
+   * internals — aggregation stays in DeliveryService.
+   */
+  deliveryReconciler?: DeliveryReconcilerPort;
+}
+
+export interface DeliveryReconcileReportLike {
+  transitions: { delivery: { id: string }; previousStatus: string; status: string }[];
+  notified: number;
+  notificationFailures: { deliveryId: string; status: string; reason: string }[];
+  pendingNotifications: number;
+}
+
+export interface DeliveryReconcilerPort {
+  reconcileAll(): Promise<DeliveryReconcileReportLike>;
 }
 
 export interface TickReport {
   recovered: Run[];
   cancelled: Run[];
+  /** TASK-1206: delivery transitions observed during this tick. */
+  deliveryTransitions: DeliveryReconcileReportLike["transitions"];
+  deliveryNotifications: number;
+  deliveryNotificationFailures: DeliveryReconcileReportLike["notificationFailures"];
   scheduled: Run[];
   executed: Run[];
   cleanupRetries: number;
@@ -51,6 +72,7 @@ export class Loop {
   private readonly executionManager: ExecutionManager | undefined;
   private readonly repositories: RepositoryStore | undefined;
   private readonly workspaceManager: WorkspaceManager | undefined;
+  private readonly deliveryReconciler: DeliveryReconcilerPort | undefined;
 
   constructor(options: LoopOptions) {
     this.scheduler = options.scheduler;
@@ -65,6 +87,7 @@ export class Loop {
     this.executionManager = options.executionManager;
     this.repositories = options.repositories;
     this.workspaceManager = options.workspaceManager;
+    this.deliveryReconciler = options.deliveryReconciler;
   }
 
   async start(intervalMs = 1_000): Promise<void> {
@@ -86,9 +109,37 @@ export class Loop {
     const recovered = await this.recoverExpiredRuns();
     const cancelled = await this.reconcileCancelRequests();
     const cleanupRetries = await this.retryFailedCleanups();
+    // Reconcile after Task state changed (recovery/cancel above) and before
+    // scheduling picks up new work…
+    let deliveries = await this.reconcileDeliveries();
     const scheduled = await this.scheduler.schedule();
     const executed = await this.executeQueued();
-    return { recovered, cancelled, scheduled, executed, cleanupRetries };
+    // …and again after execution: a Run that just finished can make a Task
+    // DONE within the same tick, and the Delivery should reflect it.
+    const afterExecution = await this.reconcileDeliveries();
+    deliveries = mergeDeliveryReports(deliveries, afterExecution);
+    return {
+      recovered,
+      cancelled,
+      deliveryTransitions: deliveries.transitions,
+      deliveryNotifications: deliveries.notified,
+      deliveryNotificationFailures: deliveries.notificationFailures,
+      scheduled,
+      executed,
+      cleanupRetries,
+    };
+  }
+
+  private async reconcileDeliveries(): Promise<DeliveryReconcileReportLike> {
+    if (!this.deliveryReconciler) {
+      return {
+        transitions: [],
+        notified: 0,
+        notificationFailures: [],
+        pendingNotifications: 0,
+      };
+    }
+    return this.deliveryReconciler.reconcileAll();
   }
 
   /**
@@ -344,4 +395,24 @@ export class Loop {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** Two delivery passes run per tick; the report merges both (by delivery id). */
+function mergeDeliveryReports(
+  first: DeliveryReconcileReportLike,
+  second: DeliveryReconcileReportLike,
+): DeliveryReconcileReportLike {
+  const transitions = new Map<string, DeliveryReconcileReportLike["transitions"][number]>();
+  for (const transition of [...first.transitions, ...second.transitions]) {
+    transitions.set(transition.delivery.id, transition);
+  }
+  return {
+    transitions: [...transitions.values()],
+    notified: first.notified + second.notified,
+    notificationFailures: [
+      ...first.notificationFailures,
+      ...second.notificationFailures,
+    ],
+    pendingNotifications: second.pendingNotifications,
+  };
 }

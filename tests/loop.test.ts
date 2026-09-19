@@ -135,7 +135,7 @@ describe("Loop", () => {
       maxConcurrency: 2,
       eventStore: events,
     });
-    return { tasks, runs, events, loop };
+    return { tasks, runs, events, loop, scheduler, worker };
   }
 
   it("schedules, executes, verifies and moves a task to REVIEW in one tick", async () => {
@@ -145,9 +145,57 @@ describe("Loop", () => {
 
     expect(report.scheduled).toHaveLength(1);
     expect(report.executed).toHaveLength(1);
+    // TASK-1206: without a delivery reconciler the tick is unchanged.
+    expect(report.deliveryTransitions).toEqual([]);
+    expect(report.deliveryNotifications).toBe(0);
+    expect(report.deliveryNotificationFailures).toEqual([]);
     expect((await tasks.findTask("task-001")).status).toBe("REVIEW");
     const created = await runs.listRuns({ taskId: "task-001" });
     expect(created[0]?.status).toBe("SUCCEEDED");
+  });
+
+  it("runs delivery reconciliation twice per tick and reports transitions (TASK-1206)", async () => {
+    const { tasks, runs, events, scheduler, worker } = await setup(WRITE_CODE);
+    let calls = 0;
+    const loop = new Loop({
+      scheduler,
+      worker,
+      runStore: runs,
+      taskStore: tasks,
+      maxConcurrency: 2,
+      eventStore: events,
+      deliveryReconciler: {
+        reconcileAll: async () => {
+          calls += 1;
+          // The second pass sees no transition, exactly like the real one.
+          const first = calls === 1;
+          return {
+            transitions: first
+              ? [
+                  {
+                    delivery: { id: "dlv-001" },
+                    previousStatus: "IN_PROGRESS",
+                    status: "READY_FOR_RELEASE",
+                  },
+                ]
+              : [],
+            notified: first ? 1 : 0,
+            notificationFailures: [],
+            pendingNotifications: 0,
+          };
+        },
+      },
+    });
+
+    const report = await loop.tick();
+
+    // Once before scheduling, once after execution (same-tick detection).
+    expect(calls).toBe(2);
+    expect(report.deliveryTransitions.map((entry) => entry.delivery.id)).toEqual([
+      "dlv-001",
+    ]);
+    expect(report.deliveryNotifications).toBe(1);
+    expect(report.deliveryNotificationFailures).toEqual([]);
   });
 
   it("retries failed runs until the task is BLOCKED at max attempts", async () => {

@@ -71,6 +71,7 @@ import type { SpecificationPlanView } from "./specificationOutput.js";
 import { PlanningService } from "../specification/application/planning.js";
 import { DeterministicTaskPlanner } from "../specification/application/planner.js";
 import { DeliveryService } from "../delivery/application/service.js";
+import { DeliveryReconciler } from "../delivery/application/reconciler.js";
 import { formatDeliveryView, type DeliveryViewLike } from "./deliveryOutput.js";
 import { TaskDependencyService } from "../task/application/dependencyService.js";
 import { makeId } from "../util/id.js";
@@ -726,13 +727,22 @@ program
       executionManager,
       repositories: handle.repositories,
       workspaceManager,
+      // TASK-1206: observe delivery transitions and notify; never releases.
+      deliveryReconciler: new DeliveryReconciler({
+        deliveries: deliveryService(handle),
+        notifier: { notify: (notification) => cliChannel.send(notification.message) },
+      }),
     });
 
     if (options.once) {
       try {
         const report = await loop.tick();
         console.log(
-          `recovered=${report.recovered.length} scheduled=${report.scheduled.length} executed=${report.executed.length}`,
+          `recovered=${report.recovered.length} scheduled=${report.scheduled.length} executed=${report.executed.length} ` +
+            `deliveryTransitions=${report.deliveryTransitions.length} deliveryNotifications=${report.deliveryNotifications}` +
+            (report.deliveryNotificationFailures.length > 0
+              ? ` deliveryNotificationFailures=${report.deliveryNotificationFailures.length}`
+              : ""),
         );
       } finally {
         await handle.close();

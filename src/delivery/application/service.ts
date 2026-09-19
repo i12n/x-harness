@@ -48,6 +48,13 @@ export interface ReleaseOutcome {
   created: boolean;
 }
 
+/** One observed aggregate transition (TASK-1206 reconciler input). */
+export interface DeliveryTransition {
+  delivery: Delivery;
+  previousStatus: DeliveryStatus;
+  status: DeliveryStatus;
+}
+
 /**
  * TASK-1205: Delivery aggregation + Release records.
  *
@@ -88,19 +95,55 @@ export class DeliveryService {
 
   /** Recompute the aggregate from current Task facts and persist transitions. */
   async refresh(deliveryId: string): Promise<DeliveryView> {
+    const { view } = await this.aggregate(deliveryId);
+    return view;
+  }
+
+  /**
+   * TASK-1206: one reconciliation pass for a Delivery. Returns the transition
+   * when the aggregate moved, otherwise `undefined` (no event, no side effect).
+   */
+  async reconcile(deliveryId: string): Promise<DeliveryTransition | undefined> {
+    const { transition } = await this.aggregate(deliveryId);
+    return transition;
+  }
+
+  /** Reconciliation over every Delivery (the loop's entry point). */
+  async reconcileAll(): Promise<DeliveryTransition[]> {
+    const deliveries = await this.deps.deliveries.listDeliveries();
+    const transitions: DeliveryTransition[] = [];
+    for (const delivery of deliveries) {
+      const transition = await this.reconcile(delivery.id);
+      if (transition) {
+        transitions.push(transition);
+      }
+    }
+    return transitions;
+  }
+
+  private async aggregate(
+    deliveryId: string,
+  ): Promise<{ view: DeliveryView; transition?: DeliveryTransition }> {
     const view = await this.load(deliveryId);
     const computed = aggregateDeliveryStatus(view.tasks);
     const current = view.delivery.status;
     // RELEASED is a human action, not an aggregate: it stays until superseded.
     if (current === "RELEASED" || current === computed) {
-      return view;
+      return { view };
     }
     const updated = await this.deps.deliveries.updateDeliveryStatus(
       deliveryId,
       computed,
     );
     await this.emitTransition(updated, computed, view.blocking);
-    return { ...view, delivery: updated };
+    return {
+      view: { ...view, delivery: updated },
+      transition: {
+        delivery: updated,
+        previousStatus: current,
+        status: computed,
+      },
+    };
   }
 
   /** Aggregated, freshly computed view (never mutates Tasks). */
