@@ -49,6 +49,13 @@ export class RunConflictError extends HarnessError {
   }
 }
 
+export class RunNotCancellableError extends HarnessError {
+  constructor(id: string, status: string) {
+    super(`run ${id} is not cancellable (status is ${status})`);
+    this.name = "RunNotCancellableError";
+  }
+}
+
 export class WorkerExecutionError extends HarnessError {}
 
 export class DuplicateProblemError extends HarnessError {

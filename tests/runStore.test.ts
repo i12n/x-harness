@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { RunConflictError, RunNotFoundError } from "../src/errors.js";
+import {
+  RunConflictError,
+  RunNotCancellableError,
+  RunNotFoundError,
+} from "../src/errors.js";
 import { InMemoryRunStore } from "../src/store/inMemoryRunStore.js";
 
 describe("InMemoryRunStore", () => {
@@ -75,5 +79,47 @@ describe("InMemoryRunStore", () => {
       { id: "run-003" },
     ]);
     await expect(store.findRun("run-missing")).rejects.toBeInstanceOf(RunNotFoundError);
+  });
+
+  describe("cancel requests (TASK-1108)", () => {
+    it("persists a request once and is idempotent", async () => {
+      const store = new InMemoryRunStore();
+      await store.createRun({
+        id: "run-001",
+        taskId: "task-001",
+        attempt: 1,
+        agent: "codex",
+        engine: "codex",
+      });
+      await store.claimRun("run-001", "worker-1", "2099-01-01T00:00:00.000Z");
+      await store.markRunning("run-001");
+
+      const first = await store.requestCancel("run-001", "feishu:ou_1");
+      const second = await store.requestCancel("run-001", "feishu:ou_2");
+
+      expect(first.status).toBe("RUNNING");
+      expect(first.cancelRequestedAt).toBeDefined();
+      expect(second.cancelRequestedBy).toBe("feishu:ou_1");
+      await expect(store.listRuns({ cancelRequested: true })).resolves.toHaveLength(1);
+      await expect(store.listRuns({ cancelRequested: false })).resolves.toHaveLength(0);
+    });
+
+    it("rejects cancelling a terminal run", async () => {
+      const store = new InMemoryRunStore();
+      await store.createRun({
+        id: "run-001",
+        taskId: "task-001",
+        attempt: 1,
+        agent: "codex",
+        engine: "codex",
+      });
+      await store.claimRun("run-001", "worker-1", "2099-01-01T00:00:00.000Z");
+      await store.markRunning("run-001");
+      await store.completeRun("run-001", { status: "SUCCEEDED", exitCode: 0 });
+
+      await expect(
+        store.requestCancel("run-001", "feishu:ou_1"),
+      ).rejects.toBeInstanceOf(RunNotCancellableError);
+    });
   });
 });

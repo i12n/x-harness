@@ -1,7 +1,11 @@
 import { Pool } from "pg";
 import { buildRun } from "../domain/run.js";
 import type { CreateRunInput, Run, RunStatus } from "../domain/run.js";
-import { RunConflictError, RunNotFoundError } from "../errors.js";
+import {
+  RunConflictError,
+  RunNotCancellableError,
+  RunNotFoundError,
+} from "../errors.js";
 import type { CompleteRunInput, RunListFilter, RunStore } from "./runStore.js";
 
 interface RunRow {
@@ -18,8 +22,12 @@ interface RunRow {
   exit_code: number | null;
   result: unknown;
   error: unknown;
+  cancel_requested_at: Date | string | null;
+  cancel_requested_by: string | null;
   created_at: Date | string;
 }
+
+const TERMINAL_STATUSES = ["SUCCEEDED", "FAILED", "TIMED_OUT", "CANCELLED", "LOST"];
 
 const INSERT_COLUMNS = `
   id, task_id, status, attempt, agent, engine,
@@ -60,6 +68,13 @@ export class PostgresRunStore implements RunStore {
     if (filter.statuses !== undefined && filter.statuses.length > 0) {
       params.push(filter.statuses);
       conditions.push(`status = ANY($${params.length})`);
+    }
+    if (filter.cancelRequested !== undefined) {
+      conditions.push(
+        filter.cancelRequested
+          ? "cancel_requested_at IS NOT NULL"
+          : "cancel_requested_at IS NULL",
+      );
     }
     const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
     const { rows } = await this.pool.query<RunRow>(
@@ -121,6 +136,26 @@ export class PostgresRunStore implements RunStore {
     return rowToRun(requireRow(rows, `touchLease(${id})`));
   }
 
+  async requestCancel(id: string, requestedBy: string): Promise<Run> {
+    const { rows } = await this.pool.query<RunRow>(
+      `UPDATE runs
+       SET cancel_requested_at = COALESCE(cancel_requested_at, $1),
+           cancel_requested_by = COALESCE(cancel_requested_by, $2)
+       WHERE id = $3 AND status <> ALL($4)
+       RETURNING *`,
+      [new Date().toISOString(), requestedBy, id, TERMINAL_STATUSES],
+    );
+    const row = rows[0];
+    if (row) {
+      return rowToRun(row);
+    }
+    const current = await this.findOptional(id);
+    if (!current) {
+      throw new RunNotFoundError(id);
+    }
+    throw new RunNotCancellableError(id, current.status);
+  }
+
   async completeRun(id: string, input: CompleteRunInput): Promise<Run> {
     const { rows } = await this.pool.query<RunRow>(
       `UPDATE runs
@@ -170,6 +205,8 @@ function rowToRun(row: RunRow): Run {
     exitCode: row.exit_code,
     result: parseJson(row.result),
     error: parseJson(row.error),
+    cancelRequestedAt: row.cancel_requested_at ? toIso(row.cancel_requested_at) : undefined,
+    cancelRequestedBy: row.cancel_requested_by ?? undefined,
     createdAt: toIso(row.created_at),
   };
 }

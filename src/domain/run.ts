@@ -37,6 +37,9 @@ export interface Run {
   exitCode?: number | null;
   result?: unknown;
   error?: unknown;
+  /** Persisted cancellation intent (control plane), not a RunStatus. */
+  cancelRequestedAt?: string;
+  cancelRequestedBy?: string;
   createdAt: string;
 }
 
@@ -55,6 +58,16 @@ export function isRunStatus(value: unknown): value is RunStatus {
 
 export function isActiveRunStatus(status: RunStatus): boolean {
   return (ACTIVE_RUN_STATUSES as readonly RunStatus[]).includes(status);
+}
+
+export function isTerminalRunStatus(status: RunStatus): boolean {
+  return (
+    status === "SUCCEEDED" ||
+    status === "FAILED" ||
+    status === "TIMED_OUT" ||
+    status === "CANCELLED" ||
+    status === "LOST"
+  );
 }
 
 /** Build a Run with QUEUED status and generated id by default. */

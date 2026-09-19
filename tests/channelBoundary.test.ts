@@ -58,6 +58,18 @@ describe("Channel boundary (TASK-1101)", () => {
     }
   });
 
+  it("command handlers go through application services only", () => {
+    for (const file of filesUnder(join(SRC, "command", "handlers"))) {
+      const source = readFileSync(file, "utf8");
+      expect(source, `${file} must not touch execution/workspace/worker`).not.toMatch(
+        /from\s+"[^"]*\/(execution|workspace|sandbox|worker)\//,
+      );
+      expect(source, `${file} must not touch stores directly`).not.toMatch(
+        /from\s+"[^"]*\/store\//,
+      );
+    }
+  });
+
   it("the Harness core never imports channels", () => {
     const coreDirs = [
       "domain",

@@ -1,6 +1,7 @@
-import { buildRun } from "../domain/run.js";
+import { buildRun, isTerminalRunStatus } from "../domain/run.js";
 import type { CreateRunInput, Run, RunStatus } from "../domain/run.js";
 import { RunConflictError, RunNotFoundError } from "../errors.js";
+import { RunNotCancellableError } from "../errors.js";
 import type { CompleteRunInput, RunListFilter, RunStore } from "./runStore.js";
 
 /** Non-persistent run store, used by tests and memory-mode demos. */
@@ -28,7 +29,11 @@ export class InMemoryRunStore implements RunStore {
           (filter.taskId === undefined || run.taskId === filter.taskId) &&
           (filter.statuses === undefined ||
             filter.statuses.length === 0 ||
-            filter.statuses.includes(run.status)),
+            filter.statuses.includes(run.status)) &&
+          (filter.cancelRequested === undefined ||
+            (filter.cancelRequested
+              ? Boolean(run.cancelRequestedAt)
+              : !run.cancelRequestedAt)),
       )
       .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
   }
@@ -54,6 +59,21 @@ export class InMemoryRunStore implements RunStore {
   async touchLease(id: string, leaseUntil: string): Promise<Run> {
     const current = await this.findRun(id);
     return this.replace(id, { ...current, leaseUntil });
+  }
+
+  async requestCancel(id: string, requestedBy: string): Promise<Run> {
+    const current = await this.findRun(id);
+    if (isTerminalRunStatus(current.status)) {
+      throw new RunNotCancellableError(id, current.status);
+    }
+    if (current.cancelRequestedAt) {
+      return current;
+    }
+    return this.replace(id, {
+      ...current,
+      cancelRequestedAt: new Date().toISOString(),
+      cancelRequestedBy: requestedBy,
+    });
   }
 
   async completeRun(id: string, input: CompleteRunInput): Promise<Run> {

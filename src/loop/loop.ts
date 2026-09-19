@@ -1,5 +1,6 @@
 import { existsSync } from "node:fs";
 import type { Run } from "../domain/run.js";
+import { isTerminalRunStatus } from "../domain/run.js";
 import type { TaskStatus } from "../domain/task.js";
 import type { ExecutionManager } from "../execution/manager.js";
 import type { ExecutionMount } from "../execution/mounts.js";
@@ -28,6 +29,7 @@ export interface LoopOptions {
 
 export interface TickReport {
   recovered: Run[];
+  cancelled: Run[];
   scheduled: Run[];
   executed: Run[];
   cleanupRetries: number;
@@ -82,10 +84,54 @@ export class Loop {
 
   async tick(): Promise<TickReport> {
     const recovered = await this.recoverExpiredRuns();
+    const cancelled = await this.reconcileCancelRequests();
     const cleanupRetries = await this.retryFailedCleanups();
     const scheduled = await this.scheduler.schedule();
     const executed = await this.executeQueued();
-    return { recovered, scheduled, executed, cleanupRetries };
+    return { recovered, cancelled, scheduled, executed, cleanupRetries };
+  }
+
+  /**
+   * TASK-1108: consume persisted cancel requests (possibly written by another
+   * process). QUEUED runs finish immediately; active runs get their execution
+   * and workspaces reclaimed before the Run becomes CANCELLED.
+   */
+  private async reconcileCancelRequests(): Promise<Run[]> {
+    const pending = await this.runStore.listRuns({ cancelRequested: true });
+    const cancelled: Run[] = [];
+    for (const run of pending) {
+      if (isTerminalRunStatus(run.status)) {
+        continue;
+      }
+      if (run.status === "QUEUED") {
+        const terminal = await this.runStore.completeRun(run.id, {
+          status: "CANCELLED",
+          result: { reason: "cancel requested before start" },
+          finishedAt: new Date().toISOString(),
+        });
+        await this.releaseTask(terminal);
+        await this.emit("run.cancelled", terminal, {
+          reason: "cancel requested before start",
+        });
+        cancelled.push(terminal);
+        continue;
+      }
+      const record = await this.reclaimExecution(
+        run.id,
+        "CANCELLED",
+        "cancel requested",
+      );
+      await this.recoverWorkspaces(run, record?.mounts);
+      const terminal = await this.runStore.completeRun(run.id, {
+        status: "CANCELLED",
+        result: { reason: "cancel requested" },
+        finishedAt: new Date().toISOString(),
+      });
+      await this.releaseTask(terminal);
+      await this.emit("run.cancelled", terminal, { reason: "cancel requested" });
+      cancelled.push(terminal);
+    }
+    return cancelled;
   }
 
   /** Recover runs whose lease expired: mark LOST and release the task. */
@@ -113,20 +159,50 @@ export class Loop {
         }
       }
       const task = await this.taskStore.findTask(run.taskId);
-      const nextStatus: TaskStatus = run.attempt >= task.maxAttempts ? "BLOCKED" : "READY";
-      await this.taskStore.updateTaskStatus(task.id, nextStatus);
+      await this.releaseTask(lost, task);
       recovered.push(lost);
-      const record = await this.recoverExecution(run.id);
+      const record = await this.reclaimExecution(run.id, "LOST", "lease expired");
       await this.recoverWorkspaces(lost, record?.mounts);
     }
     return recovered;
+  }
+
+  /** Terminal run → release the task (retry while attempts remain). */
+  private async releaseTask(run: Run, knownTask?: Awaited<ReturnType<TaskStore["findTask"]>>): Promise<void> {
+    const task = knownTask ?? (await this.taskStore.findTask(run.taskId));
+    const nextStatus: TaskStatus = run.attempt >= task.maxAttempts ? "BLOCKED" : "READY";
+    await this.taskStore.updateTaskStatus(task.id, nextStatus);
+  }
+
+  private async emit(
+    type: string,
+    run: Run,
+    payload: Record<string, unknown>,
+  ): Promise<void> {
+    if (!this.events) {
+      return;
+    }
+    try {
+      await this.events.record({
+        type,
+        taskId: run.taskId,
+        runId: run.id,
+        payload,
+      });
+    } catch {
+      // History must never break recovery.
+    }
   }
 
   /**
    * Worker crash recovery: the lease expiry makes the Run LOST, and the
    * persisted execution record makes the container/worktree reclaimable.
    */
-  private async recoverExecution(runId: string): Promise<
+  private async reclaimExecution(
+    runId: string,
+    status: "LOST" | "CANCELLED",
+    reason: string,
+  ): Promise<
     Awaited<ReturnType<ExecutionStore["findLatestByRunId"]>>
   > {
     if (!this.executions || !this.executionManager) {
@@ -136,7 +212,7 @@ export class Loop {
     if (!record || record.status === "CLEANED") {
       return record;
     }
-    await this.executionManager.finish(record, "LOST", "lease expired");
+    await this.executionManager.finish(record, status, reason);
     await this.executionManager.cleanupRecord(record);
     return record;
   }

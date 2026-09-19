@@ -118,7 +118,12 @@ export class Worker {
     let terminalStatus: "TIMED_OUT" | "CANCELLED" | undefined;
     let runWorkspaces: ManagedWorkspace[] = [];
     let runTargets: { target: TaskTarget; repository: Repository }[] = [];
-    const heartbeat = this.startHeartbeat(runId);
+    // Cancellation is a persisted control intent; the heartbeat polls it and
+    // aborts the in-process execution when a request appears.
+    const cancelController = new AbortController();
+    const forwardAbort = (): void => cancelController.abort();
+    options.signal?.addEventListener("abort", forwardAbort, { once: true });
+    const heartbeat = this.startHeartbeat(runId, () => cancelController.abort());
     try {
       const task = await this.taskStore.findTask(claimed.taskId);
       await this.taskStore.updateTaskStatus(task.id, "RUNNING");
@@ -223,7 +228,7 @@ export class Worker {
           workspaces: workspaces.map((workspace) => workspace.path),
         },
       });
-      const agentOutcome = await this.runAgent(runId, context, options.signal);
+      const agentOutcome = await this.runAgent(runId, context, cancelController.signal);
       if (agentOutcome === "TIMED_OUT" || agentOutcome === "CANCELLED") {
         terminalStatus = agentOutcome;
         await this.executionManager.stop(environment);
@@ -385,6 +390,7 @@ export class Worker {
       }
       throw new WorkerExecutionError(`worker failed run ${runId}: ${message}`);
     } finally {
+      options.signal?.removeEventListener("abort", forwardAbort);
       if (environment) {
         try {
           await this.executionManager.cleanup(environment);
@@ -455,11 +461,23 @@ export class Worker {
     await this.taskStore.updateTaskStatus(task.id, next);
   }
 
-  private startHeartbeat(runId: string): NodeJS.Timeout {
+  private startHeartbeat(runId: string, onCancel?: () => void): NodeJS.Timeout {
     return setInterval(() => {
       this.runStore.touchLease(runId, isoIn(this.leaseMs)).catch(() => {
         // A failed heartbeat is surfaced later by lease recovery.
       });
+      if (onCancel) {
+        this.runStore
+          .findRun(runId)
+          .then((run) => {
+            if (run.cancelRequestedAt) {
+              onCancel();
+            }
+          })
+          .catch(() => {
+            // Lease recovery handles vanished runs.
+          });
+      }
     }, this.heartbeatMs);
   }
 

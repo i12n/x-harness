@@ -29,6 +29,7 @@ import {
 import { PostgresProblemStore } from "../src/store/postgresProblemStore.js";
 import { PostgresConversationStore } from "../src/store/postgresConversationStore.js";
 import { buildExecutionProfile } from "../src/domain/executionProfile.js";
+import { RunNotCancellableError } from "../src/errors.js";
 import { Verifier } from "../src/verification/runner.js";
 import { Worker } from "../src/worker/worker.js";
 import { WorkspaceManager } from "../src/workspace/manager.js";
@@ -342,6 +343,47 @@ describePostgres("PostgreSQL integration", () => {
     expect(await conversations.listMessages(first.id, { limit: 1 })).toMatchObject([
       { direction: "OUTBOUND", content: "hi" },
     ]);
+  });
+
+  it("persists run cancel requests (TASK-1108)", async () => {
+    const repositories = new PostgresRepositoryStore(pool!);
+    const tasks = new PostgresTaskStore(pool!);
+    const runs = new PostgresRunStore(pool!);
+    await repositories.createRepository({
+      id: "repo-cancel",
+      name: "app",
+      url: "git@github.com:example/app.git",
+      localPath: "/tmp/repos/app",
+    });
+    await tasks.createTask({
+      id: "task-cancel",
+      repositoryId: "repo-cancel",
+      title: "cancel me",
+      status: "READY",
+    });
+    await runs.createRun({
+      id: "run-cancel",
+      taskId: "task-cancel",
+      attempt: 1,
+      agent: "codex",
+      engine: "codex",
+    });
+    await runs.claimRun("run-cancel", "worker-pg", "2099-01-01T00:00:00.000Z");
+    await runs.markRunning("run-cancel");
+
+    const requested = await runs.requestCancel("run-cancel", "feishu:ou_1");
+    expect(requested.cancelRequestedAt).toBeDefined();
+    expect(requested.cancelRequestedBy).toBe("feishu:ou_1");
+    const retry = await runs.requestCancel("run-cancel", "feishu:ou_2");
+    expect(retry.cancelRequestedBy).toBe("feishu:ou_1");
+    expect(await runs.listRuns({ cancelRequested: true })).toMatchObject([
+      { id: "run-cancel" },
+    ]);
+
+    await runs.completeRun("run-cancel", { status: "CANCELLED" });
+    await expect(
+      runs.requestCancel("run-cancel", "feishu:ou_1"),
+    ).rejects.toBeInstanceOf(RunNotCancellableError);
   });
 
   it("runs the confirmation loop and persists problem events", async () => {

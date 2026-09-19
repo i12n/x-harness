@@ -3,6 +3,8 @@ import type { CreateRunInput, Run, RunStatus } from "../domain/run.js";
 export interface RunListFilter {
   taskId?: string;
   statuses?: RunStatus[];
+  /** true → only runs with a pending cancel request. */
+  cancelRequested?: boolean;
 }
 
 export interface CompleteRunInput {
@@ -26,6 +28,11 @@ export interface RunStore {
   updateRunStatus(id: string, status: RunStatus): Promise<Run>;
   /** Refresh the lease while a worker is alive. */
   touchLease(id: string, leaseUntil: string): Promise<Run>;
+  /**
+   * Persist a cancellation request (idempotent). Terminal runs throw
+   * RunNotCancellableError; the existing request is kept otherwise.
+   */
+  requestCancel(id: string, requestedBy: string): Promise<Run>;
   /** Terminal status + result/error/exit code. */
   completeRun(id: string, input: CompleteRunInput): Promise<Run>;
 }

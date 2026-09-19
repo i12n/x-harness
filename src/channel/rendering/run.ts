@@ -57,6 +57,23 @@ export function renderRunMessage(
   };
 }
 
+/**
+ * TASK-1108: cancellation is a *request*, not a fact — the message must not
+ * claim the run is cancelled while the status is still RUNNING.
+ */
+export function renderRunCancelMessage(run: Run): OutgoingMessage {
+  return {
+    conversationId: run.id,
+    text: `${run.id} cancellation requested.`,
+    blocks: [
+      sectionBlock(
+        run.id,
+        `Cancellation requested. Status: ${run.status} (unchanged until a worker consumes the request).`,
+      ),
+    ],
+  };
+}
+
 function targetTitle(target: RenderedTarget): string {
   return `${statusMark(target.passed)} ${target.repository ?? target.repositoryId} (${
     target.role ?? "supporting"

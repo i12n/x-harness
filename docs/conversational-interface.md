@@ -133,6 +133,26 @@
   - 未做（按边界）：真实 LLM Analyzer、Feishu 部署、Specification
 - 下一步：TASK-1108 Task / Run Operations
 
+- TASK-1108 ✅ Task / Run Operations（离线，2026-09-19）：
+  - 取消语义（控制意图 vs 事实分离，不新增 RunStatus）：
+    `QUEUED` → 同步 `CANCELLED`；`RUNNING/STARTING/VERIFYING` → 持久化
+    `cancel_requested_at/by` + `run.cancel_requested` 事件 → 返回 accepted；
+    terminal → `rejected(run_not_cancellable)`；重复取消幂等（不重复事件）
+  - `migrations/007`：`runs.cancel_requested_at` / `cancel_requested_by` +
+    部分索引；`RunStore.requestCancel` + `listRuns({cancelRequested})`
+  - Worker：心跳轮询取消请求 → AbortSignal → 复用既有取消路径
+    （stop → finish(CANCELLED) → 任务恢复 → 全部 workspace 清理）
+  - Loop：每 tick `reconcileCancelRequests()`（跨进程）：QUEUED 直接取消；
+    活动 Run 先回收 Execution + 全部 workspace 再置 CANCELLED
+  - 应用层：`RunService`（show/cancel）、`TaskRunService`（show/latestRun/run，
+    直接复用已有 Worker 执行，不复制逻辑）
+  - Command handlers：`task.show` / `task.run` / `run.show` / `run.cancel`
+    （显式接线；handler 不 import Worker/Docker/Store —— 有边界测试）
+  - 渲染：`renderRunCancelMessage` 明确"cancellation requested"而非
+    "cancelled"（请求 ≠ 事实）
+  - 未做（按边界）：真实 LLM Intent、Feishu 部署
+- 下一步：TASK-1109 Review / Approval 接入
+
 ## 1. 定位
 
 ```text
