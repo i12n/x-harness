@@ -17,10 +17,26 @@ export interface CreateWorkspaceRequest {
 export interface ManagedWorkspace {
   taskId: string;
   runId: string;
+  /** Present for per-target workspaces (Phase 10); absent for legacy runs. */
+  targetId?: string;
   repositoryLocalPath: string;
   path: string;
   branch: string;
   createdAt: string;
+}
+
+export interface TargetWorkspaceRequest {
+  targetId: string;
+  repositoryLocalPath: string;
+  /** Order follows TaskTarget.position. */
+  position: number;
+  baseRef?: string;
+}
+
+export interface CreateRunWorkspacesRequest {
+  taskId: string;
+  runId: string;
+  targets: TargetWorkspaceRequest[];
 }
 
 export interface WorkspaceManagerOptions {
@@ -57,6 +73,56 @@ export class WorkspaceManager {
       taskId: request.taskId,
       runId: request.runId,
       repositoryLocalPath: request.repositoryLocalPath,
+      path: canonicalPath,
+      branch,
+      createdAt: new Date().toISOString(),
+    };
+  }
+
+  /**
+   * TASK-1005: one workspace per TaskTarget, ordered by position.
+   *
+   *   <base>/<taskId>/<runId>/<targetId>/     branch ai/<task>-<run>-t<position>
+   *
+   * v1 never reuses a workspace: a retry (new Run) gets fresh directories.
+   */
+  async createRunWorkspaces(
+    request: CreateRunWorkspacesRequest,
+  ): Promise<ManagedWorkspace[]> {
+    const ordered = [...request.targets].sort((a, b) => a.position - b.position);
+    const workspaces: ManagedWorkspace[] = [];
+    for (const target of ordered) {
+      workspaces.push(await this.createTargetWorkspace(request.taskId, request.runId, target));
+    }
+    return workspaces;
+  }
+
+  private async createTargetWorkspace(
+    taskId: string,
+    runId: string,
+    target: TargetWorkspaceRequest,
+  ): Promise<ManagedWorkspace> {
+    const path = resolve(
+      this.baseDir,
+      sanitizeSegment(taskId),
+      sanitizeSegment(runId),
+      sanitizeSegment(target.targetId),
+    );
+    const branch = `ai/${sanitizeSegment(taskId)}-${sanitizeSegment(runId)}-t${target.position}`;
+
+    await mkdir(dirname(path), { recursive: true });
+    const args = ["worktree", "add", path, "-b", branch];
+    if (target.baseRef) {
+      args.push(target.baseRef);
+    }
+    await this.runGit(args, target.repositoryLocalPath);
+    const canonicalPath = await realpath(path);
+
+    return {
+      taskId,
+      runId,
+      targetId: target.targetId,
+      repositoryLocalPath: target.repositoryLocalPath,
       path: canonicalPath,
       branch,
       createdAt: new Date().toISOString(),
@@ -142,4 +208,8 @@ export class WorkspaceManager {
       return resolve(value);
     }
   }
+}
+
+function sanitizeSegment(value: string): string {
+  return value.replace(/[^a-zA-Z0-9_.-]/g, "-");
 }

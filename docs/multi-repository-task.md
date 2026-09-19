@@ -14,9 +14,14 @@
   primary）；内存/Postgres store 均支持多 target（事务写入、按 position 读取）
 - TASK-1004 ✅：`createTask` 支持 `targets[]`（缺省用 `repositoryId` 生成单个
   primary），`findTask`/`listTasks` 返回 targets；CLI 仍走单仓库路径（零迁移）
+- TASK-1005 ✅：`WorkspaceManager.createRunWorkspaces()` ——
+  `<base>/<taskId>/<runId>/<targetId>/`，每个 target 独立分支
+  `ai/<task>-<run>-t<position>`，按 position 顺序创建，支持 `baseRef`，
+  v1 不复用（新 Run = 全新目录），Run 级清理逐个 workspace；
+  旧 `createWorkspace()` API 保留（单仓库路径零迁移）
 - 回归：单测 122 passed；Postgres 集成 4 passed（含多 target round-trip）；
   真实 codex E2E passed（单仓库零迁移）
-- 下一步：TASK-1005 Multi-Workspace → TASK-1006 Execution 多挂载 →
+- 下一步：TASK-1006 Execution 多挂载 →
   TASK-1007 Context → TASK-1008 Target 级 Verification → TASK-1009 Worker →
   TASK-1010 Retry/Recovery → TASK-1011 CLI → TASK-1012 真机多挂载验收
 >
