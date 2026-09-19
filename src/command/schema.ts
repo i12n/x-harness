@@ -31,6 +31,17 @@ export const COMMAND_SCHEMAS: Record<CommandType, CommandSchema> = {
     fields: { problemId: { type: "string", required: true } },
     roles: OPERATORS,
   },
+  "problem.clarification.answer": {
+    fields: {
+      problemId: { type: "string", required: true },
+      clarificationId: { type: "string", required: true },
+      optionId: { type: "string" },
+      text: { type: "string" },
+      /** Free-form answer shortcut, e.g. "all_users" or "不确定". */
+      answer: { type: "string" },
+    },
+    roles: ALL_ROLES,
+  },
   "task.show": {
     fields: { taskId: { type: "string", required: true } },
     roles: ALL_ROLES,

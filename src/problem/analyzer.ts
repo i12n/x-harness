@@ -22,12 +22,21 @@ export interface ProblemAnalysisResult {
   clarifications: AnalyzerClarification[];
 }
 
+/** Anything that can analyze a problem (LLM engine or scripted stub). */
+export interface ProblemAnalyzerLike {
+  analyze(
+    problem: Problem,
+    repository?: Repository,
+    history?: Clarification[],
+  ): Promise<ProblemAnalysisResult>;
+}
+
 /**
  * Problem Analyzer: decides whether the problem is clear enough to work on,
  * and if not, produces structured Clarifications (never a generic
  * "tell me more"). Uses the same AgentEngine abstraction as coding runs.
  */
-export class ProblemAnalyzer {
+export class ProblemAnalyzer implements ProblemAnalyzerLike {
   constructor(private readonly engine: AgentEngine) {}
 
   async analyze(

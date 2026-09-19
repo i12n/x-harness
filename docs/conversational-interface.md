@@ -113,6 +113,26 @@
 - 下一步：TASK-1107 Problem Confirmation 接入（Conversation → Command →
   Problem）
 
+- TASK-1107 ✅ Problem Confirmation 接入（离线，2026-09-19）：
+  - `src/problem/application/analyzer.ts`：新增 `ScriptedProblemAnalyzer`；
+    `ProblemAnalyzerLike` 接口让真实 LLM Analyzer 与脚本 Analyzer 可互换
+  - `src/problem/application/service.ts`：`ProblemService`
+    （create → ConfirmationLoop.analyze、confirm、answer）；领域规则：
+    存在 OPEN clarification 时 confirm 抛 `required_clarification_pending`，
+    answer 校验 clarification 归属（`invalid_clarification`），自由文本可用
+  - 新 Command：`problem.clarification.answer`（problemId/clarificationId/
+    optionId|text|answer）；`CommandRejectionError` 让领域拒绝变成
+    `CommandResult(rejected, code)` 而不是笼统 handler_error
+  - `src/command/handlers/problem.ts`：Command → ProblemService 显式接线；
+    problem.create 成功后 best-effort 关联 Conversation.subject = problem
+  - `renderProblemMessage`：Clarification 的选项来自结构化 `options`，
+    渲染成 markdown 列表 + actions（value = problemId/clarificationId/optionId）
+  - E2E：Feishu event → Conversation → Intent → Command → Problem →
+    Clarification → Answer → CONFIRMED 全链路跑通（含重复消息只建一个
+    Problem、重复 answer 只分析一次、Conversation 不影响 Problem 生命周期）
+  - 未做（按边界）：真实 LLM Analyzer、Feishu 部署、Specification
+- 下一步：TASK-1108 Task / Run Operations
+
 ## 1. 定位
 
 ```text

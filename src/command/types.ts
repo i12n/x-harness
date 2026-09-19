@@ -3,6 +3,7 @@ export const COMMAND_VERSION = 1;
 export const COMMAND_TYPES = [
   "problem.create",
   "problem.confirm",
+  "problem.clarification.answer",
   "task.show",
   "task.run",
   "run.show",

@@ -46,6 +46,11 @@ describe("Channel boundary (TASK-1101)", () => {
     const forbidden =
       /from\s+"\.\.\/(channel|store|worker|loop|scheduler|verification|execution|workspace|agent|problem|config)\//;
     for (const file of filesUnder(join(SRC, "command"))) {
+      // src/command/handlers/** is the explicit composition point with the
+      // application services; the command core stays business-free.
+      if (file.includes(`${join("command", "handlers")}`)) {
+        continue;
+      }
       const source = readFileSync(file, "utf8");
       expect(source, `${file} must stay free of transports/internals`).not.toMatch(
         forbidden,

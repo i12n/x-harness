@@ -1,4 +1,4 @@
-import type { ProblemAnalyzer } from "./analyzer.js";
+import type { ProblemAnalyzerLike } from "./analyzer.js";
 import type {
   AnswerClarificationInput,
   Clarification,
@@ -13,7 +13,7 @@ import type { RepositoryStore } from "../store/repositoryStore.js";
 
 export interface ConfirmationLoopOptions {
   problems: ProblemStore;
-  analyzer: ProblemAnalyzer;
+  analyzer: ProblemAnalyzerLike;
   repositories?: RepositoryStore;
   events?: EventStore;
 }
@@ -32,7 +32,7 @@ export interface AnalyzeOutcome {
  */
 export class ConfirmationLoop {
   private readonly problems: ProblemStore;
-  private readonly analyzer: ProblemAnalyzer;
+  private readonly analyzer: ProblemAnalyzerLike;
   private readonly repositories: RepositoryStore | undefined;
   private readonly events: EventStore | undefined;
 

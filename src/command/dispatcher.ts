@@ -1,4 +1,5 @@
 import { authorize } from "./authorization.js";
+import { CommandRejectionError } from "./errors.js";
 import type { IdempotencyStore } from "./idempotency.js";
 import {
   CommandValidationError,
@@ -97,6 +98,16 @@ export class CommandDispatcher {
         data,
       };
     } catch (error) {
+      if (error instanceof CommandRejectionError) {
+        result = {
+          commandId: command.id,
+          type: command.type,
+          status: "rejected",
+          error: { code: error.code, message: error.message },
+        };
+        await this.idempotency?.set(command.idempotencyKey, result);
+        return result;
+      }
       result = {
         commandId: command.id,
         type: command.type,

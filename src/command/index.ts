@@ -30,5 +30,6 @@ export { InMemoryIdempotencyStore } from "./idempotency.js";
 export type { IdempotencyStore } from "./idempotency.js";
 export { CommandDispatcher } from "./dispatcher.js";
 export type { CommandDispatcherOptions } from "./dispatcher.js";
+export { CommandRejectionError } from "./errors.js";
 export { ScriptedIntentEngine, handleIntent, prepareCommand } from "./engine.js";
 export type { IntentPipelineOptions } from "./engine.js";
