@@ -72,6 +72,21 @@
   - 无需真实 app_id/app_secret 与公网回调即可完成全部离线验收
 - 下一步：TASK-1105 Message / Card Rendering
 
+- TASK-1105 ✅ Message / Card Rendering（2026-09-19）：
+  - 扩展 `MessageBlock`：`text | markdown | code | divider | section | actions`
+    （`MessageAction{id,label,style,value}`）；CLI 与 Feishu 渲染器同步支持新块
+  - `src/channel/rendering/`：`renderTaskMessage` / `renderRunMessage` /
+    `renderReviewMessage`（+ `common.ts` 的 `collectRunTargets`、截断、
+    计数、状态标记）；输出始终是 `OutgoingMessage`
+  - Run 卡片包含 workspaces、逐 target ✓/✗、verification、失败 check
+    （命令/exit code）与**截断后的** output（默认 400 字符，可配置）
+  - Review 卡片：targets 摘要 + `N passed / M failed` + 结构化 actions
+    （`review.approve` / `review.request_changes`，仅占位，不执行审批语义）
+  - 边界：业务 Renderer 不 import 任何具体传输（feishu/cli），只产出
+    OutgoingMessage；Feishu Adapter 仍负责最终 payload 转换
+  - 数据隔离：target 的 check/output/workdir 只出现在自己的 section 中
+- 下一步：TASK-1106 Intent → Command
+
 ## 1. 定位
 
 ```text

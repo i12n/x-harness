@@ -11,10 +11,21 @@ export interface IncomingMessage {
   metadata?: Record<string, unknown>;
 }
 
+export interface MessageAction {
+  id: string;
+  label: string;
+  style?: "primary" | "danger" | "default";
+  value?: string;
+}
+
+/** Transport-agnostic presentation blocks shared by all renderers. */
 export type MessageBlock =
   | { type: "text"; text: string }
+  | { type: "markdown"; text: string }
   | { type: "code"; text: string; language?: string }
-  | { type: "divider" };
+  | { type: "divider" }
+  | { type: "section"; title?: string; text: string }
+  | { type: "actions"; actions: MessageAction[] };
 
 export interface OutgoingMessage {
   conversationId: string;

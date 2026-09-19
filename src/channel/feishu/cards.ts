@@ -11,11 +11,20 @@ export function renderFeishuText(message: OutgoingMessage): string {
       case "text":
         parts.push(block.text);
         break;
+      case "markdown":
+        parts.push(block.text);
+        break;
       case "code":
         parts.push(block.language ? `\`\`\`${block.language}\n${block.text}\n\`\`\`` : block.text);
         break;
       case "divider":
         parts.push("---");
+        break;
+      case "section":
+        parts.push(block.title ? `${block.title}\n${block.text}` : block.text);
+        break;
+      case "actions":
+        parts.push(block.actions.map((action) => `[${action.label}]`).join(" "));
         break;
     }
   }
@@ -42,11 +51,28 @@ export function renderFeishuCard(message: OutgoingMessage): FeishuCard {
       case "text":
         markdown(block.text);
         break;
+      case "markdown":
+        markdown(block.text);
+        break;
       case "code":
         markdown(block.language ? `\`\`\`${block.language}\n${block.text}\n\`\`\`` : block.text);
         break;
       case "divider":
         elements.push({ tag: "hr" });
+        break;
+      case "section":
+        markdown(block.title ? `**${block.title}**\n${block.text}` : block.text);
+        break;
+      case "actions":
+        elements.push({
+          tag: "action",
+          actions: block.actions.map((action) => ({
+            tag: "button",
+            text: { tag: "plain_text", content: action.label },
+            type: action.style ?? "default",
+            value: { action: action.id, value: action.value },
+          })),
+        });
         break;
     }
   }

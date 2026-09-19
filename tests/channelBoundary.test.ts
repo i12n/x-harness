@@ -21,9 +21,23 @@ describe("Channel boundary (TASK-1101)", () => {
   it("channels never import Harness business modules", () => {
     const businessImport = /from\s+"\.\.\/(domain|store|worker|loop|scheduler|verification|execution|workspace|agent|problem|config)\//;
     for (const file of filesUnder(join(SRC, "channel"))) {
+      // Business renderers intentionally consume domain *types* (they are the
+      // business→message layer); transport code must stay business-free.
+      if (file.includes(`${join("channel", "rendering")}`)) {
+        continue;
+      }
       const source = readFileSync(file, "utf8");
       expect(source, `${file} must not import Harness business modules`).not.toMatch(
         businessImport,
+      );
+    }
+  });
+
+  it("business renderers never depend on a concrete transport", () => {
+    for (const file of filesUnder(join(SRC, "channel", "rendering"))) {
+      const source = readFileSync(file, "utf8");
+      expect(source, `${file} must not import a transport`).not.toMatch(
+        /from\s+"[^"]*(feishu|cli)\//,
       );
     }
   });

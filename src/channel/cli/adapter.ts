@@ -55,6 +55,7 @@ export function renderOutgoingMessage(message: OutgoingMessage): string[] {
 function renderBlock(block: MessageBlock): string[] {
   switch (block.type) {
     case "text":
+    case "markdown":
       return [block.text];
     case "code":
       return block.language
@@ -62,5 +63,9 @@ function renderBlock(block: MessageBlock): string[] {
         : [block.text];
     case "divider":
       return ["---"];
+    case "section":
+      return block.title ? [block.title, block.text] : [block.text];
+    case "actions":
+      return [block.actions.map((action) => `[${action.label}]`).join(" ")];
   }
 }
