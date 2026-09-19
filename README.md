@@ -174,6 +174,7 @@ migrations/     # SQL schema (001 core, 002 problem confirmation)
 scripts/        # db:migrate runner
 tests/          # vitest unit tests
 docs/           # v0.1 plan, v0.2 roadmap, phase 9 isolation/acceptance,
-                # phase 10 multi-repository design, discussion notes
+                # phase 10 multi-repository design, phase 11 conversational
+                # interface design, discussion notes
 docker/         # execution image contract + Dockerfile + allow-list proxy
 ```
