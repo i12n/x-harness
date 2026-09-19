@@ -101,6 +101,31 @@ describe("Business rendering (TASK-1105)", () => {
     expect(rendered).toContain("#1 supporting · auth (repo-b)");
   });
 
+  it("renders dependency gating without querying a store (TASK-1204)", () => {
+    const rendered = textOf(
+      renderTaskMessage(task(), {
+        dependency: {
+          runnable: false,
+          prerequisites: [
+            { id: "task-a", title: "接口", status: "DONE" },
+            { id: "task-b", status: "REVIEW" },
+          ],
+        },
+      }).blocks,
+    );
+
+    expect(rendered).toContain("Runnable: no");
+    expect(rendered).toContain("Dependencies");
+    expect(rendered).toContain("✓ task-a 接口 (DONE)");
+    expect(rendered).toContain("⏳ task-b (REVIEW)");
+  });
+
+  it("stays unchanged when no dependency view is passed", () => {
+    const rendered = textOf(renderTaskMessage(task()).blocks);
+    expect(rendered).not.toContain("Runnable:");
+    expect(rendered).not.toContain("Dependencies");
+  });
+
   it("renders a successful run with per-target verification", () => {
     const succeeded = run({
       result: {

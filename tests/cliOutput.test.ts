@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { formatRunDetails, formatTaskTargets } from "../src/cli/output.js";
+import { formatTaskDependencies } from "../src/cli/output.js";
 import { formatSpecificationPlan } from "../src/cli/specificationOutput.js";
 import { buildSpecification } from "../src/domain/specification.js";
 import type { Run } from "../src/domain/run.js";
@@ -143,6 +144,28 @@ describe("CLI output (TASK-1011)", () => {
     expect(lines).toContain("tgt-b [supporting] repo-b FAIL");
     expect(lines).toContain("check: npm test failed (exit 1)");
     expect(lines).toContain("output: 3 tests failed");
+  });
+});
+
+describe("formatTaskDependencies (TASK-1204)", () => {
+  it("shows runnable state and prerequisite marks", () => {
+    const lines = formatTaskDependencies({
+      runnable: false,
+      prerequisites: [
+        { id: "task-a", title: "接口", status: "DONE" },
+        { id: "task-b", status: "REVIEW" },
+      ],
+    }).join("\n");
+
+    expect(lines).toContain("Runnable: no");
+    expect(lines).toContain("Dependencies:");
+    expect(lines).toContain("✓ task-a 接口 (DONE)");
+    expect(lines).toContain("⏳ task-b (REVIEW)");
+  });
+
+  it("prints only the runnable line when there are no prerequisites", () => {
+    const lines = formatTaskDependencies({ runnable: true, prerequisites: [] });
+    expect(lines).toEqual(["Runnable: yes"]);
   });
 });
 

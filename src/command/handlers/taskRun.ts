@@ -1,4 +1,8 @@
-import { RunNotCancellableError } from "../../errors.js";
+import {
+  DuplicateActiveRunError,
+  RunNotCancellableError,
+} from "../../errors.js";
+import { renderTaskMessage } from "../../channel/rendering/task.js";
 import type { RunService } from "../../run/application/runService.js";
 import type { TaskRunService } from "../../run/application/taskRunService.js";
 import { CommandRejectionError } from "../errors.js";
@@ -23,17 +27,38 @@ export function createTaskRunCommandHandlers(
         task: described.task,
         latestRun: described.latestRun ?? null,
         repositoryNames: described.repositoryNames,
+        dependency: described.dependency ?? null,
+        runnable: described.runnable ?? null,
+        message: renderTaskMessage(described.task, {
+          repositoryNames: described.repositoryNames,
+          dependency:
+            described.runnable === undefined
+              ? undefined
+              : {
+                  runnable: described.runnable,
+                  prerequisites: (described.dependency?.prerequisites ?? []).map(
+                    (task) => ({ id: task.id, title: task.title, status: task.status }),
+                  ),
+                },
+        }),
       };
     },
 
     "task.run": async (payload) => {
-      const outcome = await deps.taskRun.run(String(payload.taskId));
-      return {
-        runId: outcome.runId,
-        run: outcome.run,
-        targets: outcome.outcome.targets,
-        workspaces: outcome.outcome.workspaces,
-      };
+      try {
+        const outcome = await deps.taskRun.run(String(payload.taskId));
+        return {
+          runId: outcome.runId,
+          run: outcome.run,
+          targets: outcome.outcome.targets,
+          workspaces: outcome.outcome.workspaces,
+        };
+      } catch (error) {
+        if (error instanceof DuplicateActiveRunError) {
+          throw new CommandRejectionError("task_already_running", error.message);
+        }
+        throw error;
+      }
     },
 
     "run.show": async (payload) => {

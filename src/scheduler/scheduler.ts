@@ -1,9 +1,19 @@
 import { ACTIVE_RUN_STATUSES } from "../domain/run.js";
 import type { Run } from "../domain/run.js";
 import type { Task } from "../domain/task.js";
+import { DuplicateActiveRunError } from "../errors.js";
 import type { RunStore } from "../store/runStore.js";
 import type { TaskStore } from "../store/taskStore.js";
 import type { EventStore } from "../store/eventStore.js";
+
+/**
+ * Narrow port for the dependency-aware selection (TASK-1204).
+ * `TaskDependencyService` satisfies it; the Scheduler never queries
+ * `task_dependencies` and never walks the graph itself.
+ */
+export interface RunnableTaskQuery {
+  listRunnableTasks(): Promise<Task[]>;
+}
 
 export interface SchedulerOptions {
   taskStore: TaskStore;
@@ -12,11 +22,21 @@ export interface SchedulerOptions {
   agent?: string;
   engine?: string;
   eventStore?: EventStore;
+  /**
+   * Dependency gate. Without it every READY task is a candidate (the
+   * pre-TASK-1204 behavior, kept for compatibility); with it, a READY task
+   * whose prerequisites are not DONE is simply not selected.
+   */
+  runnableTasks?: RunnableTaskQuery;
 }
 
 /**
  * Scheduler (plan section 十/十一): find READY tasks -> check worker capacity
  * -> create QUEUED runs. A task with an active run is never scheduled twice.
+ *
+ * TASK-1204: selection additionally requires the task to be runnable
+ * (all dependencies DONE). Dependencies never consume a concurrency slot —
+ * only the Runs that are actually created do.
  */
 export class Scheduler {
   private readonly taskStore: TaskStore;
@@ -25,6 +45,7 @@ export class Scheduler {
   private readonly agent: string;
   private readonly engine: string;
   private readonly events: EventStore | undefined;
+  private readonly runnableTasks: RunnableTaskQuery | undefined;
 
   constructor(options: SchedulerOptions) {
     this.taskStore = options.taskStore;
@@ -35,6 +56,7 @@ export class Scheduler {
     this.agent = options.agent ?? "codex";
     this.engine = options.engine ?? "codex";
     this.events = options.eventStore;
+    this.runnableTasks = options.runnableTasks;
   }
 
   async schedule(): Promise<Run[]> {
@@ -42,6 +64,9 @@ export class Scheduler {
       (a, b) =>
         b.priority - a.priority || a.createdAt.localeCompare(b.createdAt),
     );
+    const runnableIds = this.runnableTasks
+      ? new Set((await this.runnableTasks.listRunnableTasks()).map((task) => task.id))
+      : undefined;
     const activeRuns = await this.runStore.listRuns({
       statuses: [...ACTIVE_RUN_STATUSES],
     });
@@ -53,13 +78,25 @@ export class Scheduler {
       if (busyTaskIds.has(task.id) || created.length >= capacity) {
         continue;
       }
+      if (runnableIds && !runnableIds.has(task.id)) {
+        continue;
+      }
       const previousRuns = await this.runStore.listRuns({ taskId: task.id });
-      const run = await this.runStore.createRun({
-        taskId: task.id,
-        attempt: previousRuns.length + 1,
-        agent: this.agent,
-        engine: this.engine,
-      });
+      let run: Run;
+      try {
+        run = await this.runStore.createRun({
+          taskId: task.id,
+          attempt: previousRuns.length + 1,
+          agent: this.agent,
+          engine: this.engine,
+        });
+      } catch (error) {
+        if (error instanceof DuplicateActiveRunError) {
+          // Another scheduler (or process) won the race for this task.
+          continue;
+        }
+        throw error;
+      }
       created.push(run);
       if (this.events) {
         try {

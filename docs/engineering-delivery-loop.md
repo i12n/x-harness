@@ -3,7 +3,8 @@
 > 状态：路线确定（2026-09-20）。Phase 11 已冻结；本阶段不再扩展 Channel，
 > 目标是让 Harness 能把一个需求持续推进到交付。
 > TASK-1201（Specification Model）、TASK-1202（Specification → Task
-> Planning）、TASK-1203（Task Dependency / DAG）已实现；TASK-1204 起尚未开始。
+> Planning）、TASK-1203（Task Dependency / DAG）、TASK-1204
+> （Dependency-aware Scheduler）已实现；TASK-1205 起尚未开始。
 
 ## 目标链路
 
@@ -21,8 +22,8 @@ Problem → Confirmation → Specification → Task → Dependency → Scheduler
 TASK-1201  Specification Model                      ✅ 完成
 TASK-1202  Specification → Task Planning            ✅ 完成
 TASK-1203  Task Dependency / DAG                    ✅ 完成
-TASK-1204  Dependency-aware Scheduler               ← 当前
-TASK-1205  Delivery / Release Model
+TASK-1204  Dependency-aware Scheduler               ✅ 完成
+TASK-1205  Delivery / Release Model                 ← 当前
 TASK-1206  Delivery Loop
 TASK-1207  Failure / Retry / Recovery Hardening
 TASK-1208  Phase 12 Generic E2E Acceptance
@@ -118,8 +119,8 @@ supersede          → SUPERSEDED（幂等）
 TASK-1201  Specification Model                 ✅ 实现完成（迁移 008 + 单测 + Postgres 集成）
 TASK-1202  Specification → Task Planning       ✅ 实现完成（迁移 009 + Command/CLI + E2E）
 TASK-1203  Task Dependency / DAG               ✅ 实现完成（迁移 010 + Service + E2E）
-TASK-1204  Dependency-aware Scheduler          ← 下一步
-TASK-1205  Delivery / Release Model
+TASK-1204  Dependency-aware Scheduler          ✅ 实现完成（迁移 011 + Scheduler + E2E）
+TASK-1205  Delivery / Release Model            ← 下一步
 TASK-1206  Delivery Loop
 TASK-1207  Failure / Retry / Recovery Hardening
 TASK-1208  Phase 12 Generic E2E Acceptance
@@ -238,3 +239,51 @@ TASK-1203 只建立 DAG 能力；Scheduler 仍按原逻辑选择 READY Task
 
 刻意未做：Scheduler 选取逻辑、Worker/Run/Agent/Retry 改动、把 `dependsOn` 塞进
 `Task.constraints`、Specification 级依赖限制（允许跨 Specification 建边）。
+
+## TASK-1204 Dependency-aware Scheduler（已完成）
+
+```text
+READY Tasks（既有优先级/创建时间排序）
+   ↓  过滤：TaskDependencyService.listRunnableTasks()（Scheduler 不查图、不 DFS）
+   ↓  过滤：已被 active run 占用的 Task
+   ↓  max_concurrency 仍有余量？
+   ↓
+createRun → QUEUED（Worker 再接管）
+```
+
+实现：
+
+```text
+src/scheduler/scheduler.ts        # RunnableTaskQuery 端口 + runnable 过滤
+src/cli/index.ts                  # ai loop 注入 TaskDependencyService
+src/task/application/dependencyService.ts   # 提供 listRunnableTasks/isRunnable/describe
+migrations/011_active_run_uniqueness.sql    # 每 Task 至多一个 active Run（部分唯一索引）
+```
+
+边界与语义：
+
+```text
+- Scheduler 只做"选择 + 调度"：不做环检测、不查 task_dependencies、不改 Task 状态机
+- 依赖不消耗 concurrency slot：只有真正创建的 Run 占位
+- 无依赖 Task（dependencies = []）天然 runnable → 旧数据零迁移
+- READY 但依赖未 DONE 的 Task 不被选中，也**不隐藏**：
+  task.show 显示 Status/Runnable/Dependencies（✓ DONE / ⏳ 其他状态）
+- 失败语义不变：A FAILED 不满足依赖；A 若按现有策略回到 READY，
+  Scheduler 可再次调度 A，但 B 仍要等 A → DONE（审批才是完成点）
+```
+
+并发保护（原状态 + 本次补齐）：
+
+```text
+既有：listRuns(ACTIVE) + busyTaskIds 过滤（进程内）
+本次：runs_active_task_idx —— UNIQUE(task_id) WHERE status IN
+      (QUEUED, STARTING, RUNNING, VERIFYING)
+  → 两个 Scheduler 同时 tick 时，失败的插入转成 DuplicateActiveRunError，
+    Scheduler 跳过该 Task；终态 Run 不受影响，retry/attempt 计数照旧
+  → 直接 createRun（如 ai run / task.run）撞上 active run 时：
+    RunStore 抛 DuplicateActiveRunError，命令层转成
+    rejected(task_already_running)
+```
+
+刻意未做：DAG-aware 之外的新调度策略（公平性/优先级反转）、依赖失败级联
+（`dependency_failed` / auto-unblock，留待 Delivery Policy）、Worker/Run/Retry 改动。

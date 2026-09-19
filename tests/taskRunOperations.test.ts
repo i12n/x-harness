@@ -24,8 +24,10 @@ import { Loop } from "../src/loop/loop.js";
 import { RunService } from "../src/run/application/runService.js";
 import { TaskRunService } from "../src/run/application/taskRunService.js";
 import { Scheduler } from "../src/scheduler/scheduler.js";
+import { TaskDependencyService } from "../src/task/application/dependencyService.js";
 import { InMemoryEventStore } from "../src/store/inMemoryEventStore.js";
 import { InMemoryExecutionStore } from "../src/store/inMemoryExecutionStore.js";
+import { InMemoryTaskDependencyStore } from "../src/store/inMemoryTaskDependencyStore.js";
 import { InMemoryRepositoryStore } from "../src/store/inMemoryRepositoryStore.js";
 import { InMemoryRunStore } from "../src/store/inMemoryRunStore.js";
 import { InMemoryTaskStore } from "../src/store/inMemoryTaskStore.js";
@@ -125,6 +127,7 @@ describe("Task / Run operations (TASK-1108)", () => {
     engine?: AgentEngine;
     multiRepository?: boolean;
     heartbeatMs?: number;
+    dependencies?: boolean;
   } = {}) {
     const fixtureA = fixture("A-OK");
     const fixtureB = options.multiRepository ? fixture("B-OK") : undefined;
@@ -196,7 +199,18 @@ describe("Task / Run operations (TASK-1108)", () => {
       leaseSeconds: 5,
     });
     const runService = new RunService({ runs, tasks, events });
-    const taskRunService = new TaskRunService({ tasks, runs, worker });
+    const dependencyStore = new InMemoryTaskDependencyStore();
+    const dependencyService = new TaskDependencyService({
+      tasks,
+      dependencies: dependencyStore,
+      events,
+    });
+    const taskRunService = new TaskRunService({
+      tasks,
+      runs,
+      worker,
+      dependencies: options.dependencies ? dependencyService : undefined,
+    });
     const dispatcher = new CommandDispatcher({
       handlers: createTaskRunCommandHandlers({ taskRun: taskRunService, runs: runService }),
       idempotency: new InMemoryIdempotencyStore(),
@@ -210,6 +224,8 @@ describe("Task / Run operations (TASK-1108)", () => {
       repositories,
       tasks,
       runs,
+      dependencyStore,
+      dependencyService,
       events,
       executions,
       worker,
@@ -513,5 +529,86 @@ describe("Task / Run operations (TASK-1108)", () => {
   it("keeps cancellation out of RunStatus", () => {
     expect(RUN_STATUSES as readonly string[]).not.toContain("CANCELLING");
     expect(RUN_STATUSES as readonly string[]).not.toContain("CANCEL_REQUESTED");
+  });
+
+  it("task.show explains why a READY task is not runnable (TASK-1204)", async () => {
+    const { dispatcher, tasks, dependencyService } = await setup({ dependencies: true });
+    await tasks.createTask({
+      id: "task-blocker",
+      repositoryId: "repo-a",
+      title: "先完成接口",
+      status: "REVIEW",
+    });
+    await dependencyService.addDependency("task-001", "task-blocker");
+
+    const result = await handleIntent(intentMessage(), context(["guest"]), {
+      engine: new ScriptedIntentEngine({
+        command: { type: "task.show", payload: { taskId: "task-001" } },
+      }),
+      dispatcher,
+    });
+
+    expect(result.status).toBe("succeeded");
+    const data = result.data as {
+      task: { status: string };
+      runnable: boolean;
+      dependency: { prerequisites: { id: string; status: string }[] };
+      message: { blocks?: unknown[] };
+    };
+    expect(data.task.status).toBe("READY");
+    expect(data.runnable).toBe(false);
+    expect(data.dependency.prerequisites).toMatchObject([
+      { id: "task-blocker", status: "REVIEW" },
+    ]);
+    const rendered = JSON.stringify(data.message.blocks);
+    expect(rendered).toContain("Runnable: no");
+    expect(rendered).toContain("⏳ task-blocker 先完成接口 (REVIEW)");
+
+    // The gate opens once the prerequisite is DONE.
+    await tasks.updateTaskStatus("task-blocker", "DONE");
+    const unblocked = await handleIntent(
+      intentMessage({ messageId: "message-002" }),
+      context(["guest"]),
+      {
+        engine: new ScriptedIntentEngine({
+          command: { type: "task.show", payload: { taskId: "task-001" } },
+        }),
+        dispatcher,
+      },
+    );
+    const unblockedData = unblocked.data as {
+      runnable: boolean;
+      message: { blocks?: unknown[] };
+    };
+    expect(unblockedData.runnable).toBe(true);
+    expect(JSON.stringify(unblockedData.message.blocks)).toContain("Runnable: yes");
+    expect(JSON.stringify(unblockedData.message.blocks)).toContain(
+      "✓ task-blocker 先完成接口 (DONE)",
+    );
+  });
+
+  it("task.run is rejected when the task already has an active run", async () => {
+    const { dispatcher, runs } = await setup();
+    // Another scheduler/process is already working on this task.
+    await runs.createRun({
+      id: "run-active",
+      taskId: "task-001",
+      attempt: 1,
+      agent: "codex",
+      engine: "codex",
+    });
+
+    const rejected = await handleIntent(intentMessage(), context(["developer"]), {
+      engine: new ScriptedIntentEngine({
+        command: { type: "task.run", payload: { taskId: "task-001" } },
+      }),
+      dispatcher,
+    });
+
+    expect(rejected).toMatchObject({
+      status: "rejected",
+      error: { code: "task_already_running" },
+    });
+    expect(await runs.listRuns({ taskId: "task-001" })).toHaveLength(1);
   });
 });

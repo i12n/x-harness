@@ -1,6 +1,10 @@
-import { buildRun, isTerminalRunStatus } from "../domain/run.js";
+import { ACTIVE_RUN_STATUSES, buildRun, isTerminalRunStatus } from "../domain/run.js";
 import type { CreateRunInput, Run, RunStatus } from "../domain/run.js";
-import { RunConflictError, RunNotFoundError } from "../errors.js";
+import {
+  DuplicateActiveRunError,
+  RunConflictError,
+  RunNotFoundError,
+} from "../errors.js";
 import { RunNotCancellableError } from "../errors.js";
 import type { CompleteRunInput, RunListFilter, RunStore } from "./runStore.js";
 
@@ -10,6 +14,17 @@ export class InMemoryRunStore implements RunStore {
 
   async createRun(input: CreateRunInput): Promise<Run> {
     const run = buildRun(input);
+    // Mirrors runs_active_task_idx (migrations/011): one active run per task.
+    if ((ACTIVE_RUN_STATUSES as readonly RunStatus[]).includes(run.status)) {
+      const active = [...this.runs.values()].some(
+        (existing) =>
+          existing.taskId === run.taskId &&
+          (ACTIVE_RUN_STATUSES as readonly RunStatus[]).includes(existing.status),
+      );
+      if (active) {
+        throw new DuplicateActiveRunError(run.taskId);
+      }
+    }
     this.runs.set(run.id, run);
     return run;
   }

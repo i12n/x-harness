@@ -38,6 +38,29 @@ interface RunTargetResult {
   }[];
 }
 
+/** TASK-1204: why a READY task is (not) being scheduled right now. */
+export interface TaskDependencySummary {
+  runnable: boolean;
+  prerequisites: { id: string; title?: string; status: string }[];
+}
+
+export function formatTaskDependencies(
+  dependency: TaskDependencySummary,
+): string[] {
+  const lines = [`Runnable: ${dependency.runnable ? "yes" : "no"}`];
+  if (dependency.prerequisites.length === 0) {
+    return lines;
+  }
+  lines.push("Dependencies:");
+  for (const prerequisite of dependency.prerequisites) {
+    const mark = prerequisite.status === "DONE" ? "✓" : "⏳";
+    lines.push(
+      `  ${mark} ${prerequisite.id}${prerequisite.title ? ` ${prerequisite.title}` : ""} (${prerequisite.status})`,
+    );
+  }
+  return lines;
+}
+
 /**
  * TASK-1011: `run` / `task show` run details. Prefers the full per-target
  * evidence in run.result.targets[] and falls back to run.error.failingTargets[]

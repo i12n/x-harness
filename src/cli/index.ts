@@ -51,7 +51,11 @@ import {
   reviewRunCommand,
 } from "./commands/reviewCommands.js";
 import { cleanupWorkspacesCommand } from "./commands/workspaceCommands.js";
-import { formatRunDetails, formatTaskTargets } from "./output.js";
+import {
+  formatRunDetails,
+  formatTaskDependencies,
+  formatTaskTargets,
+} from "./output.js";
 import { formatSpecificationPlan } from "./specificationOutput.js";
 import { CliChannel } from "../channel/cli/adapter.js";
 import {
@@ -65,6 +69,7 @@ import { createSpecificationCommandHandlers } from "../command/handlers/specific
 import type { SpecificationPlanView } from "./specificationOutput.js";
 import { PlanningService } from "../specification/application/planning.js";
 import { DeterministicTaskPlanner } from "../specification/application/planner.js";
+import { TaskDependencyService } from "../task/application/dependencyService.js";
 import { makeId } from "../util/id.js";
 
 const cliChannel = new CliChannel();
@@ -275,7 +280,8 @@ task
   .command("show <id>")
   .description("show one task")
   .action(async (id: string) => {
-    await withStores(async ({ tasks, repositories, runs }) => {
+    await withStores(async (handle) => {
+      const { tasks, repositories, runs } = handle;
       const item = await showTaskCommand(tasks, id);
       printTask(
         item,
@@ -284,6 +290,23 @@ task
           item.targets.map((target) => target.repositoryId),
         ),
       );
+      // TASK-1204: make "READY but gated by dependencies" visible.
+      const dependencyService = new TaskDependencyService({
+        tasks,
+        dependencies: handle.taskDependencies,
+        events: handle.events,
+      });
+      const dependency = await dependencyService.describe(id);
+      for (const line of formatTaskDependencies({
+        runnable: await dependencyService.isRunnable(id),
+        prerequisites: dependency.prerequisites.map((task) => ({
+          id: task.id,
+          title: task.title,
+          status: task.status,
+        })),
+      })) {
+        console.log(line);
+      }
       const taskRuns = await runs.listRuns({ taskId: id });
       const latest = taskRuns[taskRuns.length - 1];
       if (latest) {
@@ -648,6 +671,12 @@ program
         taskStore: handle.tasks,
         runStore: handle.runs,
         eventStore: handle.events,
+        // TASK-1204: READY tasks also have to be runnable (deps DONE).
+        runnableTasks: new TaskDependencyService({
+          tasks: handle.tasks,
+          dependencies: handle.taskDependencies,
+          events: handle.events,
+        }),
       }),
       worker,
       runStore: handle.runs,

@@ -71,7 +71,9 @@ Implemented in TypeScript (Node >= 18, ESM). The full plan lives in
   → N Tasks；`spec.show` / `spec.plan` Command 与 `ai spec show|plan`；
   幂等且不自动执行）、TASK-1203 Task Dependency / DAG（迁移 010 +
   `TaskDependencyService`：环检测、重复/自依赖防护、runnable 判定；
-  Scheduler 未改动）已完成 —— 见
+  Scheduler 未改动）、TASK-1204 Dependency-aware Scheduler（Scheduler 只消费
+  runnable 查询，依赖不占并发额度；迁移 011 保证每 Task 至多一个 active Run）
+  已完成 —— 见
   [docs/engineering-delivery-loop.md](docs/engineering-delivery-loop.md)。
 
 ## Requirements
@@ -199,7 +201,7 @@ src/
   worker/       # run executor with leases and heartbeats
   workspace/    # git-worktree workspace isolation (one run = one worktree)
 config/         # config/config.yaml
-migrations/     # SQL schema (001 core ... 010 task dependencies)
+migrations/     # SQL schema (001 core ... 011 active run uniqueness)
 scripts/        # db:migrate runner
 tests/          # vitest unit tests
 docs/           # v0.1 plan, v0.2 roadmap, phase 9 isolation/acceptance,

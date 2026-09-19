@@ -1,7 +1,8 @@
 import { Pool } from "pg";
-import { buildRun } from "../domain/run.js";
+import { ACTIVE_RUN_STATUSES, buildRun } from "../domain/run.js";
 import type { CreateRunInput, Run, RunStatus } from "../domain/run.js";
 import {
+  DuplicateActiveRunError,
   RunConflictError,
   RunNotCancellableError,
   RunNotFoundError,
@@ -41,13 +42,39 @@ export class PostgresRunStore implements RunStore {
 
   async createRun(input: CreateRunInput): Promise<Run> {
     const run = buildRun(input);
-    const { rows } = await this.pool.query<RunRow>(
-      `INSERT INTO runs (${INSERT_COLUMNS})
-       VALUES ($1,$2,$3,$4,$5,$6,NULL,NULL,NULL,NULL,NULL,NULL,NULL,$7)
-       RETURNING *`,
-      [run.id, run.taskId, run.status, run.attempt, run.agent, run.engine, run.createdAt],
-    );
-    return rowToRun(requireRow(rows, "createRun"));
+    try {
+      const { rows } = await this.pool.query<RunRow>(
+        `INSERT INTO runs (${INSERT_COLUMNS})
+         VALUES ($1,$2,$3,$4,$5,$6,NULL,NULL,NULL,NULL,NULL,NULL,NULL,$7)
+         RETURNING *`,
+        [
+          run.id,
+          run.taskId,
+          run.status,
+          run.attempt,
+          run.agent,
+          run.engine,
+          run.createdAt,
+        ],
+      );
+      return rowToRun(requireRow(rows, "createRun"));
+    } catch (error) {
+      const detail = error as { code?: string; constraint?: string } | undefined;
+      if (detail?.code === "23505") {
+        // runs_active_task_idx: another scheduler/process owns this task.
+        if (detail.constraint?.includes("active_task")) {
+          throw new DuplicateActiveRunError(run.taskId);
+        }
+        const active = await this.listRuns({
+          taskId: run.taskId,
+          statuses: [...ACTIVE_RUN_STATUSES],
+        });
+        if (active.length > 0) {
+          throw new DuplicateActiveRunError(run.taskId);
+        }
+      }
+      throw error;
+    }
   }
 
   async findRun(id: string): Promise<Run> {

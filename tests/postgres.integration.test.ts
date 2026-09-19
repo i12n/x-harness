@@ -683,4 +683,117 @@ describePostgres("PostgreSQL integration", () => {
     expect(added).toHaveLength(2);
     expect(added[0]?.taskId).toBe("task-c");
   });
+
+  it("schedules DAG-aware and never double-creates a run (TASK-1204)", async () => {
+    const repositories = new PostgresRepositoryStore(pool!);
+    const tasks = new PostgresTaskStore(pool!);
+    const runs = new PostgresRunStore(pool!);
+    const dependencies = new PostgresTaskDependencyStore(pool!);
+    const events = new PostgresEventStore(pool!);
+    const dependencyService = new TaskDependencyService({ tasks, dependencies, events });
+
+    await repositories.createRepository({
+      id: "repo-a",
+      name: "app",
+      url: "git@github.com:example/app.git",
+      localPath: "/tmp/repos/app",
+    });
+    for (const id of ["task-a", "task-b"]) {
+      await tasks.createTask({
+        id,
+        repositoryId: "repo-a",
+        title: id,
+        status: "READY",
+      });
+    }
+    await dependencyService.addDependency("task-b", "task-a");
+
+    const scheduler = new Scheduler({
+      taskStore: tasks,
+      runStore: runs,
+      maxConcurrency: 2,
+      runnableTasks: dependencyService,
+    });
+    const first = await scheduler.schedule();
+    expect(first.map((run) => run.taskId)).toEqual(["task-a"]);
+
+    // A busy task is never scheduled twice.
+    await expect(scheduler.schedule()).resolves.toHaveLength(0);
+    expect(await runs.listRuns({ taskId: "task-a" })).toHaveLength(1);
+
+    // A SUCCEEDED run alone does not unlock B: the Task has to reach DONE
+    // (review/approval); until then A itself is runnable again.
+    await runs.completeRun(first[0]!.id, { status: "SUCCEEDED", exitCode: 0 });
+    const notApprovedYet = await scheduler.schedule();
+    expect(notApprovedYet.map((run) => run.taskId)).toEqual(["task-a"]);
+    await runs.completeRun(notApprovedYet[0]!.id, { status: "SUCCEEDED", exitCode: 0 });
+
+    await tasks.updateTaskStatus("task-a", "DONE");
+    const afterDone = await scheduler.schedule();
+    expect(afterDone.map((run) => run.taskId)).toEqual(["task-b"]);
+
+    // Direct inserts cannot bypass the DB guard either.
+    await expect(
+      pool!.query(
+        `INSERT INTO runs (id, task_id, status, attempt, agent, engine, created_at)
+         VALUES ('run-dup', 'task-b', 'QUEUED', 2, 'codex', 'codex', now())`,
+      ),
+    ).rejects.toMatchObject({ code: "23505" });
+
+    await runs.completeRun(afterDone[0]!.id, { status: "SUCCEEDED", exitCode: 0 });
+    await expect(
+      runs.createRun({
+        id: "run-retry",
+        taskId: "task-b",
+        attempt: 2,
+        agent: "codex",
+        engine: "codex",
+      }),
+    ).resolves.toMatchObject({ status: "QUEUED" });
+  });
+
+  it("two schedulers racing create exactly one run (TASK-1204)", async () => {
+    const repositories = new PostgresRepositoryStore(pool!);
+    const tasks = new PostgresTaskStore(pool!);
+    const runs = new PostgresRunStore(pool!);
+    const dependencies = new PostgresTaskDependencyStore(pool!);
+    const events = new PostgresEventStore(pool!);
+    const dependencyService = new TaskDependencyService({ tasks, dependencies, events });
+
+    await repositories.createRepository({
+      id: "repo-a",
+      name: "app",
+      url: "git@github.com:example/app.git",
+      localPath: "/tmp/repos/app",
+    });
+    await tasks.createTask({
+      id: "task-race",
+      repositoryId: "repo-a",
+      title: "race",
+      status: "READY",
+    });
+
+    const schedulerA = new Scheduler({
+      taskStore: tasks,
+      runStore: runs,
+      maxConcurrency: 1,
+      runnableTasks: dependencyService,
+    });
+    const schedulerB = new Scheduler({
+      taskStore: tasks,
+      runStore: runs,
+      maxConcurrency: 1,
+      runnableTasks: dependencyService,
+    });
+
+    const [left, right] = await Promise.all([
+      schedulerA.schedule(),
+      schedulerB.schedule(),
+    ]);
+
+    expect(left.length + right.length).toBe(1);
+    const created = await runs.listRuns({ taskId: "task-race" });
+    expect(created).toHaveLength(1);
+    expect(created[0]?.status).toBe("QUEUED");
+  });
 });

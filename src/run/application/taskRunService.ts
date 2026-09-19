@@ -3,13 +3,22 @@ import type { Task } from "../../domain/task.js";
 import type { RunStore } from "../../store/runStore.js";
 import type { RepositoryStore } from "../../store/repositoryStore.js";
 import type { TaskStore } from "../../store/taskStore.js";
+import type { TaskDependencyView } from "../../task/application/dependencyService.js";
 import type { ExecuteRunOutcome, Worker } from "../../worker/worker.js";
+
+/** Only the read side of TaskDependencyService is needed here. */
+export interface TaskDependencyReadSource {
+  describe(taskId: string): Promise<TaskDependencyView>;
+  isRunnable(taskId: string): Promise<boolean>;
+}
 
 export interface TaskRunServiceDeps {
   tasks: TaskStore;
   runs: RunStore;
   worker: Worker;
   repositories?: RepositoryStore;
+  /** Optional: adds the dependency/runnable view to task descriptions. */
+  dependencies?: TaskDependencyReadSource;
 }
 
 export interface TaskRunOutcome {
@@ -23,6 +32,9 @@ export interface TaskDescription {
   latestRun?: Run;
   /** repositoryId → display name (for renderers). */
   repositoryNames: Map<string, string>;
+  /** Prerequisites + runnable flag (TASK-1204 visibility). */
+  dependency?: TaskDependencyView;
+  runnable?: boolean;
 }
 
 /**
@@ -61,10 +73,18 @@ export class TaskRunService {
         }
       }
     }
+    const dependency = this.deps.dependencies
+      ? await this.deps.dependencies.describe(taskId)
+      : undefined;
+    const runnable = this.deps.dependencies
+      ? await this.deps.dependencies.isRunnable(taskId)
+      : undefined;
     return {
       task,
       latestRun: await this.latestRun(task.id),
       repositoryNames,
+      dependency,
+      runnable,
     };
   }
 

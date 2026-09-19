@@ -49,6 +49,12 @@ export class RunConflictError extends HarnessError {
   }
 }
 
+export class DuplicateActiveRunError extends HarnessError {
+  constructor(taskId: string) {
+    super(`task ${taskId} already has an active run`);
+  }
+}
+
 export class RunNotCancellableError extends HarnessError {
   constructor(id: string, status: string) {
     super(`run ${id} is not cancellable (status is ${status})`);

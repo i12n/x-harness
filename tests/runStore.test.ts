@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  DuplicateActiveRunError,
   RunConflictError,
   RunNotCancellableError,
   RunNotFoundError,
@@ -79,6 +80,45 @@ describe("InMemoryRunStore", () => {
       { id: "run-003" },
     ]);
     await expect(store.findRun("run-missing")).rejects.toBeInstanceOf(RunNotFoundError);
+  });
+
+  it("allows only one active run per task (TASK-1204)", async () => {
+    const store = new InMemoryRunStore();
+    await store.createRun({
+      id: "run-001",
+      taskId: "task-001",
+      attempt: 1,
+      agent: "a",
+      engine: "e",
+    });
+
+    await expect(
+      store.createRun({
+        id: "run-002",
+        taskId: "task-001",
+        attempt: 2,
+        agent: "a",
+        engine: "e",
+      }),
+    ).rejects.toBeInstanceOf(DuplicateActiveRunError);
+    // Other tasks and terminal runs are unaffected (retry keeps working).
+    await store.createRun({
+      id: "run-003",
+      taskId: "task-002",
+      attempt: 1,
+      agent: "a",
+      engine: "e",
+    });
+    await store.completeRun("run-001", { status: "FAILED", exitCode: 1 });
+
+    const retry = await store.createRun({
+      id: "run-004",
+      taskId: "task-001",
+      attempt: 3,
+      agent: "a",
+      engine: "e",
+    });
+    expect(retry.status).toBe("QUEUED");
   });
 
   describe("cancel requests (TASK-1108)", () => {
