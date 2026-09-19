@@ -30,6 +30,8 @@ import { PostgresProblemStore } from "../src/store/postgresProblemStore.js";
 import { PostgresConversationStore } from "../src/store/postgresConversationStore.js";
 import { PostgresSpecificationStore } from "../src/store/postgresSpecificationStore.js";
 import { PostgresSpecificationPlanStore } from "../src/store/postgresSpecificationPlanStore.js";
+import { PostgresTaskDependencyStore } from "../src/store/postgresTaskDependencyStore.js";
+import { TaskDependencyService } from "../src/task/application/dependencyService.js";
 import { SpecificationService } from "../src/specification/application/service.js";
 import { PlanningService } from "../src/specification/application/planning.js";
 import { DeterministicTaskPlanner } from "../src/specification/application/planner.js";
@@ -82,7 +84,7 @@ describePostgres("PostgreSQL integration", () => {
       cleanup();
     }
     await pool?.query(
-      "DELETE FROM conversation_messages; DELETE FROM conversations; DELETE FROM specification_plans; DELETE FROM specification_targets; DELETE FROM specifications; DELETE FROM clarification_answers; DELETE FROM clarifications; DELETE FROM problem_analyses; DELETE FROM problems; DELETE FROM events; DELETE FROM executions; DELETE FROM workspaces; DELETE FROM task_targets; DELETE FROM runs; DELETE FROM tasks; DELETE FROM repositories;",
+      "DELETE FROM conversation_messages; DELETE FROM conversations; DELETE FROM specification_plans; DELETE FROM specification_targets; DELETE FROM specifications; DELETE FROM clarification_answers; DELETE FROM clarifications; DELETE FROM problem_analyses; DELETE FROM problems; DELETE FROM events; DELETE FROM executions; DELETE FROM workspaces; DELETE FROM task_dependencies; DELETE FROM task_targets; DELETE FROM runs; DELETE FROM tasks; DELETE FROM repositories;",
     );
   });
 
@@ -606,5 +608,79 @@ describePostgres("PostgreSQL integration", () => {
 
     const planned = await events.listEvents({ type: "specification.planned" });
     expect(planned).toHaveLength(1);
+  });
+
+  it("persists task dependencies with DB-level graph guards (TASK-1203)", async () => {
+    const repositories = new PostgresRepositoryStore(pool!);
+    const tasks = new PostgresTaskStore(pool!);
+    const dependencies = new PostgresTaskDependencyStore(pool!);
+    const events = new PostgresEventStore(pool!);
+    const service = new TaskDependencyService({ tasks, dependencies, events });
+
+    await repositories.createRepository({
+      id: "repo-a",
+      name: "app",
+      url: "git@github.com:example/app.git",
+      localPath: "/tmp/repos/app",
+    });
+    for (const id of ["task-a", "task-b", "task-c"]) {
+      await tasks.createTask({
+        id,
+        repositoryId: "repo-a",
+        title: id,
+        status: "READY",
+      });
+    }
+
+    const first = await service.addDependency("task-c", "task-a");
+    expect(first.created).toBe(true);
+    await service.addDependency("task-c", "task-b");
+    expect((await dependencies.listDependencies("task-c")).map((edge) => edge.dependsOnTaskId))
+      .toEqual(["task-a", "task-b"]);
+    expect((await service.listDependents("task-a")).map((task) => task.id)).toEqual([
+      "task-c",
+    ]);
+
+    // Duplicate add is idempotent at the service layer…
+    const again = await service.addDependency("task-c", "task-a");
+    expect(again.created).toBe(false);
+    expect(await dependencies.listAllDependencies()).toHaveLength(2);
+
+    // …and the PRIMARY KEY is the backstop when the service is bypassed.
+    await expect(
+      pool!.query(
+        "INSERT INTO task_dependencies (task_id, depends_on_task_id, created_at) VALUES ('task-c', 'task-a', now())",
+      ),
+    ).rejects.toMatchObject({ code: "23505" });
+
+    // CHECK(task_id <> depends_on_task_id) is the self-edge backstop.
+    await expect(
+      pool!.query(
+        "INSERT INTO task_dependencies (task_id, depends_on_task_id, created_at) VALUES ('task-a', 'task-a', now())",
+      ),
+    ).rejects.toMatchObject({ code: "23514" });
+
+    // Cycle rejection (transitive): c → a exists, so a → c must fail.
+    await expect(service.addDependency("task-a", "task-c")).rejects.toMatchObject({
+      code: "task_dependency_cycle",
+    });
+    await expect(service.addDependency("task-a", "task-a")).rejects.toMatchObject({
+      code: "task_dependency_self",
+    });
+
+    // Runnable predicate: only DONE satisfies a dependency.
+    await expect(service.isRunnable("task-c")).resolves.toBe(false);
+    await tasks.updateTaskStatus("task-a", "DONE");
+    await tasks.updateTaskStatus("task-b", "REVIEW");
+    await expect(service.isRunnable("task-c")).resolves.toBe(false);
+    await tasks.updateTaskStatus("task-b", "DONE");
+    await expect(service.isRunnable("task-c")).resolves.toBe(true);
+    expect((await service.listRunnableTasks()).map((task) => task.id)).toEqual([
+      "task-c",
+    ]);
+
+    const added = await events.listEvents({ type: "task.dependency.added" });
+    expect(added).toHaveLength(2);
+    expect(added[0]?.taskId).toBe("task-c");
   });
 });

@@ -3,7 +3,7 @@
 > 状态：路线确定（2026-09-20）。Phase 11 已冻结；本阶段不再扩展 Channel，
 > 目标是让 Harness 能把一个需求持续推进到交付。
 > TASK-1201（Specification Model）、TASK-1202（Specification → Task
-> Planning）已实现；TASK-1203 起尚未开始。
+> Planning）、TASK-1203（Task Dependency / DAG）已实现；TASK-1204 起尚未开始。
 
 ## 目标链路
 
@@ -20,8 +20,8 @@ Problem → Confirmation → Specification → Task → Dependency → Scheduler
 ```text
 TASK-1201  Specification Model                      ✅ 完成
 TASK-1202  Specification → Task Planning            ✅ 完成
-TASK-1203  Task Dependency / DAG                    ← 当前
-TASK-1204  Dependency-aware Scheduler
+TASK-1203  Task Dependency / DAG                    ✅ 完成
+TASK-1204  Dependency-aware Scheduler               ← 当前
 TASK-1205  Delivery / Release Model
 TASK-1206  Delivery Loop
 TASK-1207  Failure / Retry / Recovery Hardening
@@ -117,8 +117,8 @@ supersede          → SUPERSEDED（幂等）
 ```text
 TASK-1201  Specification Model                 ✅ 实现完成（迁移 008 + 单测 + Postgres 集成）
 TASK-1202  Specification → Task Planning       ✅ 实现完成（迁移 009 + Command/CLI + E2E）
-TASK-1203  Task Dependency / DAG               ← 下一步
-TASK-1204  Dependency-aware Scheduler
+TASK-1203  Task Dependency / DAG               ✅ 实现完成（迁移 010 + Service + E2E）
+TASK-1204  Dependency-aware Scheduler          ← 下一步
 TASK-1205  Delivery / Release Model
 TASK-1206  Delivery Loop
 TASK-1207  Failure / Retry / Recovery Hardening
@@ -189,3 +189,52 @@ guest 执行 spec.plan        → rejected(unauthorized)
 
 未做（按边界）：LLM Planner、Task Dependency/DAG（TASK-1203）、Scheduler/Worker/
 Run 改动、自动执行 Task、新 Task 模型。
+
+## TASK-1203 Task Dependency / DAG（已完成）
+
+```text
+Task  ←──── depends on ────  Task      （DAG，可跨 Specification）
+        TaskDependencyService → 领域校验 → TaskDependencyStore
+        Scheduler 只消费"合法图"（DAG-aware 选取 = TASK-1204）
+```
+
+实现：
+
+```text
+src/domain/taskDependency.ts                  # 边模型 + 环检测 + runnable 判定
+src/task/application/dependencyService.ts     # TaskDependencyService
+src/store/taskDependencyStore.ts              # 持久化契约
+src/store/inMemoryTaskDependencyStore.ts
+src/store/postgresTaskDependencyStore.ts
+migrations/010_task_dependencies.sql          # PK(task_id,depends_on_task_id) + CHECK + 反向索引
+```
+
+语义与约束：
+
+```text
+Task B depends_on Task A  ⇒  B 必须等 A 完成（A 是 B 的前置）
+UNIQUE(task_id, depends_on_task_id)   # 不产生重复边
+CHECK(task_id <> depends_on_task_id)  # 禁止自依赖
+index (depends_on_task_id)            # 反向查询"谁在等这个 Task"
+```
+
+`TaskDependencyService` 承担图的合法性（两个 Task 必须存在、禁止自依赖、DFS 环检测
+`task_dependency_cycle`、重复添加幂等返回 `created:false`），并暴露可执行判定：
+
+```text
+runnable = Task.status == READY AND 所有前置 Task.status == DONE
+
+A DONE  + B READY → B runnable
+A REVIEW+ B READY → B 不可执行（审批才是真正的完成点）
+```
+
+查询能力：`isRunnable(taskId)` / `listRunnableTasks()` / `listDependents(taskId)` /
+`describe(taskId)`（前置、后继、边）。这些是**查询**，不改变 Scheduler：
+
+```text
+TASK-1203 只建立 DAG 能力；Scheduler 仍按原逻辑选择 READY Task
+→ DAG-aware 选取、并行、调度顺序全部留给 TASK-1204
+```
+
+刻意未做：Scheduler 选取逻辑、Worker/Run/Agent/Retry 改动、把 `dependsOn` 塞进
+`Task.constraints`、Specification 级依赖限制（允许跨 Specification 建边）。

@@ -69,7 +69,9 @@ Implemented in TypeScript (Node >= 18, ESM). The full plan lives in
   （领域模型 + 迁移 008 + store + application service）与 TASK-1202
   Specification → Task Planning（迁移 009 + `TaskPlanner` + `PlanningService`
   → N Tasks；`spec.show` / `spec.plan` Command 与 `ai spec show|plan`；
-  幂等且不自动执行）已完成 —— 见
+  幂等且不自动执行）、TASK-1203 Task Dependency / DAG（迁移 010 +
+  `TaskDependencyService`：环检测、重复/自依赖防护、runnable 判定；
+  Scheduler 未改动）已完成 —— 见
   [docs/engineering-delivery-loop.md](docs/engineering-delivery-loop.md)。
 
 ## Requirements
@@ -191,12 +193,13 @@ src/
   scheduler/    # READY task scheduling with max_concurrency
   specification/# Specification domain/application (Phase 12)
   store/        # repository/task/run stores: in-memory + postgres
+  task/         # task application services (dependency graph, Phase 12)
   util/         # ids, slugs
   verification/ # per-command verification runner
   worker/       # run executor with leases and heartbeats
   workspace/    # git-worktree workspace isolation (one run = one worktree)
 config/         # config/config.yaml
-migrations/     # SQL schema (001 core ... 009 specification plans)
+migrations/     # SQL schema (001 core ... 010 task dependencies)
 scripts/        # db:migrate runner
 tests/          # vitest unit tests
 docs/           # v0.1 plan, v0.2 roadmap, phase 9 isolation/acceptance,

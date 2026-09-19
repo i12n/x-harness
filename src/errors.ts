@@ -82,6 +82,12 @@ export class DuplicateSpecificationError extends HarnessError {
   }
 }
 
+export class DuplicateTaskDependencyError extends HarnessError {
+  constructor(taskId: string, dependsOnTaskId: string) {
+    super(`task dependency already exists: ${taskId} depends on ${dependsOnTaskId}`);
+  }
+}
+
 export class SpecificationNotFoundError extends HarnessError {
   constructor(id: string) {
     super(`specification not found: ${id}`);
