@@ -39,7 +39,14 @@
   `(truncated)` 标记；缺文档不报错；单仓库路径保持原 prompt 格式不变；
   Context Builder 不依赖 Docker/Postgres（测试只用临时目录）
 - 回归：单测 142 passed；真实 codex E2E passed（单仓库 prompt 无回归）
-- 下一步：TASK-1008 Target-level Verification →
+- TASK-1008 ✅：Target-level Verification —— 新增 `TargetVerifier`：
+  每个 target 用自己的 Repository verification commands、在自己的 workdir
+  （`ExecutionContext.workdirs[targetId]`）执行，产出 per-target 结果
+  `{targetId, repositoryId, repository, role, workdir, commands, checks,
+  passed, duration, error?}`；单 target 的结果与 Phase 5 `Verifier` 逐项一致。
+  **不做 Run 聚合**（留给 TASK-1009），不动 Scheduler/Execution/Workspace
+- 回归：单测 146 passed；真实 codex E2E passed
+- 下一步：TASK-1009 Worker / Run aggregation →
   TASK-1007 Context → TASK-1008 Target 级 Verification → TASK-1009 Worker →
   TASK-1010 Retry/Recovery → TASK-1011 CLI → TASK-1012 真机多挂载验收
 >
