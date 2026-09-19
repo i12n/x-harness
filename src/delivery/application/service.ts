@@ -2,13 +2,24 @@ import {
   aggregateDeliveryStatus,
   blockingTasks,
   buildRelease,
+  collectDeliveryBlockingFacts,
   isRequiredTask,
 } from "../../domain/delivery.js";
-import type { Delivery, DeliveryStatus, Release } from "../../domain/delivery.js";
+import type {
+  Delivery,
+  DeliveryBlockingFact,
+  DeliveryStatus,
+  Release,
+} from "../../domain/delivery.js";
+import { extractFailureEvidence } from "../../domain/failureEvidence.js";
+import type { FailureEvidence } from "../../domain/failureEvidence.js";
+import { BLOCKING_TASK_STATUSES } from "../../domain/delivery.js";
+import type { TaskDependencyImpact } from "../../domain/taskDependency.js";
 import type { Task } from "../../domain/task.js";
 import { HarnessError } from "../../errors.js";
 import type { DeliveryStore } from "../../store/deliveryStore.js";
 import type { EventStore } from "../../store/eventStore.js";
+import type { RunStore } from "../../store/runStore.js";
 import type { SpecificationPlanStore } from "../../store/specificationPlanStore.js";
 import type { TaskStore } from "../../store/taskStore.js";
 
@@ -28,6 +39,17 @@ export interface DeliveryServiceDeps {
   plans: SpecificationPlanStore;
   tasks: TaskStore;
   events?: EventStore;
+  /**
+   * TASK-1207: dependency impact source. `TaskDependencyService` satisfies it;
+   * the graph traversal lives there, not here.
+   */
+  impacts?: DeliveryImpactSource;
+  /** TASK-1207: latest failed run → failure evidence for blocking facts. */
+  runs?: RunStore;
+}
+
+export interface DeliveryImpactSource {
+  getImpact(taskId: string): Promise<TaskDependencyImpact>;
 }
 
 /** Aggregated view of a Delivery: facts only, no rendering. */
@@ -38,6 +60,8 @@ export interface DeliveryView {
   requiredTasks: Task[];
   optionalTasks: Task[];
   blocking: Task[];
+  /** TASK-1207: structured reasons (own failure or dependency-blocked). */
+  blockingFacts: DeliveryBlockingFact[];
   release?: Release;
 }
 
@@ -124,8 +148,8 @@ export class DeliveryService {
   private async aggregate(
     deliveryId: string,
   ): Promise<{ view: DeliveryView; transition?: DeliveryTransition }> {
-    const view = await this.load(deliveryId);
-    const computed = aggregateDeliveryStatus(view.tasks);
+    const { view, impacts } = await this.loadFacts(deliveryId);
+    const computed = aggregateDeliveryStatus(view.tasks, impacts);
     const current = view.delivery.status;
     // RELEASED is a human action, not an aggregate: it stays until superseded.
     if (current === "RELEASED" || current === computed) {
@@ -224,6 +248,15 @@ export class DeliveryService {
 
   /** Task facts of the Specification's plan (required/optional/blocking). */
   async load(deliveryId: string): Promise<DeliveryView> {
+    return (await this.loadFacts(deliveryId)).view;
+  }
+
+  private async loadFacts(
+    deliveryId: string,
+  ): Promise<{
+    view: DeliveryView;
+    impacts: Map<string, TaskDependencyImpact> | undefined;
+  }> {
     const delivery = await this.deps.deliveries.findDelivery(deliveryId);
     const tasks: Task[] = [];
     const planItems = await this.deps.plans.listPlanItems(delivery.specificationId);
@@ -233,15 +266,71 @@ export class DeliveryService {
       }
       tasks.push(await this.deps.tasks.findTask(item.taskId));
     }
+    const impacts = await this.impactMap({ tasks });
+    const evidence = await this.evidenceMap(tasks, impacts);
     return {
-      delivery,
-      specificationId: delivery.specificationId,
-      tasks,
-      requiredTasks: tasks.filter((task) => isRequiredTask(task)),
-      optionalTasks: tasks.filter((task) => !isRequiredTask(task)),
-      blocking: blockingTasks(tasks),
-      release: await this.deps.deliveries.findReleasedRelease(deliveryId),
+      view: {
+        delivery,
+        specificationId: delivery.specificationId,
+        tasks,
+        requiredTasks: tasks.filter((task) => isRequiredTask(task)),
+        optionalTasks: tasks.filter((task) => !isRequiredTask(task)),
+        blocking: blockingTasks(tasks),
+        blockingFacts: collectDeliveryBlockingFacts({ tasks, impacts, evidence }),
+        release: await this.deps.deliveries.findReleasedRelease(deliveryId),
+      },
+      impacts,
     };
+  }
+
+  /** taskId → dependency impact, when a dependency source is wired. */
+  private async impactMap(
+    input: { tasks: Task[] },
+  ): Promise<Map<string, TaskDependencyImpact> | undefined> {
+    if (!this.deps.impacts) {
+      return undefined;
+    }
+    const impacts = new Map<string, TaskDependencyImpact>();
+    for (const task of input.tasks) {
+      impacts.set(task.id, await this.deps.impacts.getImpact(task.id));
+    }
+    return impacts;
+  }
+
+  /**
+   * Evidence for the tasks that can appear in a blocking fact: required tasks
+   * that failed themselves, plus the failed ancestors behind dependency-blocked
+   * tasks (they may belong to another Specification).
+   */
+  private async evidenceMap(
+    tasks: Task[],
+    impacts: Map<string, TaskDependencyImpact> | undefined,
+  ): Promise<Map<string, FailureEvidence> | undefined> {
+    if (!this.deps.runs) {
+      return undefined;
+    }
+    const needed = new Set<string>();
+    for (const task of tasks) {
+      if (BLOCKING_TASK_STATUSES.includes(task.status)) {
+        needed.add(task.id);
+      }
+      const impact = impacts?.get(task.id);
+      if (impact?.dependencyBlocked) {
+        for (const blockingId of impact.blockingTaskIds) {
+          needed.add(blockingId);
+        }
+      }
+    }
+    const evidence = new Map<string, FailureEvidence>();
+    for (const taskId of needed) {
+      const runs = await this.deps.runs.listRuns({ taskId });
+      const latest = runs[runs.length - 1];
+      const extracted = extractFailureEvidence(latest);
+      if (extracted) {
+        evidence.set(taskId, extracted);
+      }
+    }
+    return evidence;
   }
 
   private async emitTransition(

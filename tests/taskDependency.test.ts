@@ -196,3 +196,67 @@ describe("TaskDependencyService (TASK-1203)", () => {
     await expect(h.tasks.findTask("task-b")).resolves.toMatchObject({ status: "READY" });
   });
 });
+
+describe("TaskDependencyService impact (TASK-1207)", () => {
+  it("exposes dependency impact and keeps task status untouched", async () => {
+    const h = await harness();
+    await h.service.addDependency("task-b", "task-a");
+    await h.tasks.updateTaskStatus("task-a", "FAILED");
+
+    const impact = await h.service.getImpact("task-b");
+
+    expect(impact).toEqual({
+      runnable: false,
+      waiting: false,
+      dependencyBlocked: true,
+      blockingTaskIds: ["task-a"],
+      blockingChain: ["task-a", "task-b"],
+      missingTaskIds: [],
+    });
+    // The computed fact never rewrites the Task.
+    await expect(h.tasks.findTask("task-b")).resolves.toMatchObject({ status: "READY" });
+    await expect(h.service.isRunnable("task-b")).resolves.toBe(false);
+    expect((await h.service.listRunnableTasks()).map((task) => task.id)).not.toContain(
+      "task-b",
+    );
+  });
+
+  it("includes impact in describe()", async () => {
+    const h = await harness();
+    await h.service.addDependency("task-c", "task-a");
+    await h.tasks.updateTaskStatus("task-a", "DONE");
+
+    const view = await h.service.describe("task-c");
+
+    expect(view.prerequisites.map((task) => task.id)).toEqual(["task-a"]);
+    expect(view.impact).toMatchObject({ runnable: true, dependencyBlocked: false });
+  });
+
+  it("reports a dangling dependency as blocked with missingTaskIds", async () => {
+    const h = await harness();
+    // Simulates a row that survived its Task (Postgres FKs prevent this; the
+    // in-memory store is used here because the service refuses to create it).
+    await h.dependencies.addDependency({
+      taskId: "task-c",
+      dependsOnTaskId: "task-missing",
+    });
+
+    const impact = await h.service.getImpact("task-c");
+
+    expect(impact).toMatchObject({
+      dependencyBlocked: true,
+      missingTaskIds: ["task-missing"],
+    });
+    await expect(h.service.describe("task-c")).resolves.toMatchObject({
+      prerequisites: [],
+      impact: { dependencyBlocked: true },
+    });
+  });
+
+  it("rejects unknown tasks", async () => {
+    const h = await harness();
+    await expect(h.service.getImpact("task-missing")).rejects.toMatchObject({
+      code: "task_not_found",
+    });
+  });
+});

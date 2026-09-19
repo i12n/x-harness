@@ -1,4 +1,6 @@
 import type { Task, TaskStatus } from "./task.js";
+import type { FailureEvidence } from "./failureEvidence.js";
+import type { TaskDependencyImpact } from "./taskDependency.js";
 import { ValidationError } from "../errors.js";
 import { makeId } from "../util/id.js";
 
@@ -121,18 +123,33 @@ export function isRequiredTask(task: Pick<Task, "targets">): boolean {
  *
  *   no required tasks                        → PLANNED
  *   some required task BLOCKED/FAILED        → BLOCKED
+ *   some required task dependency-blocked    → BLOCKED   (TASK-1207 / D1)
  *   every required task DONE                 → READY_FOR_RELEASE
  *   otherwise                                → IN_PROGRESS
  *
  * Optional tasks never block. RELEASED is not computed here: it is a human
  * action recorded by the release flow.
+ *
+ * `impacts` is optional: without it the aggregation is exactly the TASK-1205
+ * behavior; with it, a required task whose prerequisites are FAILED/BLOCKED
+ * (transitively) also makes the Delivery BLOCKED — otherwise a Delivery whose
+ * only remaining work is unreachable would sit in IN_PROGRESS forever.
  */
-export function aggregateDeliveryStatus(tasks: Pick<Task, "status" | "targets">[]): DeliveryStatus {
+export function aggregateDeliveryStatus(
+  tasks: Pick<Task, "id" | "status" | "targets">[],
+  impacts?: Map<string, Pick<TaskDependencyImpact, "dependencyBlocked">>,
+): DeliveryStatus {
   const required = tasks.filter(isRequiredTask);
   if (required.length === 0) {
     return "PLANNED";
   }
   if (required.some((task) => BLOCKING_TASK_STATUSES.includes(task.status))) {
+    return "BLOCKED";
+  }
+  if (
+    impacts &&
+    required.some((task) => impacts.get(task.id)?.dependencyBlocked === true)
+  ) {
     return "BLOCKED";
   }
   if (required.every((task) => task.status === "DONE")) {
@@ -148,4 +165,88 @@ export function blockingTasks<T extends Pick<Task, "status" | "targets">>(
   return tasks.filter(
     (task) => isRequiredTask(task) && BLOCKING_TASK_STATUSES.includes(task.status),
   );
+}
+
+/** One reason a Delivery cannot reach READY_FOR_RELEASE (TASK-1207). */
+export interface DeliveryBlockingFact {
+  taskId: string;
+  taskTitle: string;
+  /**
+   * The task's own terminal failure, or "dependency-blocked" when the task is
+   * still READY but an ancestor can never complete.
+   */
+  state: "FAILED" | "BLOCKED" | "dependency-blocked";
+  /** Failed ancestors behind a dependency-blocked task. */
+  blockingTaskIds: string[];
+  chain: {
+    taskId: string;
+    title?: string;
+    status?: TaskStatus;
+    note?: string;
+  }[];
+  /** Evidence of the failed task (its own, or the chain's failing ancestor). */
+  evidence?: FailureEvidence;
+}
+
+export interface DeliveryBlockingInput {
+  /** Delivery tasks in plan order. */
+  tasks: Task[];
+  /** taskId → impact (TASK-1207 dependency facts). */
+  impacts?: Map<string, TaskDependencyImpact>;
+  /** taskId → evidence of its latest failed run. */
+  evidence?: Map<string, FailureEvidence>;
+}
+
+/**
+ * Build the reasons a Delivery is blocked. Only required tasks are considered
+ * (optional work never blocks a delivery); facts are ordered by plan position.
+ */
+export function collectDeliveryBlockingFacts(
+  input: DeliveryBlockingInput,
+): DeliveryBlockingFact[] {
+  const byId = new Map(input.tasks.map((task) => [task.id, task]));
+  const facts: DeliveryBlockingFact[] = [];
+  for (const task of input.tasks) {
+    if (!isRequiredTask(task)) {
+      continue;
+    }
+    if (BLOCKING_TASK_STATUSES.includes(task.status)) {
+      facts.push({
+        taskId: task.id,
+        taskTitle: task.title,
+        state: task.status === "FAILED" ? "FAILED" : "BLOCKED",
+        blockingTaskIds: [],
+        chain: [{ taskId: task.id, title: task.title, status: task.status }],
+        evidence: input.evidence?.get(task.id),
+      });
+      continue;
+    }
+    const impact = input.impacts?.get(task.id);
+    if (!impact?.dependencyBlocked) {
+      continue;
+    }
+    const chain = impact.blockingChain.map((id, index) => {
+      const entry = byId.get(id);
+      const blockedBy = index === 0 ? undefined : impact.blockingChain[index - 1];
+      return {
+        taskId: id,
+        title: entry?.title,
+        status: entry?.status,
+        note: blockedBy ? `blocked by ${blockedBy}` : undefined,
+      };
+    });
+    const failingAncestor = impact.blockingTaskIds[0];
+    facts.push({
+      taskId: task.id,
+      taskTitle: task.title,
+      state: "dependency-blocked",
+      blockingTaskIds: [...impact.blockingTaskIds],
+      chain:
+        chain.length > 0
+          ? chain
+          : [{ taskId: task.id, title: task.title, status: task.status, note: "missing dependency" }],
+      evidence: failingAncestor ? input.evidence?.get(failingAncestor) : undefined,
+    });
+  }
+  return facts;
 }

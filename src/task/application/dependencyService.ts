@@ -1,9 +1,13 @@
 import type { Task } from "../../domain/task.js";
 import {
   createsDependencyCycle,
+  getTaskDependencyImpact,
   isTaskRunnable,
 } from "../../domain/taskDependency.js";
-import type { TaskDependency } from "../../domain/taskDependency.js";
+import type {
+  TaskDependency,
+  TaskDependencyImpact,
+} from "../../domain/taskDependency.js";
 import {
   DuplicateTaskDependencyError,
   HarnessError,
@@ -35,6 +39,8 @@ export interface TaskDependencyView {
   dependencies: TaskDependency[];
   prerequisites: Task[];
   dependents: TaskDependency[];
+  /** TASK-1207: computed reachability facts (runnable/waiting/blocked). */
+  impact: TaskDependencyImpact;
 }
 
 export interface TaskDependencyServiceDeps {
@@ -125,14 +131,73 @@ export class TaskDependencyService {
     const dependencies = await this.deps.dependencies.listDependencies(taskId);
     const prerequisites: Task[] = [];
     for (const dependency of dependencies) {
-      prerequisites.push(await this.deps.tasks.findTask(dependency.dependsOnTaskId));
+      try {
+        prerequisites.push(await this.deps.tasks.findTask(dependency.dependsOnTaskId));
+      } catch (error) {
+        if (!(error instanceof TaskNotFoundError)) {
+          throw error;
+        }
+      }
     }
     return {
       task,
       dependencies,
       prerequisites,
       dependents: await this.deps.dependencies.listDependents(taskId),
+      impact: await this.getImpact(taskId),
     };
+  }
+
+  /**
+   * TASK-1207: reachability facts for one task. Loads the prerequisite closure
+   * (bounded by the DAG above this task) and delegates the graph reasoning to
+   * the pure domain function — no Task mutation, no Run, no notification.
+   */
+  async getImpact(taskId: string): Promise<TaskDependencyImpact> {
+    const task = await this.requireTask(taskId);
+    const edges = await this.deps.dependencies.listAllDependencies();
+    const dependenciesByTask = new Map<string, string[]>();
+    for (const edge of edges) {
+      const list = dependenciesByTask.get(edge.taskId);
+      if (list) {
+        list.push(edge.dependsOnTaskId);
+      } else {
+        dependenciesByTask.set(edge.taskId, [edge.dependsOnTaskId]);
+      }
+    }
+
+    const closure = new Map<string, { id: string; status: Task["status"] }>([
+      [task.id, { id: task.id, status: task.status }],
+    ]);
+    const queue = [task.id];
+    const reachableEdges: { taskId: string; dependsOnTaskId: string }[] = [];
+    while (queue.length > 0) {
+      const current = queue.shift()!;
+      for (const prerequisiteId of dependenciesByTask.get(current) ?? []) {
+        reachableEdges.push({ taskId: current, dependsOnTaskId: prerequisiteId });
+        if (closure.has(prerequisiteId)) {
+          continue;
+        }
+        queue.push(prerequisiteId);
+        try {
+          const prerequisite = await this.deps.tasks.findTask(prerequisiteId);
+          closure.set(prerequisiteId, {
+            id: prerequisite.id,
+            status: prerequisite.status,
+          });
+        } catch (error) {
+          if (!(error instanceof TaskNotFoundError)) {
+            throw error;
+          }
+          // Dangling edge: the pure function reports it as `missingTaskIds`.
+        }
+      }
+    }
+
+    return getTaskDependencyImpact(taskId, {
+      tasks: [...closure.values()],
+      dependencies: reachableEdges,
+    });
   }
 
   /** READY and every prerequisite DONE. */

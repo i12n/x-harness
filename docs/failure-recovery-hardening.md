@@ -1,6 +1,6 @@
 # TASK-1207 — Failure / Retry / Recovery Hardening（设计稿）
 
-> 状态：**设计阶段**（2026-09-20）。尚未实现。
+> 状态：**Phase A 已实现**（2026-09-20）；Phase B/C/D 尚未开始。
 > 前置：TASK-1201–1206 已完成并冻结（Specification / Planning / DAG /
 > DAG-aware Scheduler / Delivery + Release / Delivery Reconciliation）。
 
@@ -354,6 +354,38 @@ Phase D  Retry / Workspace / 并发回归 + Generic E2E
 
 每个 Phase 的完成标准：`npm run typecheck` ✅、`npm test` ✅、Postgres 集成 ✅
 （单独运行）、real codex E2E ✅（单独运行）。
+
+### Phase A 实现记录（已完成）
+
+```text
+src/domain/taskDependency.ts        # TaskDependencySnapshot / Impact /
+                                    # DEPENDENCY_FAILURE_STATUSES /
+                                    # getTaskDependencyImpact（纯函数，
+                                    # runnable 复用 isTaskRunnable）
+src/domain/failureEvidence.ts       # FailureEvidence + extractFailureEvidence
+src/domain/delivery.ts              # aggregateDeliveryStatus(tasks, impacts?)（D1）
+                                    # + DeliveryBlockingFact /
+                                    #   collectDeliveryBlockingFacts
+src/task/application/dependencyService.ts   # getImpact() + describe().impact
+src/delivery/application/service.ts         # impacts / runs 端口，
+                                            # blockingFacts + evidence
+tests/taskDependencyImpact.test.ts  # 9 例（矩阵 1–6 + 边界）
+tests/failureEvidence.test.ts       # 6 例
+tests/delivery.test.ts              # +4 例（D1 / chain / evidence / 恢复）
+tests/taskDependency.test.ts        # +4 例（service impact / dangling / describe）
+```
+
+实现期相对设计稿的一处偏差（有意）：
+
+```text
+设计稿写 DeliveryServiceDeps.dependencies?: TaskDependencyStore
+实际实现为 impacts?: DeliveryImpactSource（TaskDependencyService 结构化满足）
+原因：图的闭包遍历只应有一份实现，Delivery 侧不重复实现 DAG 遍历。
+```
+
+`Scheduler` / `Worker` / `Loop` 在 Phase A 中**一行未改**（可用 `git show --stat`
+核对）。1205 的聚合行为在不传 `impacts` 时保持不变（未提供 impacts 的调用点与
+原有单测全部通过）。
 
 ## 11. 明确不做
 

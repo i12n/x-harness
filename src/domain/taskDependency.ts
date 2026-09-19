@@ -103,3 +103,153 @@ export const UNMET_DEPENDENCY_STATUSES: TaskStatus[] = [
   "BLOCKED",
   "FAILED",
 ];
+
+/**
+ * TASK-1207: a Task whose ancestor ended in one of these statuses can never
+ * become runnable without human action (BLOCKED is the system's terminal
+ * failure state, FAILED is the externally/internally set equivalent).
+ */
+export const DEPENDENCY_FAILURE_STATUSES: TaskStatus[] = ["FAILED", "BLOCKED"];
+
+/** Minimal, store-free view of the DAG needed for impact computation. */
+export interface TaskDependencySnapshot {
+  tasks: { id: string; status: TaskStatus }[];
+  dependencies: { taskId: string; dependsOnTaskId: string }[];
+}
+
+/**
+ * TASK-1207: computed reachability facts for one Task.
+ * `dependencyBlocked` is a *fact*, never a Task status transition.
+ */
+export interface TaskDependencyImpact {
+  runnable: boolean;
+  waiting: boolean;
+  dependencyBlocked: boolean;
+  /** Failed ancestors (FAILED/BLOCKED), transitive, deterministic order. */
+  blockingTaskIds: string[];
+  /** Shortest chain failedAncestor → … → taskId (empty when not blocked). */
+  blockingChain: string[];
+  /** Edges pointing at Tasks that do not exist (never happens under PG FKs). */
+  missingTaskIds: string[];
+}
+
+/**
+ * Pure impact computation: no store access, no Task mutation, no Run creation,
+ * no Delivery/Notification side effects.
+ *
+ *   Runnable            READY + every direct prerequisite DONE
+ *   Waiting             READY + an unfinished prerequisite + no failure chain
+ *   Dependency-Blocked  READY + a FAILED/BLOCKED ancestor (or a dangling edge)
+ */
+export function getTaskDependencyImpact(
+  taskId: string,
+  snapshot: TaskDependencySnapshot,
+): TaskDependencyImpact {
+  const tasksById = new Map(snapshot.tasks.map((task) => [task.id, task]));
+  const dependsOn = new Map<string, string[]>();
+  for (const dependency of snapshot.dependencies) {
+    const prerequisites = dependsOn.get(dependency.taskId);
+    if (prerequisites) {
+      if (!prerequisites.includes(dependency.dependsOnTaskId)) {
+        prerequisites.push(dependency.dependsOnTaskId);
+      }
+    } else {
+      dependsOn.set(dependency.taskId, [dependency.dependsOnTaskId]);
+    }
+  }
+  for (const prerequisites of dependsOn.values()) {
+    prerequisites.sort();
+  }
+
+  const task = tasksById.get(taskId);
+  if (!task) {
+    return {
+      runnable: false,
+      waiting: false,
+      dependencyBlocked: false,
+      blockingTaskIds: [],
+      blockingChain: [],
+      missingTaskIds: [taskId],
+    };
+  }
+
+  // Breadth-first walk over prerequisites; `parent` records the shortest path
+  // back towards the task so the blocking chain is deterministic.
+  const parent = new Map<string, string>();
+  const seen = new Set<string>([taskId]);
+  const queue: string[] = [taskId];
+  const missingTaskIds: string[] = [];
+  const ancestors: string[] = [];
+  while (queue.length > 0) {
+    const current = queue.shift()!;
+    for (const prerequisiteId of dependsOn.get(current) ?? []) {
+      if (!tasksById.has(prerequisiteId) && !missingTaskIds.includes(prerequisiteId)) {
+        missingTaskIds.push(prerequisiteId);
+      }
+      if (seen.has(prerequisiteId)) {
+        continue;
+      }
+      seen.add(prerequisiteId);
+      parent.set(prerequisiteId, current);
+      ancestors.push(prerequisiteId);
+      queue.push(prerequisiteId);
+    }
+  }
+
+  const failedAncestors = ancestors
+    .filter((id) => {
+      const status = tasksById.get(id)?.status;
+      return status !== undefined && DEPENDENCY_FAILURE_STATUSES.includes(status);
+    })
+    .sort();
+
+  const directIds = dependsOn.get(taskId) ?? [];
+  const knownPrerequisites = directIds
+    .map((id) => tasksById.get(id))
+    .filter((entry): entry is { id: string; status: TaskStatus } => entry !== undefined);
+  const allPrerequisitesKnown = knownPrerequisites.length === directIds.length;
+  const runnable =
+    task.status === "READY" &&
+    allPrerequisitesKnown &&
+    isTaskRunnable(task, knownPrerequisites);
+  const dependencyBlocked =
+    task.status === "READY" &&
+    !runnable &&
+    (failedAncestors.length > 0 || !allPrerequisitesKnown);
+  const waiting = task.status === "READY" && !runnable && !dependencyBlocked;
+
+  return {
+    runnable,
+    waiting,
+    dependencyBlocked,
+    blockingTaskIds: dependencyBlocked ? failedAncestors : [],
+    blockingChain:
+      dependencyBlocked && failedAncestors.length > 0
+        ? blockingChainFor(taskId, failedAncestors[0]!, parent)
+        : [],
+    missingTaskIds,
+  };
+}
+
+function blockingChainFor(
+  taskId: string,
+  failedAncestor: string,
+  parent: Map<string, string>,
+): string[] {
+  const chain = [failedAncestor];
+  const guard = new Set<string>([failedAncestor]);
+  let cursor = failedAncestor;
+  while (cursor !== taskId) {
+    const next = parent.get(cursor);
+    if (!next || guard.has(next)) {
+      break;
+    }
+    guard.add(next);
+    chain.push(next);
+    cursor = next;
+  }
+  if (chain[chain.length - 1] !== taskId) {
+    chain.push(taskId);
+  }
+  return chain;
+}
