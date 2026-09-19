@@ -52,6 +52,9 @@ import {
 } from "./commands/reviewCommands.js";
 import { cleanupWorkspacesCommand } from "./commands/workspaceCommands.js";
 import { formatRunDetails, formatTaskTargets } from "./output.js";
+import { CliChannel } from "../channel/cli/adapter.js";
+
+const cliChannel = new CliChannel();
 
 const program = new Command();
 program
@@ -523,17 +526,24 @@ program
 
       try {
         const outcome = await worker.executeRun(run.id);
-        console.log(`run id: ${outcome.run.id}`);
-        console.log(`task: ${outcome.task.id} (${outcome.task.title})`);
-        console.log(`agent exit code: ${outcome.agentResult.exitCode ?? "null"}`);
-        for (const line of formatRunDetails(outcome.run)) {
-          console.log(line);
-        }
+        await cliChannel.send({
+          conversationId: taskId,
+          text: [
+            `run id: ${outcome.run.id}`,
+            `task: ${outcome.task.id} (${outcome.task.title})`,
+            `agent exit code: ${outcome.agentResult.exitCode ?? "null"}`,
+          ].join("\n"),
+        });
+        await cliChannel.send({
+          conversationId: taskId,
+          text: formatRunDetails(outcome.run).join("\n"),
+        });
       } catch (error) {
         const stored = await handle.runs.findRun(run.id);
-        for (const line of formatRunDetails(stored)) {
-          console.log(line);
-        }
+        await cliChannel.send({
+          conversationId: taskId,
+          text: formatRunDetails(stored).join("\n"),
+        });
         throw error;
       }
     });

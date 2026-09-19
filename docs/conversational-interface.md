@@ -5,6 +5,23 @@
 > 目标：把"人怎么和 Harness 沟通"从 CLI 扩展成 **群聊 = Harness 的自然语言
 > 控制台**。群聊不是执行层，而是 **Human Interface**。
 
+## 进度（滚动更新）
+
+- TASK-1101 ✅ Channel abstraction（2026-09-19）：
+  - `src/channel/{message.ts,channel.ts,command.ts}`：`Channel`
+    (`id` / `receive` / `send`)、`IncomingMessage`、`OutgoingMessage` +
+    `MessageBlock`（text/code/divider）、`CommandEnvelope`（仅定义形状，
+    Intent 解析留给 TASK-1106）
+  - `src/channel/cli/adapter.ts`：`CliChannel`（第一个 Channel），
+    `send()` 渲染文本，输出与旧 CLI 逐字一致；`receive()` 调用可选 handler
+    后回发（供 Conversation 接入）
+  - CLI `ai run` 的输出改经 `CliChannel.send()` 渲染；真实 codex 冒烟验证
+    “旧 CLI 行为 = 新 Channel 架构下行为”
+  - 边界守卫测试：Channel 不 import 任何业务模块；Harness Core（domain/
+    store/worker/loop/scheduler/verification/execution/workspace/agent/
+    problem/config/util）不 import channel
+- 下一步：TASK-1102 Conversation（多轮上下文 + 去重）
+
 ## 1. 定位
 
 ```text
