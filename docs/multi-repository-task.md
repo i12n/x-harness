@@ -1,7 +1,24 @@
 # Phase 10 — Multi Repository Task（设计稿）
 
-> 状态：设计稿（先设计，后编码）。本文档定稿前不修改 `Task` / `Run` /
-> `Workspace` / `Execution` 的代码模型。
+> 状态：**已定稿**（2026-09-19）。5 个开放问题已拍板：
+> ① `role` 只保留 primary/supporting；② 同一 Task 内禁止同一 Repository 出现两次；
+> ③ `required` v1 固定 true；④ 跨仓库关联验证延后到 DAG，v1 只做 Target 独立
+> 验证 + Run 聚合；⑤ v1 不做 Workspace 复用，每次 Run/Retry 全新 Workspace。
+
+## 进度（滚动更新）
+
+- TASK-1002 ✅：`migrations/005_task_targets.sql`（task_targets + 回填
+  `tgt-<taskId>` + workspaces.task_target_id + executions.mounts）
+- TASK-1003 ✅：`src/domain/taskTarget.ts`（primary/supporting、position、
+  baseRef、required 恒 true）+ `Task.targets` 兼容映射（`repositoryId` 派生自
+  primary）；内存/Postgres store 均支持多 target（事务写入、按 position 读取）
+- TASK-1004 ✅：`createTask` 支持 `targets[]`（缺省用 `repositoryId` 生成单个
+  primary），`findTask`/`listTasks` 返回 targets；CLI 仍走单仓库路径（零迁移）
+- 回归：单测 122 passed；Postgres 集成 4 passed（含多 target round-trip）；
+  真实 codex E2E passed（单仓库零迁移）
+- 下一步：TASK-1005 Multi-Workspace → TASK-1006 Execution 多挂载 →
+  TASK-1007 Context → TASK-1008 Target 级 Verification → TASK-1009 Worker →
+  TASK-1010 Retry/Recovery → TASK-1011 CLI → TASK-1012 真机多挂载验收
 >
 > 目标：一个 Task 可以同时操作多个 Repository；**不**引入 Task 之间的依赖
 > 调度（那是 Dependency DAG，Phase 11）。
@@ -296,8 +313,8 @@ TASK-1012  真机 Docker 多挂载验收（成功 / 部分失败 / 清理）
 
 ## 12. 待确认（进入编码前需要拍板）
 
-1. `role` 语义：primary/supporting 两值是否足够？是否需要 `dependency` 角色？
-2. 是否允许同一仓库在 Task 内出现两次（不同 branch）？建议：禁止。
-3. `required=false`（可选 target）是否需要在 v1 就定义语义？建议：v1 恒 true。
-4. 跨仓库验证是否确认延后到 DAG 阶段？建议：延后，v1 挂 primary。
-5. workspace 复用是否确认 v1 不做？建议：不做，重试全量重建。
+1. `role` 语义 —— **已定**：v1 只保留 `primary / supporting`
+2. 同一仓库重复出现 —— **已定**：禁止
+3. `required=false` —— **已定**：v1 固定 `true`，不实现 optional target
+4. 跨仓库验证 —— **已定**：延后到 DAG；v1 只做 Target 独立验证 + Run 聚合
+5. workspace 复用 —— **已定**：v1 不做，每次 Run/Retry 全量重建

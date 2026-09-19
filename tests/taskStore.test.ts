@@ -86,4 +86,89 @@ describe("InMemoryTaskStore", () => {
       store.createTask({ repositoryId: "repo-001", title: "x", status: "NOPE" }),
     ).rejects.toBeInstanceOf(ValidationError);
   });
+
+  describe("multi-repository targets (TASK-1003)", () => {
+    it("derives a single primary target from repositoryId (compat)", async () => {
+      const store = new InMemoryTaskStore();
+      const task = await store.createTask({
+        id: "task-001",
+        repositoryId: "repo-001",
+        title: "compat",
+      });
+
+      expect(task.targets).toHaveLength(1);
+      expect(task.targets[0]).toMatchObject({
+        taskId: "task-001",
+        repositoryId: "repo-001",
+        role: "primary",
+        position: 0,
+        required: true,
+      });
+      expect(task.repositoryId).toBe("repo-001");
+    });
+
+    it("keeps multiple targets ordered with one primary", async () => {
+      const store = new InMemoryTaskStore();
+      const task = await store.createTask({
+        id: "task-002",
+        title: "multi",
+        targets: [
+          { taskId: "", repositoryId: "repo-b", role: "supporting", position: 1 },
+          { taskId: "", repositoryId: "repo-a", role: "primary", position: 0, baseRef: "main" },
+        ],
+      });
+
+      expect(task.targets.map((target) => target.repositoryId)).toEqual([
+        "repo-a",
+        "repo-b",
+      ]);
+      expect(task.targets[1]?.role).toBe("supporting");
+      expect(task.repositoryId).toBe("repo-a");
+      expect(task.targets.every((target) => target.taskId === "task-002")).toBe(true);
+      expect(task.targets[0]?.baseRef).toBe("main");
+    });
+
+    it("rejects duplicate repositories", async () => {
+      const store = new InMemoryTaskStore();
+      await expect(
+        store.createTask({
+          title: "dup",
+          targets: [
+            { taskId: "", repositoryId: "repo-a", role: "primary" },
+            { taskId: "", repositoryId: "repo-a", role: "supporting", position: 1 },
+          ],
+        }),
+      ).rejects.toBeInstanceOf(ValidationError);
+    });
+
+    it("requires exactly one primary target", async () => {
+      const store = new InMemoryTaskStore();
+      await expect(
+        store.createTask({
+          title: "no primary",
+          targets: [
+            { taskId: "", repositoryId: "repo-a", role: "supporting" },
+            { taskId: "", repositoryId: "repo-b", role: "supporting", position: 1 },
+          ],
+        }),
+      ).rejects.toBeInstanceOf(ValidationError);
+
+      await expect(
+        store.createTask({
+          title: "two primaries",
+          targets: [
+            { taskId: "", repositoryId: "repo-a", role: "primary" },
+            { taskId: "", repositoryId: "repo-b", role: "primary", position: 1 },
+          ],
+        }),
+      ).rejects.toBeInstanceOf(ValidationError);
+    });
+
+    it("rejects a task without any target", async () => {
+      const store = new InMemoryTaskStore();
+      await expect(store.createTask({ title: "no target" })).rejects.toBeInstanceOf(
+        ValidationError,
+      );
+    });
+  });
 });

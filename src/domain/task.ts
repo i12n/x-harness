@@ -1,6 +1,8 @@
 import { ValidationError } from "../errors.js";
 import { makeId } from "../util/id.js";
 import { clampInt, dedupeNonEmpty } from "../util/strings.js";
+import { buildTaskTarget } from "./taskTarget.js";
+import type { CreateTaskTargetInput, TaskTarget } from "./taskTarget.js";
 
 export const TASK_STATUSES = [
   "INBOX",
@@ -18,7 +20,9 @@ export type TaskStatus = (typeof TASK_STATUSES)[number];
 /** One unit of work bound to a repository. */
 export interface Task {
   id: string;
+  /** Primary repository (derived from the primary target) — kept for compat. */
   repositoryId: string;
+  targets: TaskTarget[];
   title: string;
   description: string;
   status: TaskStatus;
@@ -66,7 +70,9 @@ export function withTaskReview(
 
 export interface CreateTaskInput {
   id?: string;
-  repositoryId: string;
+  /** Single-repository shorthand; ignored when `targets` is provided. */
+  repositoryId?: string;
+  targets?: CreateTaskTargetInput[];
   title: string;
   description?: string;
   status?: TaskStatus;
@@ -88,10 +94,6 @@ export function assertTaskStatus(value: TaskStatus): void {
 
 /** Build a fully-populated Task from create input, applying defaults. */
 export function buildTask(input: CreateTaskInput): Task {
-  const repositoryId = input.repositoryId.trim();
-  if (!repositoryId) {
-    throw new ValidationError("task repository id is required");
-  }
   const title = input.title.trim();
   if (!title) {
     throw new ValidationError("task title is required");
@@ -99,10 +101,17 @@ export function buildTask(input: CreateTaskInput): Task {
   const status = input.status ?? "INBOX";
   assertTaskStatus(status);
 
+  const id = input.id?.trim() || makeId("task");
+  const targets = normalizeTargets(id, input);
+  const primary = targets.find((target) => target.role === "primary");
+  if (!primary) {
+    throw new ValidationError("task must have exactly one primary target");
+  }
   const now = new Date().toISOString();
   return {
-    id: input.id?.trim() || makeId("task"),
-    repositoryId,
+    id,
+    repositoryId: primary.repositoryId,
+    targets,
     title,
     description: input.description?.trim() ?? "",
     status,
@@ -113,6 +122,47 @@ export function buildTask(input: CreateTaskInput): Task {
     createdAt: now,
     updatedAt: now,
   };
+}
+
+/** v1: exactly one primary, unique repositories, order = position. */
+function normalizeTargets(taskId: string, input: CreateTaskInput): TaskTarget[] {
+  const requested: CreateTaskTargetInput[] =
+    input.targets && input.targets.length > 0
+      ? input.targets
+      : input.repositoryId
+        ? [{ taskId, repositoryId: input.repositoryId, role: "primary" }]
+        : [];
+  if (requested.length === 0) {
+    throw new ValidationError("task requires at least one repository target");
+  }
+
+  const seen = new Set<string>();
+  const targets = requested.map((target, index) =>
+    buildTaskTarget({
+      id: target.id ?? `${taskId}-target-${index}`,
+      taskId,
+      repositoryId: target.repositoryId,
+      role: target.role ?? (index === 0 ? "primary" : "supporting"),
+      position: target.position ?? index,
+      baseRef: target.baseRef,
+      required: target.required ?? true,
+    }),
+  );
+  for (const target of targets) {
+    if (seen.has(target.repositoryId)) {
+      throw new ValidationError(
+        `task targets must not repeat a repository: ${target.repositoryId}`,
+      );
+    }
+    seen.add(target.repositoryId);
+  }
+  const primaries = targets.filter((target) => target.role === "primary");
+  if (primaries.length !== 1) {
+    throw new ValidationError(
+      `task must have exactly one primary target (found ${primaries.length})`,
+    );
+  }
+  return [...targets].sort((a, b) => a.position - b.position);
 }
 
 export interface TaskValidationReport {

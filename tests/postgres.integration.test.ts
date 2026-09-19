@@ -75,7 +75,7 @@ describePostgres("PostgreSQL integration", () => {
       cleanup();
     }
     await pool?.query(
-      "DELETE FROM clarification_answers; DELETE FROM clarifications; DELETE FROM problem_analyses; DELETE FROM problems; DELETE FROM events; DELETE FROM executions; DELETE FROM workspaces; DELETE FROM runs; DELETE FROM tasks; DELETE FROM repositories;",
+      "DELETE FROM clarification_answers; DELETE FROM clarifications; DELETE FROM problem_analyses; DELETE FROM problems; DELETE FROM events; DELETE FROM executions; DELETE FROM workspaces; DELETE FROM task_targets; DELETE FROM runs; DELETE FROM tasks; DELETE FROM repositories;",
     );
   });
 
@@ -237,6 +237,58 @@ describePostgres("PostgreSQL integration", () => {
     expect((await problems.listClarifications("prob-001"))[0]?.answer?.optionId).toBe(
       "all_users",
     );
+  });
+
+  it("persists multi-repository task targets (TASK-1003)", async () => {
+    const repositories = new PostgresRepositoryStore(pool!);
+    const tasks = new PostgresTaskStore(pool!);
+    await repositories.createRepository({
+      id: "repo-a",
+      name: "app",
+      url: "git@github.com:example/app.git",
+      localPath: "/tmp/repos/app",
+    });
+    await repositories.createRepository({
+      id: "repo-b",
+      name: "shared-lib",
+      url: "git@github.com:example/shared-lib.git",
+      localPath: "/tmp/repos/shared-lib",
+    });
+
+    const task = await tasks.createTask({
+      id: "task-multi",
+      title: "multi repo change",
+      targets: [
+        { taskId: "", repositoryId: "repo-b", role: "supporting", position: 1 },
+        {
+          taskId: "",
+          repositoryId: "repo-a",
+          role: "primary",
+          position: 0,
+          baseRef: "release/2.1",
+        },
+      ],
+    });
+    expect(task.repositoryId).toBe("repo-a");
+
+    const loaded = await tasks.findTask("task-multi");
+    expect(loaded.targets.map((target) => target.repositoryId)).toEqual([
+      "repo-a",
+      "repo-b",
+    ]);
+    expect(loaded.targets[0]).toMatchObject({
+      role: "primary",
+      position: 0,
+      baseRef: "release/2.1",
+      required: true,
+    });
+    expect(loaded.targets[1]).toMatchObject({
+      role: "supporting",
+      position: 1,
+    });
+    expect(
+      (await tasks.listTasks({ repositoryId: "repo-a" }))[0]?.id,
+    ).toBe("task-multi");
   });
 
   it("runs the confirmation loop and persists problem events", async () => {
