@@ -21,7 +21,8 @@ export interface TaskTarget {
 
 export interface CreateTaskTargetInput {
   id?: string;
-  taskId: string;
+  /** Injected by Task assembly; callers creating a Task may omit it. */
+  taskId?: string;
   repositoryId: string;
   role?: TargetRole;
   position?: number;

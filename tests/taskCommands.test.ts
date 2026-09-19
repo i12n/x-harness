@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { RepositoryNotFoundError } from "../src/errors.js";
+import { RepositoryNotFoundError, ValidationError } from "../src/errors.js";
 import {
   createTaskCommand,
   listTasksCommand,
+  resolveTaskTargets,
   showTaskCommand,
   validateTaskCommand,
 } from "../src/cli/commands/taskCommands.js";
@@ -113,5 +114,96 @@ describe("task CLI commands", () => {
 
     const types = (await events.listEvents({ taskId: "task-001" })).map((e) => e.type);
     expect(types).toEqual(["TaskCreated", "TaskReady"]);
+  });
+
+  describe("multi-repository targets (TASK-1011)", () => {
+    it("maps repeated --repo flags: first primary, rest supporting", async () => {
+      const { repositories } = await setup();
+      await repositories.createRepository({
+        id: "repo-002",
+        name: "auth",
+        url: "https://github.com/example/auth.git",
+        defaultBranch: "develop",
+      });
+
+      const targets = await resolveTaskTargets(repositories, ["repo-001", "repo-002"]);
+
+      expect(targets).toEqual([
+        {
+          repositoryId: "repo-001",
+          role: "primary",
+          position: 0,
+          baseRef: "main",
+          required: true,
+        },
+        {
+          repositoryId: "repo-002",
+          role: "supporting",
+          position: 1,
+          baseRef: "develop",
+          required: true,
+        },
+      ]);
+    });
+
+    it("binds --base-ref per repository and defaults to the repository branch", async () => {
+      const { repositories } = await setup();
+      await repositories.createRepository({
+        id: "repo-002",
+        name: "auth",
+        url: "https://github.com/example/auth.git",
+        defaultBranch: "develop",
+      });
+
+      const targets = await resolveTaskTargets(
+        repositories,
+        ["repo-001", "repo-002"],
+        { "repo-002": "release/2.1" },
+      );
+
+      expect(targets[0]?.baseRef).toBe("main");
+      expect(targets[1]?.baseRef).toBe("release/2.1");
+    });
+
+    it("rejects base-ref entries for repositories that were not passed", async () => {
+      const { repositories } = await setup();
+      await expect(
+        resolveTaskTargets(repositories, ["repo-001"], { "repo-999": "main" }),
+      ).rejects.toThrow(/not passed via --repo/);
+    });
+
+    it("rejects duplicate repositories through the domain", async () => {
+      const { repositories, tasks } = await setup();
+      await expect(
+        createTaskCommand(tasks, repositories, {
+          repos: ["repo-001", "repo-001"],
+          title: "duplicate repo",
+        }),
+      ).rejects.toBeInstanceOf(ValidationError);
+    });
+
+    it("creates a multi-target task from CLI options", async () => {
+      const { repositories, tasks } = await setup();
+      await repositories.createRepository({
+        id: "repo-002",
+        name: "auth",
+        url: "https://github.com/example/auth.git",
+        defaultBranch: "develop",
+      });
+
+      const task = await createTaskCommand(tasks, repositories, {
+        id: "task-multi",
+        repos: ["repo-001", "repo-002"],
+        baseRefs: { "repo-002": "release/2.1" },
+        title: "multi",
+      });
+
+      expect(task.repositoryId).toBe("repo-001");
+      expect(task.targets.map((target) => target.repositoryId)).toEqual([
+        "repo-001",
+        "repo-002",
+      ]);
+      expect(task.targets[1]?.baseRef).toBe("release/2.1");
+    });
   });
 });

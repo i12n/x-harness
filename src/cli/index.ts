@@ -45,13 +45,13 @@ import {
   validateTaskCommand,
 } from "./commands/taskCommands.js";
 import type { TaskCreateOptions } from "./commands/taskCommands.js";
-import { runTaskCommand } from "./commands/runCommands.js";
 import {
   approveTaskCommand,
   rejectTaskCommand,
   reviewRunCommand,
 } from "./commands/reviewCommands.js";
 import { cleanupWorkspacesCommand } from "./commands/workspaceCommands.js";
+import { formatRunDetails, formatTaskTargets } from "./output.js";
 
 const program = new Command();
 program
@@ -77,6 +77,38 @@ function parsePositiveNumber(value: string): number {
     throw new Error(`invalid positive number: ${value}`);
   }
   return parsed;
+}
+
+function parseBaseRef(
+  value: string,
+  previous: Record<string, string>,
+): Record<string, string> {
+  const separator = value.indexOf("=");
+  if (separator <= 0 || separator === value.length - 1) {
+    throw new Error(`invalid --base-ref '${value}' (expected <repositoryId>=<ref>)`);
+  }
+  const repositoryId = value.slice(0, separator).trim();
+  const ref = value.slice(separator + 1).trim();
+  if (!repositoryId || !ref) {
+    throw new Error(`invalid --base-ref '${value}' (expected <repositoryId>=<ref>)`);
+  }
+  return { ...previous, [repositoryId]: ref };
+}
+
+async function loadRepositoryNames(
+  repositories: { findRepository(id: string): Promise<{ id: string; name: string }> },
+  ids: string[],
+): Promise<Map<string, string>> {
+  const names = new Map<string, string>();
+  for (const id of [...new Set(ids)]) {
+    try {
+      const repository = await repositories.findRepository(id);
+      names.set(repository.id, repository.name);
+    } catch {
+      names.set(id, id);
+    }
+  }
+  return names;
 }
 
 async function withStores(
@@ -162,9 +194,10 @@ const task = program.command("task").description("create and inspect tasks");
 
 task
   .command("create")
-  .description("create a task bound to a repository (status: INBOX)")
+  .description("create a task (first --repo is primary; repeat for multi-repo)")
   .option("--id <id>", "task id (default: generated)")
-  .requiredOption("--repo <id>", "repository id the task belongs to")
+  .option("--repo <id>", "repository id (repeatable; first is primary)", collect, [])
+  .option("--base-ref <repoId=ref>", "base ref per repository (repeatable)", parseBaseRef, {})
   .requiredOption("--title <title>", "task title")
   .option("--description <text>", "task description")
   .option("--accept <criterion>", "acceptance criterion (repeatable)", collect, [])
@@ -172,9 +205,28 @@ task
   .option("--max-attempts <n>", "max retry attempts (default: 3)", parsePositiveInt)
   .action(async (options: TaskCreateOptions) => {
     await withStores(async ({ tasks, repositories, events }) => {
-      const created = await createTaskCommand(tasks, repositories, options, events);
+      const rawRepo = options.repo as unknown;
+      const repos = Array.isArray(rawRepo)
+        ? (rawRepo as string[])
+        : rawRepo
+          ? [String(rawRepo)]
+          : [];
+      const baseRefs =
+        (options as unknown as { baseRef?: Record<string, string> }).baseRef ?? {};
+      const created = await createTaskCommand(
+        tasks,
+        repositories,
+        { ...options, repo: undefined, repos, baseRefs },
+        events,
+      );
       console.log(`Created ${created.id} (${created.title})`);
-      printTask(created);
+      printTask(
+        created,
+        await loadRepositoryNames(
+          repositories,
+          created.targets.map((target) => target.repositoryId),
+        ),
+      );
     });
   });
 
@@ -207,9 +259,23 @@ task
   .command("show <id>")
   .description("show one task")
   .action(async (id: string) => {
-    await withStores(async ({ tasks }) => {
+    await withStores(async ({ tasks, repositories, runs }) => {
       const item = await showTaskCommand(tasks, id);
-      printTask(item);
+      printTask(
+        item,
+        await loadRepositoryNames(
+          repositories,
+          item.targets.map((target) => target.repositoryId),
+        ),
+      );
+      const taskRuns = await runs.listRuns({ taskId: id });
+      const latest = taskRuns[taskRuns.length - 1];
+      if (latest) {
+        console.log("");
+        for (const line of formatRunDetails(latest)) {
+          console.log(line);
+        }
+      }
     });
   });
 
@@ -426,46 +492,50 @@ event
 
 program
   .command("run <task-id>")
-  .description("manually run one task: workspace -> context -> codex -> result")
+  .description("run one task once (workspaces -> mounts -> codex -> verification)")
   .action(async (taskId: string) => {
-    await withStores(async ({ tasks, repositories }) => {
-      const outcome = await runTaskCommand({
-        tasks,
-        repositories,
-        workspaceManager: new WorkspaceManager(),
-        engine: new CodexEngine(),
-        verifier: new Verifier(),
-        taskId,
+    await withStores(async (handle) => {
+      const task = await handle.tasks.findTask(taskId);
+      const existing = await handle.runs.listRuns({ taskId: task.id });
+      const run = await handle.runs.createRun({
+        taskId: task.id,
+        attempt: existing.length + 1,
+        agent: "codex",
+        engine: "codex",
       });
-      console.log(`run id: ${outcome.runId}`);
-      console.log(`task: ${outcome.task.id} (${outcome.task.title})`);
-      console.log(`repository: ${outcome.repository.id} (${outcome.repository.name})`);
-      console.log(`workspace: ${outcome.workspace.path} [${outcome.workspace.branch}]`);
-      console.log(`agent exit code: ${outcome.result.exitCode ?? "null"}`);
-      const tail = outcome.result.stdout.trim().split("\n").slice(-10).join("\n");
-      if (tail) {
-        console.log("agent output:");
-        console.log(tail);
+      const workspaceManager = new WorkspaceManager();
+      const executionManager = new ExecutionManager({
+        driver: new LocalExecutionDriver(),
+        executions: handle.executions,
+        events: handle.events,
+      });
+      const worker = new Worker({
+        runStore: handle.runs,
+        taskStore: handle.tasks,
+        repositoryStore: handle.repositories,
+        workspaceManager,
+        agentEngine: new CodexEngine(),
+        verifier: new Verifier(),
+        executionManager,
+        eventStore: handle.events,
+        workerId: "cli-run",
+      });
+
+      try {
+        const outcome = await worker.executeRun(run.id);
+        console.log(`run id: ${outcome.run.id}`);
+        console.log(`task: ${outcome.task.id} (${outcome.task.title})`);
+        console.log(`agent exit code: ${outcome.agentResult.exitCode ?? "null"}`);
+        for (const line of formatRunDetails(outcome.run)) {
+          console.log(line);
+        }
+      } catch (error) {
+        const stored = await handle.runs.findRun(run.id);
+        for (const line of formatRunDetails(stored)) {
+          console.log(line);
+        }
+        throw error;
       }
-      if (outcome.result.stderr.trim()) {
-        console.log("agent stderr:");
-        console.log(outcome.result.stderr.trim());
-      }
-      const passedChecks = outcome.verification.checks.filter(
-        (check) => check.status === "passed",
-      ).length;
-      console.log(
-        `verification: ${outcome.verification.passed ? "PASSED" : "FAILED"} ` +
-          `(${passedChecks}/${outcome.verification.checks.length} checks passed)`,
-      );
-      for (const check of outcome.verification.checks) {
-        console.log(`- ${check.name} ${check.status} (${check.command || "no command"})`);
-      }
-      console.log(
-        outcome.succeeded
-          ? "run SUCCEEDED: verification passed"
-          : "run FAILED: verification failed (agent execution is not task completion)",
-      );
     });
   });
 
@@ -595,7 +665,7 @@ function printRepository(repo: Repository): void {
   }
 }
 
-function printTask(item: Task): void {
+function printTask(item: Task, repositoryNames: Map<string, string> = new Map()): void {
   console.log(`id: ${item.id}`);
   console.log(`repository_id: ${item.repositoryId}`);
   console.log(`title: ${item.title}`);
@@ -603,6 +673,9 @@ function printTask(item: Task): void {
   console.log(`priority: ${item.priority}`);
   console.log(`max_attempts: ${item.maxAttempts}`);
   console.log(`description: ${item.description || "(none)"}`);
+  for (const line of formatTaskTargets(item, repositoryNames)) {
+    console.log(line);
+  }
   console.log("acceptance:");
   if (item.acceptance.length === 0) {
     console.log("  (none)");

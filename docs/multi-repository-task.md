@@ -70,7 +70,20 @@
   - Retry：新 Run → 新目录/新分支，绝不复用（有专门测试）
 - 回归：单测 158 passed；Postgres 集成 4 passed；真实 codex E2E passed；
   **真机 Docker 验收 12 passed / 1 skipped，无残留容器/网络/workspace**
-- 下一步：TASK-1011 CLI / API →
+- TASK-1011 ✅：CLI / API 多仓库能力 ——
+  - `ai task create --repo` 可重复（第一个永为 primary，其余 supporting）；
+    `--base-ref <repoId>=<ref>` 按仓库绑定，未指定时默认
+    `repository.defaultBranch`；重复仓库由 Domain 拒绝（非 CLI 兜底）
+  - `ai task show` 输出 Targets（role/position/repository/base_ref/required）
+    与最近一次 Run 的明细（workspaces + per-target verification）
+  - `ai run <task-id>` 改为走 Worker（与 Scheduler/Loop 同一 Application
+    逻辑）：N workspaces → N mounts → 1 Agent → N Target Verification，
+    失败可定位到 target / check / exit code / 输出片段
+  - 新增 `src/cli/output.ts`（纯格式化、可单测），CLI 仅做参数解析与展示
+- 回归：单测 166 passed；Postgres 集成 4 passed；真实 codex E2E passed；
+  CLI 真库冒烟（多 --repo + --base-ref + task show）；真机 Docker 验收
+  12 passed / 1 skipped，无残留资源
+- 下一步：TASK-1012 Full E2E（Phase 10 Release Gate） →
   TASK-1007 Context → TASK-1008 Target 级 Verification → TASK-1009 Worker →
   TASK-1010 Retry/Recovery → TASK-1011 CLI → TASK-1012 真机多挂载验收
 >
