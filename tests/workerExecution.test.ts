@@ -40,11 +40,21 @@ class RecordingDriver extends LocalExecutionDriver implements ExecutionDriver {
 
   async create(request: ExecutionRequest): Promise<ExecutionEnvironment> {
     this.calls.push("create");
+    const mounts = (request.mounts ?? []).map((mount) => ({
+      ...mount,
+      target: this.options.workdir ?? resolve(mount.source),
+    }));
+    const primary = mounts.find((mount) => mount.primary) ?? mounts[0];
+    if (!primary) {
+      throw new Error("recording driver requires mounts");
+    }
     this.environment = {
       id: `recording-${request.runId}`,
       runId: request.runId,
-      workspacePath: resolve(request.workspacePath),
-      containerWorkspace: this.options.workdir ?? resolve(request.workspacePath),
+      workspacePath: resolve(primary.source),
+      containerWorkspace: primary.target,
+      mounts,
+      primaryTargetId: primary.targetId,
       profile: request.profile,
       driver: "recording",
       containerId: this.options.containerId,

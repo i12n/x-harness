@@ -2,6 +2,7 @@ import type { AgentEngine, AgentResult } from "../agent/types.js";
 import { buildAgentContext } from "../agent/contextBuilder.js";
 import type { Repository } from "../domain/repository.js";
 import { defaultExecutionProfile } from "../domain/executionProfile.js";
+import type { TaskTarget } from "../domain/taskTarget.js";
 import type { Run } from "../domain/run.js";
 import type { Task } from "../domain/task.js";
 import {
@@ -16,12 +17,22 @@ import {
   toExecutionContext,
 } from "../execution/manager.js";
 import type { ExecutionEnvironment } from "../execution/manager.js";
+import {
+  CONTAINER_PRIMARY_WORKSPACE,
+  CONTAINER_TARGETS_ROOT,
+} from "../execution/mounts.js";
+import type { ExecutionMount } from "../execution/mounts.js";
 import type { EventStore } from "../store/eventStore.js";
 import type { RepositoryStore } from "../store/repositoryStore.js";
 import type { RunStore } from "../store/runStore.js";
 import type { TaskStore } from "../store/taskStore.js";
 import type { VerificationResult, Verifier } from "../verification/runner.js";
+import {
+  TargetVerifier,
+  type TargetVerificationResult,
+} from "../verification/targetVerifier.js";
 import type { ManagedWorkspace, WorkspaceManager } from "../workspace/manager.js";
+import type { ContextTarget } from "../agent/contextBuilder.js";
 
 export interface WorkerOptions {
   runStore: RunStore;
@@ -43,7 +54,10 @@ export interface ExecuteRunOutcome {
   task: Task;
   agentResult: AgentResult;
   verification: VerificationResult;
+  /** Primary workspace (kept for backward compatibility). */
   workspace: ManagedWorkspace;
+  workspaces: ManagedWorkspace[];
+  targets: TargetVerificationResult[];
 }
 
 /**
@@ -58,6 +72,7 @@ export class Worker {
   private readonly workspaceManager: WorkspaceManager;
   private readonly agentEngine: AgentEngine;
   private readonly verifier: Verifier;
+  private readonly targetVerifier: TargetVerifier;
   private readonly executionManager: ExecutionManager;
   private readonly events: EventStore | undefined;
   private readonly workerId: string;
@@ -72,6 +87,7 @@ export class Worker {
     this.workspaceManager = options.workspaceManager;
     this.agentEngine = options.agentEngine;
     this.verifier = options.verifier;
+    this.targetVerifier = new TargetVerifier(options.verifier);
     this.executionManager =
       options.executionManager ?? new ExecutionManager(new LocalExecutionDriver());
     this.events = options.eventStore;
@@ -106,16 +122,64 @@ export class Worker {
       await this.taskStore.updateTaskStatus(task.id, "RUNNING");
       await this.runStore.markRunning(runId);
 
-      const repository = await this.repositoryStore.findRepository(task.repositoryId);
-      const workspace = await this.workspaceManager.createWorkspace({
-        repositoryLocalPath: repository.localPath,
+      // Phase 10 / TASK-1009: one Run executes every target once — one
+      // execution, N workspaces, one agent, N target verifications.
+      const orderedTargets: { target: TaskTarget; repository: Repository }[] = [];
+      for (const target of [...task.targets].sort((a, b) => a.position - b.position)) {
+        orderedTargets.push({
+          target,
+          repository: await this.repositoryStore.findRepository(target.repositoryId),
+        });
+      }
+      const primaryTarget =
+        orderedTargets.find(({ target }) => target.role === "primary") ??
+        orderedTargets[0];
+      if (!primaryTarget) {
+        throw new WorkerExecutionError(`task ${task.id} has no targets`);
+      }
+
+      const workspaces = await this.workspaceManager.createRunWorkspaces({
         taskId: task.id,
         runId,
+        targets: orderedTargets.map(({ target, repository }) => ({
+          targetId: target.id,
+          repositoryLocalPath: repository.localPath,
+          position: target.position,
+          baseRef: target.baseRef,
+        })),
       });
+      const workspaceByTarget = new Map(
+        workspaces.map((workspace) => [workspace.targetId ?? "primary", workspace]),
+      );
+      const primaryWorkspace = workspaceByTarget.get(primaryTarget.target.id);
+      if (!primaryWorkspace) {
+        throw new WorkerExecutionError(
+          `primary workspace missing for target ${primaryTarget.target.id}`,
+        );
+      }
+
+      const mounts: ExecutionMount[] = orderedTargets.map(({ target }) => {
+        const workspace = workspaceByTarget.get(target.id);
+        if (!workspace) {
+          throw new WorkerExecutionError(`workspace missing for target ${target.id}`);
+        }
+        return {
+          targetId: target.id,
+          source: workspace.path,
+          target:
+            target.role === "primary"
+              ? CONTAINER_PRIMARY_WORKSPACE
+              : `${CONTAINER_TARGETS_ROOT}/${target.id}`,
+          primary: target.role === "primary",
+        };
+      });
+
       environment = await this.executionManager.prepare({
         runId,
-        workspacePath: workspace.path,
-        profile: repository.executionProfile ?? defaultExecutionProfile(),
+        profile:
+          primaryTarget.repository.executionProfile ?? defaultExecutionProfile(),
+        mounts,
+        primaryTargetId: primaryTarget.target.id,
       });
       const preparedEnvironment = environment;
       const exec = (
@@ -124,19 +188,36 @@ export class Worker {
       ) => this.executionManager.exec(preparedEnvironment, command, options);
       const execution = toExecutionContext(preparedEnvironment, exec);
 
+      const contextTargets: ContextTarget[] = orderedTargets.map(
+        ({ target, repository }) => {
+          const workspace = workspaceByTarget.get(target.id)!;
+          return {
+            targetId: target.id,
+            repository,
+            role: target.role,
+            branch: workspace.branch,
+            workdir: execution.workdirs?.[target.id] ?? execution.workdir,
+            hostWorkspacePath: workspace.path,
+          };
+        },
+      );
       const context = {
         ...(await buildAgentContext({
           runId,
           task,
-          repository,
-          workspacePath: workspace.path,
+          targets: contextTargets,
+          primaryTargetId: primaryTarget.target.id,
         })),
         execution,
       };
       await this.emit("AgentStarted", {
         taskId: task.id,
         runId,
-        payload: { agent: "codex", engine: "codex", workspace: workspace.path },
+        payload: {
+          agent: "codex",
+          engine: "codex",
+          workspaces: workspaces.map((workspace) => workspace.path),
+        },
       });
       const agentOutcome = await this.runAgent(runId, context, options.signal);
       if (agentOutcome === "TIMED_OUT" || agentOutcome === "CANCELLED") {
@@ -167,12 +248,18 @@ export class Worker {
       await this.runStore.updateRunStatus(runId, "VERIFYING");
       await this.taskStore.updateTaskStatus(task.id, "VERIFYING");
       await this.emit("VerificationStarted", { taskId: task.id, runId });
-      const verification = await this.verifier.run({
-        workspacePath: workspace.path,
-        workdir: execution.workdir,
-        exec,
-        commands: repository.verificationCommands,
-      });
+      const targetResults = await this.targetVerifier.verifyTargets(
+        orderedTargets.map(({ target, repository }) => ({
+          targetId: target.id,
+          repositoryId: repository.id,
+          repositoryName: repository.name,
+          role: target.role,
+          workdir: execution.workdirs?.[target.id] ?? execution.workdir,
+          commands: repository.verificationCommands,
+          exec,
+        })),
+      );
+      const verification = aggregateVerification(targetResults);
       await this.emit(
         verification.passed ? "VerificationPassed" : "VerificationFailed",
         {
@@ -180,9 +267,14 @@ export class Worker {
           runId,
           payload: {
             passed: verification.passed,
-            checks: verification.checks.map((check) => ({
-              command: check.command,
-              status: check.status,
+            targets: targetResults.map((result) => ({
+              targetId: result.targetId,
+              repositoryId: result.repositoryId,
+              passed: result.passed,
+              checks: result.checks.map((check) => ({
+                command: check.command,
+                status: check.status,
+              })),
             })),
           },
         },
@@ -195,7 +287,16 @@ export class Worker {
           status: "SUCCEEDED",
           exitCode: agentResult.exitCode,
           result: {
-            workspace: { path: workspace.path, branch: workspace.branch },
+            workspace: {
+              path: primaryWorkspace.path,
+              branch: primaryWorkspace.branch,
+            },
+            workspaces: workspaces.map((workspace) => ({
+              targetId: workspace.targetId,
+              path: workspace.path,
+              branch: workspace.branch,
+            })),
+            targets: targetResults,
             agentStdout: truncate(agentResult.stdout, 100_000),
             agentStderr: truncate(agentResult.stderr, 100_000),
             verification,
@@ -211,10 +312,12 @@ export class Worker {
           runId,
           task,
           claimed,
-          repository,
+          primaryTarget.repository,
           agentResult,
           verification,
-          workspace,
+          primaryWorkspace,
+          workspaces,
+          targetResults,
           finishedAt,
         );
         await this.emit("RunFailed", {
@@ -231,7 +334,9 @@ export class Worker {
         task: finalTask,
         agentResult,
         verification,
-        workspace,
+        workspace: primaryWorkspace,
+        workspaces,
+        targets: targetResults,
       };
     } catch (error) {
       if (terminalStatus) {
@@ -278,6 +383,8 @@ export class Worker {
     agentResult: AgentResult,
     verification: VerificationResult,
     workspace: ManagedWorkspace,
+    workspaces: ManagedWorkspace[],
+    targets: TargetVerificationResult[],
     finishedAt: string,
   ): Promise<void> {
     await this.runStore.completeRun(runId, {
@@ -285,6 +392,12 @@ export class Worker {
       exitCode: agentResult.exitCode,
       result: {
         workspace: { path: workspace.path, branch: workspace.branch },
+        workspaces: workspaces.map((item) => ({
+          targetId: item.targetId,
+          path: item.path,
+          branch: item.branch,
+        })),
+        targets,
         agentStdout: truncate(agentResult.stdout, 100_000),
         agentStderr: truncate(agentResult.stderr, 100_000),
       },
@@ -295,6 +408,19 @@ export class Worker {
           exitCode: check.exitCode,
           output: truncate(check.output, 20_000),
         })),
+        failingTargets: targets
+          .filter((target) => !target.passed)
+          .map((target) => ({
+            targetId: target.targetId,
+            repositoryId: target.repositoryId,
+            error: target.error,
+            checks: target.checks.map((check) => ({
+              command: check.command,
+              status: check.status,
+              exitCode: check.exitCode,
+              output: truncate(check.output, 20_000),
+            })),
+          })),
         repository: repository.id,
       },
       finishedAt,
@@ -398,4 +524,27 @@ function isoIn(ms: number): string {
 
 function truncate(value: string, max: number): string {
   return value.length <= max ? value : `${value.slice(0, max)}\n...[truncated]`;
+}
+
+/**
+ * TASK-1009 Run aggregation: a Run succeeds only when every target passed.
+ * The per-target detail lives in `run.result.targets[]`; this aggregate keeps
+ * the Phase 5 `VerificationResult` shape for backward compatibility.
+ */
+function aggregateVerification(
+  results: TargetVerificationResult[],
+): VerificationResult {
+  const checks = results.flatMap((result) => result.checks);
+  const startedAt = results[0]?.startedAt ?? new Date().toISOString();
+  const finishedAt = results[results.length - 1]?.finishedAt ?? startedAt;
+  return {
+    passed: results.length > 0 && results.every((result) => result.passed),
+    checks,
+    startedAt,
+    finishedAt,
+    durationSeconds: results.reduce(
+      (total, result) => total + result.durationSeconds,
+      0,
+    ),
+  };
 }

@@ -46,7 +46,19 @@
   passed, duration, error?}`；单 target 的结果与 Phase 5 `Verifier` 逐项一致。
   **不做 Run 聚合**（留给 TASK-1009），不动 Scheduler/Execution/Workspace
 - 回归：单测 146 passed；真实 codex E2E passed
-- 下一步：TASK-1009 Worker / Run aggregation →
+- TASK-1009 ✅：Worker / Run 多仓库执行与聚合 —— 1 Task → 1 Run →
+  1 Execution（N mounts）→ N Workspaces → **1 次 Agent 调用** →
+  `TargetVerifier` 逐 target 验证 → Run 聚合（全部 required passed 才
+  SUCCEEDED，任一失败 FAILED）。`run.result` 写入
+  `workspaces[]`（targetId/path/branch）与 `targets[]`（完整 per-target
+  verification 证据：repositoryId、commands、checks、passed、error）；
+  失败时 `error.failingTargets[]` 指明是哪个 target、哪条 check 失败；
+  `cleanupWorkspacesCommand` 现在按 `run.result.workspaces[]` 清理全部
+  target 的 worktree；单仓库路径保持兼容（1 workspace / 1 target result，
+  aggregate checks 与 Phase 5 一致）
+- 回归：单测 151 passed；Postgres 集成 4 passed；真实 codex E2E passed；
+  **真机 Docker 验收 12 passed / 1 skipped**（单仓库路径无回归）
+- 下一步：TASK-1010 Retry / Failure / Recovery →
   TASK-1007 Context → TASK-1008 Target 级 Verification → TASK-1009 Worker →
   TASK-1010 Retry/Recovery → TASK-1011 CLI → TASK-1012 真机多挂载验收
 >
