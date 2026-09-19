@@ -75,7 +75,9 @@ describe("Phase 12 E2E — Delivery Loop (TASK-1206)", () => {
     }
   });
 
-  async function harness() {
+  async function harness(
+    options: { notifier?: RecordingDeliveryNotifier } = {},
+  ) {
     const fixture: GitFixture = createGitFixture();
     cleanups.push(fixture.cleanup);
     commitFile(
@@ -145,7 +147,7 @@ describe("Phase 12 E2E — Delivery Loop (TASK-1206)", () => {
       events,
     });
     const reviews = new ReviewService({ tasks, runs, events });
-    const notifier = new RecordingDeliveryNotifier();
+    const notifier = options.notifier ?? new RecordingDeliveryNotifier();
     const loop = new Loop({
       scheduler: new Scheduler({
         taskStore: tasks,
@@ -285,5 +287,46 @@ describe("Phase 12 E2E — Delivery Loop (TASK-1206)", () => {
     await expect(h.deliveries.findDelivery(delivery.id)).resolves.toMatchObject({
       status: "BLOCKED",
     });
+  });
+
+  it("keeps the transition when the notifier fails and retries on the next tick (TASK-1207)", async () => {
+    // Two passes run per tick, so failing twice keeps it pending across ticks.
+    const notifier = RecordingDeliveryNotifier.failingTimes(2, "feishu down");
+    const h = await harness({ notifier });
+    const delivery = (await h.deliveryService.findBySpecification(h.specificationId))!;
+    await h.tasks.updateTaskStatus(h.taskA.id, "DONE");
+    await h.tasks.updateTaskStatus(h.taskB.id, "DONE");
+
+    const first = await h.loop.tick();
+
+    // The state transition survived, the notification did not.
+    // (No earlier tick refreshed the delivery, so it moves from PLANNED.)
+    expect(first.deliveryTransitions).toMatchObject([
+      { previousStatus: "PLANNED", status: "READY_FOR_RELEASE" },
+    ]);
+    expect(first.deliveryNotifications).toBe(0);
+    expect(first.deliveryNotificationFailures).toEqual([
+      { deliveryId: delivery.id, status: "READY_FOR_RELEASE", reason: "feishu down" },
+      { deliveryId: delivery.id, status: "READY_FOR_RELEASE", reason: "feishu down" },
+    ]);
+    expect(first.deliveryPendingNotifications).toBe(1);
+    await expect(h.deliveries.findDelivery(delivery.id)).resolves.toMatchObject({
+      status: "READY_FOR_RELEASE",
+    });
+    await expect(
+      h.events.listEvents({ type: "delivery.ready_for_release" }),
+    ).resolves.toHaveLength(1);
+    expect(notifier.notifications).toEqual([]);
+
+    // Next tick retries the message only — no second transition event.
+    const second = await h.loop.tick();
+    expect(second.deliveryTransitions).toEqual([]);
+    expect(second.deliveryNotifications).toBe(1);
+    expect(second.deliveryNotificationFailures).toEqual([]);
+    expect(second.deliveryPendingNotifications).toBe(0);
+    expect(notifier.notifications).toHaveLength(1);
+    await expect(
+      h.events.listEvents({ type: "delivery.ready_for_release" }),
+    ).resolves.toHaveLength(1);
   });
 });

@@ -198,6 +198,120 @@ describe("Loop", () => {
     expect(report.deliveryNotificationFailures).toEqual([]);
   });
 
+  it("isolates a delivery reconciliation failure and keeps scheduling (TASK-1207)", async () => {
+    const { tasks, runs, events, scheduler, worker } = await setup(WRITE_CODE);
+    const loop = new Loop({
+      scheduler,
+      worker,
+      runStore: runs,
+      taskStore: tasks,
+      maxConcurrency: 2,
+      eventStore: events,
+      deliveryReconciler: {
+        reconcileAll: async () => {
+          throw new Error("delivery store unavailable");
+        },
+      },
+    });
+
+    const report = await loop.tick();
+
+    // The failing phase is reported…
+    // …once per reconcile pass (the tick reconciles before and after execution)
+    // and does not swallow the rest of the tick: work still got scheduled.
+    expect(report.errors).toEqual(
+      Array.from({ length: 2 }, () => ({
+        phase: "delivery_reconcile",
+        message: "delivery store unavailable",
+        errorType: "Error",
+        subjectId: undefined,
+      })),
+    );
+    expect(report.scheduled).toHaveLength(1);
+    expect(report.executed).toHaveLength(1);
+    expect((await tasks.findTask("task-001")).status).toBe("REVIEW");
+  });
+
+  it("isolates recovery and scheduling failures with subject context (TASK-1207)", async () => {
+    const { tasks, runs, events, worker } = await setup(WRITE_CODE);
+    class BrokenRecoveryRunStore extends InMemoryRunStore {
+      override async listRuns(
+        filter: Parameters<InMemoryRunStore["listRuns"]>[0] = {},
+      ) {
+        if (filter.statuses?.includes("STARTING")) {
+          const error = new Error("run store unreachable") as Error & { runId?: string };
+          error.runId = "run-broken";
+          throw error;
+        }
+        return super.listRuns(filter);
+      }
+    }
+    class BrokenScheduler extends Scheduler {
+      override async schedule(): Promise<never> {
+        throw new Error("scheduler exploded");
+      }
+    }
+    const brokenRuns = new BrokenRecoveryRunStore();
+    const loop = new Loop({
+      scheduler: new BrokenScheduler({
+        taskStore: tasks,
+        runStore: brokenRuns,
+        maxConcurrency: 1,
+      }),
+      worker,
+      runStore: brokenRuns,
+      taskStore: tasks,
+      eventStore: events,
+      maxConcurrency: 1,
+    });
+
+    const report = await loop.tick();
+
+    expect(report.errors).toEqual([
+      {
+        phase: "recover",
+        message: "run store unreachable",
+        errorType: "Error",
+        subjectId: "run-broken",
+      },
+      {
+        phase: "schedule",
+        message: "scheduler exploded",
+        errorType: "Error",
+        subjectId: undefined,
+      },
+    ]);
+    // Execute still ran with whatever the other phases produced.
+    expect(report.executed).toEqual([]);
+  });
+
+  it("records an isolated cancel-phase failure without aborting the tick", async () => {
+    const { tasks, runs, events, scheduler, worker } = await setup(WRITE_CODE);
+    class CancelFailingRunStore extends InMemoryRunStore {
+      override async listRuns(
+        filter: Parameters<InMemoryRunStore["listRuns"]>[0] = {},
+      ) {
+        if (filter.cancelRequested === true) {
+          throw new Error("cancel scan failed");
+        }
+        return super.listRuns(filter);
+      }
+    }
+    const loop = new Loop({
+      scheduler,
+      worker,
+      runStore: new CancelFailingRunStore(),
+      taskStore: tasks,
+      maxConcurrency: 2,
+      eventStore: events,
+    });
+
+    const report = await loop.tick();
+
+    expect(report.errors.map((error) => error.phase)).toEqual(["cancel"]);
+    expect(report.scheduled).toHaveLength(1);
+  });
+
   it("retries failed runs until the task is BLOCKED at max attempts", async () => {
     const { tasks, runs, loop } = await setup(IDLE_CODE, 3);
 

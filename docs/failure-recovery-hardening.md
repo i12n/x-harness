@@ -1,6 +1,6 @@
 # TASK-1207 — Failure / Retry / Recovery Hardening（设计稿）
 
-> 状态：**Phase A 已实现**（2026-09-20）；Phase B/C/D 尚未开始。
+> 状态：**Phase A、Phase B 已实现**（2026-09-20）；Phase C/D 尚未开始。
 > 前置：TASK-1201–1206 已完成并冻结（Specification / Planning / DAG /
 > DAG-aware Scheduler / Delivery + Release / Delivery Reconciliation）。
 
@@ -386,6 +386,56 @@ tests/taskDependency.test.ts        # +4 例（service impact / dangling / descr
 `Scheduler` / `Worker` / `Loop` 在 Phase A 中**一行未改**（可用 `git show --stat`
 核对）。1205 的聚合行为在不传 `impacts` 时保持不变（未提供 impacts 的调用点与
 原有单测全部通过）。
+
+### Phase B 实现记录（已完成）
+
+```text
+src/loop/loop.ts                     # LoopPhase / LoopError / TickReport.errors
+                                     # + runPhase() 阶段隔离 + toLoopError()
+                                     # + TickReport.deliveryPendingNotifications
+src/delivery/application/reconciler.ts  # 有界 pending 队列（FIFO / 容量 /
+                                        # maxPerPass / drop-newest /
+                                        # droppedNotifications）
+src/delivery/application/notifier.ts    # RecordingDeliveryNotifier.failingTimes()
+src/cli/index.ts                        # loop --once 输出 loopErrors /
+                                        # deliveryPendingNotifications 与逐条错误
+tests/loop.test.ts                      # +3 例（矩阵 20/21/24）
+tests/deliveryReconciliation.test.ts    # +4 例（矩阵 22/23 + 常量）
+tests/e2e/phase12/delivery-loop.test.ts # +1 例（跨 tick 通知重试）
+```
+
+`TickReport.errors` 结构（实际实现）：
+
+```ts
+type LoopPhase = "recover" | "cancel" | "cleanup"
+               | "delivery_reconcile" | "schedule";
+interface LoopError {
+  phase: LoopPhase;
+  message: string;
+  errorType?: string;    // error.name，便于区分领域异常与基础设施异常
+  subjectId?: string;    // error 上携带的 runId/taskId/deliveryId
+}
+```
+
+相对设计稿的两点小扩展（都不改语义）：
+
+```text
+1. 阶段名增加了 "cleanup"（retryFailedCleanups 也纳入隔离）—— 否则该阶段异常
+   仍会中断整个 tick，与 hardening 目标矛盾；
+2. capacity / maxPerPass 允许构造参数覆盖（默认仍是 100 / 20），只为测试能在不
+   生成 100 条迁移的前提下验证容量行为。
+```
+
+通知 pending 行为（实测）：
+
+```text
+失败     → 仍留在 pending（at-least-once），Delivery 状态不受影响
+重试     → 下一个 pass 按 FIFO 先发最旧的；每 pass 最多尝试 maxPerPass 次
+超容量   → 丢弃**最新**那条并计入 droppedNotifications + notificationFailures
+```
+
+`Scheduler` / `Worker` / `Task 状态` / Delivery 聚合规则在 Phase B 中未改动
+（`git diff --stat` 可核对）。
 
 ## 11. 明确不做
 

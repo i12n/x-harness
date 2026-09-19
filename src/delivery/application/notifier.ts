@@ -37,17 +37,25 @@ export class RecordingDeliveryNotifier implements DeliveryNotifier {
     this.notifications.push(notification);
   }
 
-  /** Throws for the first `failures` notifications (TASK-1206 failure case). */
-  static failingOnce(reason = "notifier unavailable"): RecordingDeliveryNotifier {
+  /** Throws for the first `times` notifications (retry/failure scenarios). */
+  static failingTimes(
+    times: number,
+    reason = "notifier unavailable",
+  ): RecordingDeliveryNotifier {
     const failing = new RecordingDeliveryNotifier();
-    let failures = 1;
+    let remaining = times;
     failing.notify = async (notification: DeliveryNotification): Promise<void> => {
-      if (failures > 0) {
-        failures -= 1;
+      if (remaining > 0) {
+        remaining -= 1;
         throw new Error(reason);
       }
       failing.notifications.push(notification);
     };
     return failing;
+  }
+
+  /** Throws for the first `failures` notifications (TASK-1206 failure case). */
+  static failingOnce(reason = "notifier unavailable"): RecordingDeliveryNotifier {
+    return RecordingDeliveryNotifier.failingTimes(1, reason);
   }
 }

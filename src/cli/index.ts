@@ -742,8 +742,19 @@ program
             `deliveryTransitions=${report.deliveryTransitions.length} deliveryNotifications=${report.deliveryNotifications}` +
             (report.deliveryNotificationFailures.length > 0
               ? ` deliveryNotificationFailures=${report.deliveryNotificationFailures.length}`
-              : ""),
+              : "") +
+            (report.deliveryPendingNotifications > 0
+              ? ` deliveryPendingNotifications=${report.deliveryPendingNotifications}`
+              : "") +
+            (report.errors.length > 0 ? ` loopErrors=${report.errors.length}` : ""),
         );
+        // TASK-1207 Phase B: phase failures are reported, never swallowed.
+        for (const error of report.errors) {
+          console.log(
+            `  - [${error.phase}] ${error.message}` +
+              (error.subjectId ? ` (${error.subjectId})` : ""),
+          );
+        }
       } finally {
         await handle.close();
       }

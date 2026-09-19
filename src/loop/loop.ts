@@ -38,10 +38,30 @@ export interface DeliveryReconcileReportLike {
   notified: number;
   notificationFailures: { deliveryId: string; status: string; reason: string }[];
   pendingNotifications: number;
+  droppedNotifications: number;
 }
 
 export interface DeliveryReconcilerPort {
   reconcileAll(): Promise<DeliveryReconcileReportLike>;
+}
+
+/** TASK-1207 Phase B: which part of the tick failed. */
+export type LoopPhase =
+  | "recover"
+  | "cancel"
+  | "cleanup"
+  | "delivery_reconcile"
+  | "schedule";
+
+/**
+ * TASK-1207 Phase B: a phase failure is recorded and the tick continues — it is
+ * never silently swallowed (message + type + optional subject are kept).
+ */
+export interface LoopError {
+  phase: LoopPhase;
+  message: string;
+  errorType?: string;
+  subjectId?: string;
 }
 
 export interface TickReport {
@@ -51,9 +71,13 @@ export interface TickReport {
   deliveryTransitions: DeliveryReconcileReportLike["transitions"];
   deliveryNotifications: number;
   deliveryNotificationFailures: DeliveryReconcileReportLike["notificationFailures"];
+  /** TASK-1207 Phase B: notifications still queued for a later tick. */
+  deliveryPendingNotifications: number;
   scheduled: Run[];
   executed: Run[];
   cleanupRetries: number;
+  /** TASK-1207 Phase B: isolated phase failures (empty in the happy path). */
+  errors: LoopError[];
 }
 
 /**
@@ -106,17 +130,40 @@ export class Loop {
   }
 
   async tick(): Promise<TickReport> {
-    const recovered = await this.recoverExpiredRuns();
-    const cancelled = await this.reconcileCancelRequests();
-    const cleanupRetries = await this.retryFailedCleanups();
+    const errors: LoopError[] = [];
+    // TASK-1207 Phase B: every phase is isolated. A failure is recorded in
+    // `errors` and the tick continues with the remaining phases.
+    const recovered = await this.runPhase(
+      "recover",
+      errors,
+      () => this.recoverExpiredRuns(),
+      [] as Run[],
+    );
+    const cancelled = await this.runPhase(
+      "cancel",
+      errors,
+      () => this.reconcileCancelRequests(),
+      [] as Run[],
+    );
+    const cleanupRetries = await this.runPhase(
+      "cleanup",
+      errors,
+      () => this.retryFailedCleanups(),
+      0,
+    );
     // Reconcile after Task state changed (recovery/cancel above) and before
     // scheduling picks up new work…
-    let deliveries = await this.reconcileDeliveries();
-    const scheduled = await this.scheduler.schedule();
+    let deliveries = await this.reconcileDeliveries(errors);
+    const scheduled = await this.runPhase(
+      "schedule",
+      errors,
+      () => this.scheduler.schedule(),
+      [] as Run[],
+    );
     const executed = await this.executeQueued();
     // …and again after execution: a Run that just finished can make a Task
     // DONE within the same tick, and the Delivery should reflect it.
-    const afterExecution = await this.reconcileDeliveries();
+    const afterExecution = await this.reconcileDeliveries(errors);
     deliveries = mergeDeliveryReports(deliveries, afterExecution);
     return {
       recovered,
@@ -124,22 +171,56 @@ export class Loop {
       deliveryTransitions: deliveries.transitions,
       deliveryNotifications: deliveries.notified,
       deliveryNotificationFailures: deliveries.notificationFailures,
+      deliveryPendingNotifications: deliveries.pendingNotifications,
       scheduled,
       executed,
       cleanupRetries,
+      errors,
     };
   }
 
-  private async reconcileDeliveries(): Promise<DeliveryReconcileReportLike> {
+  /**
+   * Runs one phase, converting a failure into a `LoopError`. `subjectId` is
+   * taken from the error itself when it carries `runId`/`taskId`/`deliveryId`.
+   */
+  private async runPhase<T>(
+    phase: LoopPhase,
+    errors: LoopError[],
+    run: () => Promise<T>,
+    fallback: T,
+  ): Promise<T> {
+    try {
+      return await run();
+    } catch (error) {
+      errors.push(toLoopError(phase, error));
+      return fallback;
+    }
+  }
+
+  private async reconcileDeliveries(
+    errors: LoopError[],
+  ): Promise<DeliveryReconcileReportLike> {
     if (!this.deliveryReconciler) {
       return {
         transitions: [],
         notified: 0,
         notificationFailures: [],
         pendingNotifications: 0,
+        droppedNotifications: 0,
       };
     }
-    return this.deliveryReconciler.reconcileAll();
+    try {
+      return await this.deliveryReconciler.reconcileAll();
+    } catch (error) {
+      errors.push(toLoopError("delivery_reconcile", error));
+      return {
+        transitions: [],
+        notified: 0,
+        notificationFailures: [],
+        pendingNotifications: 0,
+        droppedNotifications: 0,
+      };
+    }
   }
 
   /**
@@ -397,6 +478,21 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+/** TASK-1207 Phase B: keep enough context to act on a phase failure. */
+function toLoopError(phase: LoopPhase, error: unknown): LoopError {
+  const record =
+    error && typeof error === "object" ? (error as Record<string, unknown>) : undefined;
+  const subjectId = ["runId", "taskId", "deliveryId"]
+    .map((key) => record?.[key])
+    .find((value): value is string => typeof value === "string" && value.length > 0);
+  return {
+    phase,
+    message: error instanceof Error ? error.message : String(error),
+    errorType: error instanceof Error ? error.name : undefined,
+    subjectId,
+  };
+}
+
 /** Two delivery passes run per tick; the report merges both (by delivery id). */
 function mergeDeliveryReports(
   first: DeliveryReconcileReportLike,
@@ -414,5 +510,6 @@ function mergeDeliveryReports(
       ...second.notificationFailures,
     ],
     pendingNotifications: second.pendingNotifications,
+    droppedNotifications: first.droppedNotifications + second.droppedNotifications,
   };
 }

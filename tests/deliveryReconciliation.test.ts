@@ -4,7 +4,12 @@ import {
   NoopDeliveryNotifier,
   RecordingDeliveryNotifier,
 } from "../src/delivery/application/notifier.js";
-import { DeliveryReconciler } from "../src/delivery/application/reconciler.js";
+import type { DeliveryNotifier } from "../src/delivery/application/notifier.js";
+import {
+  DeliveryReconciler,
+  NOTIFICATION_CAPACITY,
+  NOTIFICATION_MAX_PER_PASS,
+} from "../src/delivery/application/reconciler.js";
 import { InMemoryDeliveryStore } from "../src/store/inMemoryDeliveryStore.js";
 import { InMemoryEventStore } from "../src/store/inMemoryEventStore.js";
 import { InMemorySpecificationPlanStore } from "../src/store/inMemorySpecificationPlanStore.js";
@@ -211,5 +216,137 @@ describe("DeliveryReconciler (TASK-1206)", () => {
       pendingNotifications: 0,
     });
     expect(new NoopDeliveryNotifier()).toBeInstanceOf(NoopDeliveryNotifier);
+  });
+});
+
+describe("Notification pending bounds (TASK-1207 Phase B)", () => {
+  /** always-failing notifier: keeps every notification pending. */
+  class BrokenNotifier implements DeliveryNotifier {
+    attempts = 0;
+    async notify(): Promise<void> {
+      this.attempts += 1;
+      throw new Error("notifier down");
+    }
+  }
+
+  /** creates `count` deliveries, each with one required task. */
+  async function withDeliveries(count: number) {
+    const deliveries = new InMemoryDeliveryStore();
+    const tasks = new InMemoryTaskStore();
+    const plans = new InMemorySpecificationPlanStore();
+    const events = new InMemoryEventStore();
+    const service = new DeliveryService({ deliveries, plans, tasks, events });
+    for (let index = 0; index < count; index += 1) {
+      const specId = `spec-${index}`;
+      const deliveryId = `dlv-${index}`;
+      await deliveries.createDelivery({
+        id: deliveryId,
+        specificationId: specId,
+        status: "IN_PROGRESS",
+      });
+      await tasks.createTask({
+        id: `task-${index}`,
+        repositoryId: "repo-a",
+        title: `task-${index}`,
+        status: "DONE",
+      });
+      await plans.createPlanItem({
+        id: `plan-${index}`,
+        specificationId: specId,
+        position: 0,
+        title: `task-${index}`,
+        taskId: `task-${index}`,
+      });
+    }
+    return { deliveries, tasks, service };
+  }
+
+  it("limits send attempts per pass and keeps the rest pending", async () => {
+    const h = await withDeliveries(3);
+    const notifier = new BrokenNotifier();
+    const reconciler = new DeliveryReconciler({
+      deliveries: h.service,
+      notifier,
+      maxPerPass: 2,
+    });
+
+    const report = await reconciler.reconcileAll();
+
+    expect(report.transitions).toHaveLength(3);
+    expect(notifier.attempts).toBe(2);
+    expect(report.notified).toBe(0);
+    expect(report.notificationFailures).toHaveLength(2);
+    expect(report.pendingNotifications).toBe(3);
+    expect(report.droppedNotifications).toBe(0);
+  });
+
+  it("drops the newest notification when the queue is full (FIFO)", async () => {
+    const h = await withDeliveries(3);
+    const notifier = new BrokenNotifier();
+    const reconciler = new DeliveryReconciler({
+      deliveries: h.service,
+      notifier,
+      capacity: 2,
+      maxPerPass: 1,
+    });
+
+    const report = await reconciler.reconcileAll();
+
+    // 3 transitions, 1 attempt (fails), capacity 2 → the 3rd is dropped.
+    expect(report.pendingNotifications).toBe(2);
+    expect(report.droppedNotifications).toBe(1);
+    expect(report.notificationFailures).toEqual([
+      { deliveryId: "dlv-0", status: "READY_FOR_RELEASE", reason: "notifier down" },
+      {
+        deliveryId: "dlv-2",
+        status: "READY_FOR_RELEASE",
+        reason: "notification queue full (capacity 2)",
+      },
+    ]);
+    // Delivery state is never affected by notification loss.
+    await expect(h.deliveries.findDelivery("dlv-2")).resolves.toMatchObject({
+      status: "READY_FOR_RELEASE",
+    });
+  });
+
+  it("retries the oldest pending notification first", async () => {
+    const h = await withDeliveries(3);
+    let failing = true;
+    const seen: string[] = [];
+    const notifier: DeliveryNotifier = {
+      notify: async (notification) => {
+        if (failing) {
+          throw new Error("notifier down");
+        }
+        seen.push(notification.delivery.id);
+      },
+    };
+    const reconciler = new DeliveryReconciler({
+      deliveries: h.service,
+      notifier,
+      capacity: 2,
+      maxPerPass: 1,
+    });
+
+    const broken = await reconciler.reconcileAll();
+    expect(broken.pendingNotifications).toBe(2);
+    expect(broken.droppedNotifications).toBe(1);
+
+    // FIFO: the oldest pending delivery is retried first, one per pass.
+    failing = false;
+    const firstRetry = await reconciler.reconcileAll();
+    expect(firstRetry.transitions).toEqual([]);
+    expect(seen).toEqual(["dlv-0"]);
+    expect(firstRetry.notified).toBe(1);
+    expect(firstRetry.pendingNotifications).toBe(1);
+
+    const secondRetry = await reconciler.reconcileAll();
+    expect(seen).toEqual(["dlv-0", "dlv-1"]);
+    expect(secondRetry.pendingNotifications).toBe(0);
+  });
+
+  it("caps the pending queue at the production default", () => {
+    expect(NOTIFICATION_CAPACITY).toBe(100);
+    expect(NOTIFICATION_MAX_PER_PASS).toBe(20);
   });
 });
