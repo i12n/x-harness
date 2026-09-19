@@ -116,6 +116,8 @@ export class Worker {
     });
     let environment: ExecutionEnvironment | undefined;
     let terminalStatus: "TIMED_OUT" | "CANCELLED" | undefined;
+    let runWorkspaces: ManagedWorkspace[] = [];
+    let runTargets: { target: TaskTarget; repository: Repository }[] = [];
     const heartbeat = this.startHeartbeat(runId);
     try {
       const task = await this.taskStore.findTask(claimed.taskId);
@@ -137,6 +139,7 @@ export class Worker {
       if (!primaryTarget) {
         throw new WorkerExecutionError(`task ${task.id} has no targets`);
       }
+      runTargets = orderedTargets;
 
       const workspaces = await this.workspaceManager.createRunWorkspaces({
         taskId: task.id,
@@ -148,6 +151,7 @@ export class Worker {
           baseRef: target.baseRef,
         })),
       });
+      runWorkspaces = workspaces;
       const workspaceByTarget = new Map(
         workspaces.map((workspace) => [workspace.targetId ?? "primary", workspace]),
       );
@@ -226,7 +230,21 @@ export class Worker {
         await this.executionManager.finish(environment, agentOutcome, agentOutcome);
         await this.runStore.completeRun(runId, {
           status: agentOutcome,
-          error: { message: `execution ${agentOutcome.toLowerCase()}` },
+          result: {
+            workspace: {
+              path: primaryWorkspace.path,
+              branch: primaryWorkspace.branch,
+            },
+            workspaces: workspaces.map((workspace) => ({
+              targetId: workspace.targetId,
+              path: workspace.path,
+              branch: workspace.branch,
+            })),
+          },
+          error: {
+            reason: agentOutcome === "TIMED_OUT" ? "timeout" : "cancel",
+            message: `execution ${agentOutcome.toLowerCase()}`,
+          },
           finishedAt: new Date().toISOString(),
         });
         await this.emit(agentOutcome === "TIMED_OUT" ? "RunTimedOut" : "RunCancelled", {
@@ -234,6 +252,7 @@ export class Worker {
           runId,
         });
         await this.recoverTask(task, claimed.attempt);
+        await this.cleanupRunWorkspaces(runId, task.id, runWorkspaces, runTargets);
         throw new WorkerExecutionError(
           `run ${runId} ${agentOutcome.toLowerCase()}`,
         );
@@ -325,6 +344,7 @@ export class Worker {
           runId,
           payload: { reason: "verification failed" },
         });
+        await this.cleanupRunWorkspaces(runId, task.id, runWorkspaces, runTargets);
       }
 
       const finalRun = await this.runStore.findRun(runId);
@@ -359,6 +379,7 @@ export class Worker {
           payload: { reason: message },
         });
         await this.recoverTask(task, claimed.attempt);
+        await this.cleanupRunWorkspaces(runId, claimed.taskId, runWorkspaces, runTargets);
       } catch {
         // Persisting the failure must not hide the original error.
       }
@@ -440,6 +461,52 @@ export class Worker {
         // A failed heartbeat is surfaced later by lease recovery.
       });
     }, this.heartbeatMs);
+  }
+
+  /**
+   * TASK-1010: failed / timed-out / cancelled runs must not leave workspaces
+   * behind. Best-effort: cleanup problems are reported as an event and never
+   * mask the run status that was already persisted.
+   */
+  private async cleanupRunWorkspaces(
+    runId: string,
+    taskId: string,
+    workspaces: ManagedWorkspace[],
+    targets: { target: TaskTarget; repository: Repository }[],
+  ): Promise<void> {
+    if (workspaces.length === 0) {
+      return;
+    }
+    const repositoryByTarget = new Map(
+      targets.map(({ target, repository }) => [target.id, repository]),
+    );
+    const removed: string[] = [];
+    const skipped: { path: string; reason: string }[] = [];
+    for (const workspace of workspaces) {
+      const repository =
+        repositoryByTarget.get(workspace.targetId ?? "") ?? targets[0]?.repository;
+      if (!repository) {
+        skipped.push({ path: workspace.path, reason: "no repository for target" });
+        continue;
+      }
+      try {
+        await this.workspaceManager.removeWorkspace({
+          path: workspace.path,
+          repositoryLocalPath: repository.localPath,
+        });
+        removed.push(workspace.path);
+      } catch (error) {
+        skipped.push({
+          path: workspace.path,
+          reason: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+    await this.emit("workspaces.cleaned", {
+      taskId,
+      runId,
+      payload: { removed, skipped },
+    });
   }
 
   /**

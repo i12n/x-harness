@@ -530,6 +530,8 @@ program
       eventStore: handle.events,
       executions: handle.executions,
       executionManager,
+      repositories: handle.repositories,
+      workspaceManager,
     });
 
     if (options.once) {

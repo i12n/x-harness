@@ -58,7 +58,19 @@
   aggregate checks 与 Phase 5 一致）
 - 回归：单测 151 passed；Postgres 集成 4 passed；真实 codex E2E passed；
   **真机 Docker 验收 12 passed / 1 skipped**（单仓库路径无回归）
-- 下一步：TASK-1010 Retry / Failure / Recovery →
+- TASK-1010 ✅：Retry / Failure / Recovery（多 workspace）——
+  - Worker 失败/超时/取消路径：先落盘 Run 状态与 `result.workspaces[]` 证据，
+    再 best-effort 清理**全部** target workspace，写 `workspaces.cleaned`
+    事件（removed/skipped）
+  - 成功路径仍保留 workspace 供 Review 使用（与 1009 一致）
+  - Loop 恢复：lease 过期 → Run LOST → Execution cleanup + 全部 workspace
+    清理；崩溃场景以 `executions.mounts` 为权威证据（此时 `run.result` 尚未
+    写入），`run.result.workspaces[]` 作为补充；不存在的路径视为已回收
+  - 清理失败不掩盖 Run 状态：逐 workspace best-effort，失败项进 skipped 事件
+  - Retry：新 Run → 新目录/新分支，绝不复用（有专门测试）
+- 回归：单测 158 passed；Postgres 集成 4 passed；真实 codex E2E passed；
+  **真机 Docker 验收 12 passed / 1 skipped，无残留容器/网络/workspace**
+- 下一步：TASK-1011 CLI / API →
   TASK-1007 Context → TASK-1008 Target 级 Verification → TASK-1009 Worker →
   TASK-1010 Retry/Recovery → TASK-1011 CLI → TASK-1012 真机多挂载验收
 >
