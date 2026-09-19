@@ -9,6 +9,7 @@ import type { RunStore } from "../../store/runStore.js";
 import type { TaskStore } from "../../store/taskStore.js";
 import type { WorkspaceManager } from "../../workspace/manager.js";
 import { extractWorkspaceInfo } from "../../workspace/info.js";
+import { ReviewService } from "../../review/application/reviewService.js";
 
 export interface ReviewRunParams {
   tasks: TaskStore;
@@ -87,32 +88,11 @@ export async function approveTaskCommand(
   note?: string,
   events?: EventStore,
 ): Promise<Task> {
-  const task = await tasks.findTask(taskId);
-  if (task.status !== "REVIEW") {
-    throw new HarnessError(
-      `task ${taskId} must be REVIEW to approve (status is ${task.status})`,
-    );
-  }
-  let updated = await tasks.updateTaskStatus(taskId, "DONE");
-  if (note?.trim()) {
-    updated = await tasks.appendTaskReview(taskId, {
-      at: new Date().toISOString(),
-      runId: "human-approval",
-      text: `APPROVED: ${note.trim()}`,
-    });
-  }
-  if (events) {
-    try {
-      await events.record({
-        type: "TaskDone",
-        taskId,
-        payload: { note: note?.trim() ?? "" },
-      });
-    } catch {
-      // History must never break approval.
-    }
-  }
-  return updated;
+  return new ReviewService({ tasks, events }).approve(
+    taskId,
+    { channel: "cli", userId: "cli" },
+    note,
+  );
 }
 
 export async function rejectTaskCommand(
@@ -122,34 +102,11 @@ export async function rejectTaskCommand(
   feedback?: string,
   events?: EventStore,
 ): Promise<Task> {
-  const task = await tasks.findTask(taskId);
-  if (task.status !== "REVIEW") {
-    throw new HarnessError(
-      `task ${taskId} must be REVIEW to reject (status is ${task.status})`,
-    );
-  }
-  const attempts = (await runs.listRuns({ taskId })).length;
-  const next: Task["status"] = attempts >= task.maxAttempts ? "BLOCKED" : "READY";
-  let updated = await tasks.updateTaskStatus(taskId, next);
-  if (feedback?.trim()) {
-    updated = await tasks.appendTaskReview(taskId, {
-      at: new Date().toISOString(),
-      runId: "human-rejection",
-      text: `REJECTED: ${feedback.trim()}`,
-    });
-  }
-  if (events) {
-    try {
-      await events.record({
-        type: "TaskRejected",
-        taskId,
-        payload: { status: updated.status, feedback: feedback?.trim() ?? "" },
-      });
-    } catch {
-      // History must never break rejection.
-    }
-  }
-  return updated;
+  return new ReviewService({ tasks, runs, events }).requestChanges(
+    taskId,
+    { channel: "cli", userId: "cli" },
+    feedback,
+  );
 }
 
 function composeReviewPrompt(

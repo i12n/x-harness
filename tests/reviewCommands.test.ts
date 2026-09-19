@@ -141,7 +141,9 @@ describe("Review and human approval (v0.2)", () => {
     await runs.createRun({ id: "run-001", taskId: "task-001", attempt: 1, agent: "a", engine: "e" });
     const result = await rejectTaskCommand(tasks, runs, "task-001", "fix the edge case");
     expect(result.status).toBe("READY");
-    expect(readTaskReviews(result)[1]?.text).toContain("REJECTED: fix the edge case");
+    expect(readTaskReviews(result)[1]?.text).toContain(
+      "CHANGES REQUESTED: fix the edge case",
+    );
   });
 
   it("blocks a rejected task once max attempts are exhausted", async () => {
