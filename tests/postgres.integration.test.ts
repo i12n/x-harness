@@ -28,6 +28,8 @@ import {
 } from "../src/execution/manager.js";
 import { PostgresProblemStore } from "../src/store/postgresProblemStore.js";
 import { PostgresConversationStore } from "../src/store/postgresConversationStore.js";
+import { PostgresSpecificationStore } from "../src/store/postgresSpecificationStore.js";
+import { SpecificationService } from "../src/specification/application/service.js";
 import { buildExecutionProfile } from "../src/domain/executionProfile.js";
 import { RunNotCancellableError } from "../src/errors.js";
 import { Verifier } from "../src/verification/runner.js";
@@ -77,7 +79,7 @@ describePostgres("PostgreSQL integration", () => {
       cleanup();
     }
     await pool?.query(
-      "DELETE FROM conversation_messages; DELETE FROM conversations; DELETE FROM clarification_answers; DELETE FROM clarifications; DELETE FROM problem_analyses; DELETE FROM problems; DELETE FROM events; DELETE FROM executions; DELETE FROM workspaces; DELETE FROM task_targets; DELETE FROM runs; DELETE FROM tasks; DELETE FROM repositories;",
+      "DELETE FROM conversation_messages; DELETE FROM conversations; DELETE FROM specification_targets; DELETE FROM specifications; DELETE FROM clarification_answers; DELETE FROM clarifications; DELETE FROM problem_analyses; DELETE FROM problems; DELETE FROM events; DELETE FROM executions; DELETE FROM workspaces; DELETE FROM task_targets; DELETE FROM runs; DELETE FROM tasks; DELETE FROM repositories;",
     );
   });
 
@@ -433,5 +435,78 @@ describePostgres("PostgreSQL integration", () => {
       "problem.analysis.updated",
       "problem.confirmed",
     ]);
+  });
+
+  it("persists specifications derived from a confirmed problem (TASK-1201)", async () => {
+    const repositories = new PostgresRepositoryStore(pool!);
+    const problems = new PostgresProblemStore(pool!);
+    const specifications = new PostgresSpecificationStore(pool!);
+    const events = new PostgresEventStore(pool!);
+    const service = new SpecificationService({ specifications, problems, events });
+
+    for (const id of ["repo-a", "repo-b"]) {
+      await repositories.createRepository({
+        id,
+        name: id,
+        url: `git@github.com:example/${id}.git`,
+        localPath: `/tmp/repos/${id}`,
+      });
+    }
+    await problems.createProblem({
+      id: "prob-001",
+      title: "专辑页面",
+      statement: "用户希望有一个专辑页面。",
+      status: "CONFIRMED",
+    });
+    await problems.setProblemSpec("prob-001", {
+      problem: "专辑页面不存在",
+      expected: "可以浏览专辑曲目",
+      scope: "所有用户",
+    });
+
+    const specification = await service.createFromProblem({
+      problemId: "prob-001",
+      acceptance: ["可以打开专辑页"],
+      targets: [
+        { repositoryId: "repo-a", baseRef: "main" },
+        { repositoryId: "repo-b", baseRef: "develop" },
+      ],
+    });
+    expect(specification.status).toBe("DRAFT");
+
+    const ready = await service.markReady(specification.id);
+    expect(ready.status).toBe("READY");
+
+    const reloaded = await specifications.findSpecification(specification.id);
+    expect(reloaded.targets).toEqual([
+      { repositoryId: "repo-a", role: "primary", position: 0, baseRef: "main" },
+      { repositoryId: "repo-b", role: "supporting", position: 1, baseRef: "develop" },
+    ]);
+    expect(reloaded.acceptance).toEqual(["可以打开专辑页"]);
+    expect(reloaded.constraints).toEqual({ scope: "所有用户" });
+
+    const updated = await specifications.updateSpecification(specification.id, {
+      summary: "新的摘要",
+      targets: [{ repositoryId: "repo-b", baseRef: "release" }],
+    });
+    expect(updated.targets).toEqual([
+      { repositoryId: "repo-b", role: "primary", position: 0, baseRef: "release" },
+    ]);
+    expect(updated.summary).toBe("新的摘要");
+
+    await expect(
+      specifications.findSpecificationByProblem("prob-001"),
+    ).resolves.toMatchObject({ id: specification.id });
+    await expect(
+      specifications.findSpecificationByProblem("prob-missing"),
+    ).resolves.toBeUndefined();
+    await expect(
+      specifications.findSpecification("spec-missing"),
+    ).rejects.toThrow(/specification not found/);
+
+    const types = (await events.listEvents({ problemId: "prob-001" })).map(
+      (event) => event.type,
+    );
+    expect(types).toEqual(["specification.created", "specification.ready"]);
   });
 });

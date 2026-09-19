@@ -57,6 +57,17 @@ Implemented in TypeScript (Node >= 18, ESM). The full plan lives in
   TargetVerifier、Worker/Run 聚合、异常恢复与 CLI/API —— 真机 Release Gate
   10/10 通过，**DONE**。设计见
   [docs/multi-repository-task.md](docs/multi-repository-task.md)。
+- Phase 11 (Conversational Interface): Channel 抽象 + CliChannel、Conversation
+  （会话/消息 + 幂等）、Feishu Provider/Event Ingestion（离线）、业务渲染器、
+  Intent → Command（校验/授权/幂等/显式路由）、Problem Confirmation、
+  Task/Run 操作（含持久化取消）、Review/Approval，以及通用 E2E 基线
+  （`tests/e2e/phase11/`）—— **DONE**（真实 Feishu 凭证/公网回调留待部署
+  联调）。设计见
+  [docs/conversational-interface.md](docs/conversational-interface.md)。
+- Phase 12 (Engineering Delivery Loop, in progress): Problem → Specification
+  → Task → Dependency → Scheduler 的交付闭环。TASK-1201 Specification Model
+  已完成（领域模型 + 迁移 008 + store + application service）—— 见
+  [docs/engineering-delivery-loop.md](docs/engineering-delivery-loop.md)。
 
 ## Requirements
 
@@ -163,23 +174,30 @@ database entirely.
 ```text
 src/
   agent/        # AgentEngine abstraction + CodexEngine + Context Builder
+  channel/      # Channel abstraction, CLI adapter, Feishu provider/ingestion
   cli/          # ai CLI and command handlers
+  command/      # intent → command: schema, authorization, idempotency, dispatch
   config/       # yaml/env configuration
   db/           # postgres pool
   domain/       # domain models and validation
+  execution/    # ExecutionManager + local/docker drivers (Phase 9)
   loop/         # periodic reconcile loop (observe/schedule/recover)
+  problem/      # problem confirmation loop + analyzer
+  review/       # review/approval application service
+  run/          # run + task-run application services
   scheduler/    # READY task scheduling with max_concurrency
+  specification/# Specification domain/application (Phase 12)
   store/        # repository/task/run stores: in-memory + postgres
   util/         # ids, slugs
   verification/ # per-command verification runner
   worker/       # run executor with leases and heartbeats
   workspace/    # git-worktree workspace isolation (one run = one worktree)
 config/         # config/config.yaml
-migrations/     # SQL schema (001 core, 002 problem confirmation)
+migrations/     # SQL schema (001 core ... 008 specifications)
 scripts/        # db:migrate runner
 tests/          # vitest unit tests
 docs/           # v0.1 plan, v0.2 roadmap, phase 9 isolation/acceptance,
                 # phase 10 multi-repository design, phase 11 conversational
-                # interface design, discussion notes
+                # interface design, phase 12 delivery loop, discussion notes
 docker/         # execution image contract + Dockerfile + allow-list proxy
 ```

@@ -76,6 +76,18 @@ export class ClarificationNotFoundError extends HarnessError {
   }
 }
 
+export class DuplicateSpecificationError extends HarnessError {
+  constructor(id: string) {
+    super(`specification already exists: ${id}`);
+  }
+}
+
+export class SpecificationNotFoundError extends HarnessError {
+  constructor(id: string) {
+    super(`specification not found: ${id}`);
+  }
+}
+
 export class ExecutionNotFoundError extends HarnessError {
   constructor(id: string) {
     super(`execution not found: ${id}`);
