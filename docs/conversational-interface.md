@@ -151,7 +151,31 @@
   - 渲染：`renderRunCancelMessage` 明确"cancellation requested"而非
     "cancelled"（请求 ≠ 事实）
   - 未做（按边界）：真实 LLM Intent、Feishu 部署
-- 下一步：TASK-1109 Review / Approval 接入
+- TASK-1109 ✅ Review / Approval 接入（离线，2026-09-20）：
+  - `src/review/application/reviewService.ts`：`ReviewService`
+    （show / approve / requestChanges）；审批记录审批人（`channel:userId`）
+    与时间，approve → DONE，requestChanges → READY（attempt 用尽则 BLOCKED）；
+    事件 `review.approved` / `review.changes_requested`
+  - CLI `approve/reject` 改为复用 ReviewService（CLI 与 Command 走同一
+    Application 逻辑；文案统一为 `APPROVED:` / `CHANGES REQUESTED:`）
+  - `src/command/handlers/review.ts`：`review.show` / `review.approve` /
+    `review.request_changes`；reviewer 权限由 1106 schema 保证，
+    领域错误映射为 `rejected(review_not_allowed)`
+  - 未做（按边界）：merge / 自动重跑 / PR
+
+- TASK-1110 ✅ Harness End-to-End Acceptance（通用，2026-09-20）：
+  - `tests/fixtures/sample-project/`：通用 Node fixture（package.json、
+    src/index.js、test/verify.js、AGENTS.md、README.md），不绑定业务项目
+  - `tests/e2e/phase11/`：7 个套件、15 个用例作为长期回归基线：
+    conversation / problem-confirmation / task-run / review / cancel /
+    recovery / security-boundary
+  - 覆盖验收矩阵：Conversation 创建与事件去重、Problem 创建与澄清循环、
+    Task→Run→Verification→REVIEW、Review actions、approve→DONE、
+    request changes→READY 且重跑使用新 Workspace、QUEUED/RUNNING/terminal
+    取消语义、Worker crash 恢复、CLI 与 Feishu 入口结果一致、
+    actor 伪造/越权/未知命令/未知字段/动态调用/重复消息等安全边界
+  - `TaskRunService.describeTask()` 返回 repositoryNames 供渲染使用
+- 下一步：Phase 11 收口（真实 Feishu 凭证与公网回调联调可在部署环境进行）
 
 ## 1. 定位
 

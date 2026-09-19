@@ -18,9 +18,12 @@ export function createTaskRunCommandHandlers(
 ): Partial<Record<CommandType, CommandHandler>> {
   return {
     "task.show": async (payload) => {
-      const task = await deps.taskRun.show(String(payload.taskId));
-      const latestRun = await deps.taskRun.latestRun(task.id);
-      return { task, latestRun: latestRun ?? null };
+      const described = await deps.taskRun.describeTask(String(payload.taskId));
+      return {
+        task: described.task,
+        latestRun: described.latestRun ?? null,
+        repositoryNames: described.repositoryNames,
+      };
     },
 
     "task.run": async (payload) => {
