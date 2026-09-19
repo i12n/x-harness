@@ -27,6 +27,7 @@ import {
   LocalExecutionDriver,
 } from "../src/execution/manager.js";
 import { PostgresProblemStore } from "../src/store/postgresProblemStore.js";
+import { PostgresConversationStore } from "../src/store/postgresConversationStore.js";
 import { buildExecutionProfile } from "../src/domain/executionProfile.js";
 import { Verifier } from "../src/verification/runner.js";
 import { Worker } from "../src/worker/worker.js";
@@ -75,7 +76,7 @@ describePostgres("PostgreSQL integration", () => {
       cleanup();
     }
     await pool?.query(
-      "DELETE FROM clarification_answers; DELETE FROM clarifications; DELETE FROM problem_analyses; DELETE FROM problems; DELETE FROM events; DELETE FROM executions; DELETE FROM workspaces; DELETE FROM task_targets; DELETE FROM runs; DELETE FROM tasks; DELETE FROM repositories;",
+      "DELETE FROM conversation_messages; DELETE FROM conversations; DELETE FROM clarification_answers; DELETE FROM clarifications; DELETE FROM problem_analyses; DELETE FROM problems; DELETE FROM events; DELETE FROM executions; DELETE FROM workspaces; DELETE FROM task_targets; DELETE FROM runs; DELETE FROM tasks; DELETE FROM repositories;",
     );
   });
 
@@ -289,6 +290,58 @@ describePostgres("PostgreSQL integration", () => {
     expect(
       (await tasks.listTasks({ repositoryId: "repo-a" }))[0]?.id,
     ).toBe("task-multi");
+  });
+
+  it("persists conversations with idempotent messages (TASK-1102)", async () => {
+    const conversations = new PostgresConversationStore(pool!);
+    const first = await conversations.ensureConversation({
+      channel: "feishu",
+      externalChatId: "chat-1",
+      title: "Rehelu",
+    });
+    const again = await conversations.ensureConversation({
+      channel: "feishu",
+      externalChatId: "chat-1",
+    });
+    expect(again.id).toBe(first.id);
+
+    const message = await conversations.appendMessage({
+      conversationId: first.id,
+      channel: "feishu",
+      direction: "INBOUND",
+      senderId: "user-1",
+      content: "hello",
+      externalMessageId: "message-001",
+    });
+    const retry = await conversations.appendMessage({
+      conversationId: first.id,
+      channel: "feishu",
+      direction: "INBOUND",
+      senderId: "user-1",
+      content: "hello again",
+      externalMessageId: "message-001",
+    });
+    expect(retry.id).toBe(message.id);
+    expect(await conversations.findMessageByExternal("feishu", "message-001")).toMatchObject({
+      id: message.id,
+    });
+    expect(await conversations.listMessages(first.id)).toHaveLength(1);
+
+    await conversations.appendMessage({
+      conversationId: first.id,
+      channel: "feishu",
+      direction: "OUTBOUND",
+      senderId: "harness",
+      content: "hi",
+    });
+    const linked = await conversations.attachSubject(first.id, {
+      subjectType: "problem",
+      subjectId: "PROB-018",
+    });
+    expect(linked.subjectType).toBe("problem");
+    expect(await conversations.listMessages(first.id, { limit: 1 })).toMatchObject([
+      { direction: "OUTBOUND", content: "hi" },
+    ]);
   });
 
   it("runs the confirmation loop and persists problem events", async () => {

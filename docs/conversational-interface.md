@@ -22,6 +22,25 @@
     problem/config/util）不 import channel
 - 下一步：TASK-1102 Conversation（多轮上下文 + 去重）
 
+- TASK-1102 ✅ Conversation（2026-09-19）：
+  - `migrations/006_conversations.sql`：`conversations`（channel/
+    external_chat_id/external_thread_id/title/subject_type/subject_id/status，
+    subject 可为空且**不控制** Problem/Task/Run 生命周期）+
+    `conversation_messages`（direction INBOUND/OUTBOUND、sender_id、
+    message_type、content、metadata、external_message_id）
+  - 幂等键在 Conversation 层解决：`UNIQUE(channel, external_message_id)`
+    （部分索引），Webhook 重推 → `duplicate=true`，不写第二条、不重复触发
+  - `src/domain/conversation.ts` + 内存/Postgres `ConversationStore`
+    （ensureConversation by channel+chat+thread、attachSubject、appendMessage、
+    findMessageByExternal、listMessages）
+  - `src/conversation/service.ts`：`ConversationService`
+    （getOrCreate / handleIncoming 幂等 / recordOutgoing / context /
+    attachSubject）；上下文窗口支持 `limit`（最近 N，按时间升序返回）、
+    `before`、`after`；不含 embedding/向量检索/summary
+  - 未做（按边界）：LLM Intent（1106）、Feishu（1103/1104）、卡片（1105）、
+    权限（1109）
+- 下一步：TASK-1103 Feishu Bot
+
 ## 1. 定位
 
 ```text

@@ -86,3 +86,9 @@ export class ExecutionCancelledError extends HarnessError {
     super(`execution cancelled: ${runId}`);
   }
 }
+
+export class ConversationNotFoundError extends HarnessError {
+  constructor(id: string) {
+    super(`conversation not found: ${id}`);
+  }
+}
