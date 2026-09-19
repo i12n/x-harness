@@ -1,0 +1,11 @@
+{
+  "schema": "2.0",
+  "header": {
+    "event_id": "evt-003",
+    "event_type": "im.chat.member.bot.added_v1",
+    "create_time": "1758240120000"
+  },
+  "event": {
+    "chat_id": "oc_group_1"
+  }
+}

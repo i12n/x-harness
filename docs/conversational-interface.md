@@ -56,6 +56,22 @@
     event ingestion 留给 TASK-1104
 - 下一步：TASK-1104 Feishu event ingestion（Webhook + Conversation 接入）
 
+- TASK-1104 ✅ Feishu Event Ingestion（离线，2026-09-19）：
+  - `verification.ts`：`url_verification` challenge、verification token、
+    sha256(timestamp+nonce+encryptKey+body) 签名、时间戳新鲜度校验；
+    无凭证/密钥时进入显式 dev 模式（`verified=false` 但可跑）
+  - `events.ts`：Feishu v2 `im.message.receive_v1` → `IncomingMessage`
+    （chat_id→conversation/externalChatId、thread_id/root_id→
+    external_thread_id、sender_id→senderId、message_id→messageId/幂等键、
+    text content、create_time→timestamp、metadata 保留 chatType/eventId 等）；
+    非消息事件显式 ignored
+  - `webhook.ts`：`verify → parse → ConversationService.handleIncoming()`；
+    验证失败/不支持/畸形请求在产生任何 Conversation 副作用前返回；
+    重复投递 → `duplicate=true` 且 **不再触发 onMessage 副作用**
+  - `fixtures/`：message / group-message / unsupported 三份事件样本驱动测试
+  - 无需真实 app_id/app_secret 与公网回调即可完成全部离线验收
+- 下一步：TASK-1105 Message / Card Rendering
+
 ## 1. 定位
 
 ```text
