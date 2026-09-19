@@ -7,5 +7,9 @@ export default defineConfig({
     testTimeout: 30_000,
     hookTimeout: 30_000,
     teardownTimeout: 30_000,
+    // This machine is often under heavy external load; cap parallelism so the
+    // spawn-heavy suite does not thrash (or hang) when everything runs at once.
+    minWorkers: 1,
+    maxWorkers: 4,
   },
 });

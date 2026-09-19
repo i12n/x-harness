@@ -41,6 +41,21 @@
     权限（1109）
 - 下一步：TASK-1103 Feishu Bot
 
+- TASK-1103 ✅ Feishu Provider（离线部分，2026-09-19）：
+  - `src/channel/feishu/{client,adapter,cards,messages,errors}.ts`
+  - `FeishuClient` 抽象：`sendMessage` / `sendCard`；`HttpFeishuClient` 用
+    fetch 实现（tenant_access_token 缓存、超时、结构化错误映射）
+  - 渲染：`OutgoingMessage` → Feishu text payload 或 generic interactive card
+    （markdown/divider），不定义 Task/Run/Review 业务卡片
+  - 错误：`FeishuError{code,retryable,status?,retryAfterSeconds?}`；
+    4xx 不可重试、5xx/429/超时可重试（429 带 Retry-After）、
+    malformed response 不可重试；**不自建 retry loop**
+  - 配置可选：无 `FEISHU_APP_ID/SECRET` 也能加载与跑单测，真实发送时才报
+    configuration 错误
+  - 边界：adapter 只做通信与格式转换，不 import Problem/Task/Run；webhook/
+    event ingestion 留给 TASK-1104
+- 下一步：TASK-1104 Feishu event ingestion（Webhook + Conversation 接入）
+
 ## 1. 定位
 
 ```text
