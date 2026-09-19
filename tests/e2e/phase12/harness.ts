@@ -12,6 +12,8 @@ import {
 } from "../../../src/command/index.js";
 import { createProblemCommandHandlers } from "../../../src/command/handlers/problem.js";
 import { createSpecificationCommandHandlers } from "../../../src/command/handlers/specification.js";
+import { createDeliveryCommandHandlers } from "../../../src/command/handlers/delivery.js";
+import { DeliveryService } from "../../../src/delivery/application/service.js";
 import { FeishuEventIngestion } from "../../../src/channel/feishu/webhook.js";
 import type { ProblemAnalysisResult } from "../../../src/problem/analyzer.js";
 import { ScriptedProblemAnalyzer } from "../../../src/problem/application/analyzer.js";
@@ -22,6 +24,7 @@ import { DeterministicTaskPlanner } from "../../../src/specification/application
 import { SpecificationService } from "../../../src/specification/application/service.js";
 import { TaskDependencyService } from "../../../src/task/application/dependencyService.js";
 import { InMemoryConversationStore } from "../../../src/store/inMemoryConversationStore.js";
+import { InMemoryDeliveryStore } from "../../../src/store/inMemoryDeliveryStore.js";
 import { InMemoryEventStore } from "../../../src/store/inMemoryEventStore.js";
 import { InMemoryProblemStore } from "../../../src/store/inMemoryProblemStore.js";
 import { InMemorySpecificationPlanStore } from "../../../src/store/inMemorySpecificationPlanStore.js";
@@ -41,6 +44,7 @@ export interface Phase12CommandInput {
   messageId?: string;
   channel?: string;
   conversationId?: string;
+  senderId?: string;
 }
 
 /**
@@ -54,6 +58,7 @@ export async function createPhase12Harness() {
   const plans = new InMemorySpecificationPlanStore();
   const tasks = new InMemoryTaskStore();
   const dependencies = new InMemoryTaskDependencyStore();
+  const deliveries = new InMemoryDeliveryStore();
   const events = new InMemoryEventStore();
   const conversationStore = new InMemoryConversationStore();
 
@@ -74,7 +79,10 @@ export async function createPhase12Harness() {
     tasks,
     planner: new DeterministicTaskPlanner(),
     events,
+    // TASK-1205: planning a Specification creates its Delivery.
+    deliveries: new DeliveryService({ deliveries, plans, tasks, events }),
   });
+  const deliveryService = new DeliveryService({ deliveries, plans, tasks, events });
   const dependencyService = new TaskDependencyService({
     tasks,
     dependencies,
@@ -86,6 +94,7 @@ export async function createPhase12Harness() {
     handlers: {
       ...createProblemCommandHandlers({ problems: problemService, conversations }),
       ...createSpecificationCommandHandlers({ planning }),
+      ...createDeliveryCommandHandlers({ deliveries: deliveryService }),
     },
     idempotency: new InMemoryIdempotencyStore(),
   });
@@ -95,9 +104,10 @@ export async function createPhase12Harness() {
     payload: Record<string, unknown>,
     options: Phase12CommandInput = {},
   ): Promise<CommandResult> => {
+    const senderId = options.senderId ?? "cli-user";
     const context: AuthorizationContext = {
       channel: options.channel ?? "cli",
-      userId: "cli-user",
+      userId: senderId,
       roles: options.roles ?? ["developer"],
     };
     return handleIntent(
@@ -105,7 +115,7 @@ export async function createPhase12Harness() {
         channel: context.channel,
         conversationId: options.conversationId ?? "conv-phase12",
         messageId: options.messageId ?? "msg-001",
-        senderId: context.userId,
+        senderId,
         text: "phase12",
       },
       context,
@@ -188,11 +198,13 @@ export async function createPhase12Harness() {
     plans,
     tasks,
     dependencies,
+    deliveries,
     events,
     problemService,
     specificationService,
     planning,
     dependencyService,
+    deliveryService,
     dispatcher,
     dispatch,
     dispatchFeishu,

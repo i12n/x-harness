@@ -25,3 +25,8 @@ export {
   type SpecificationPlanView,
   type SpecificationRenderOptions,
 } from "./specification.js";
+export {
+  renderDeliveryMessage,
+  type DeliveryRenderFacts,
+  type DeliveryRenderOptions,
+} from "./delivery.js";

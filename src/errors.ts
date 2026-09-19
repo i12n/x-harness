@@ -94,6 +94,18 @@ export class DuplicateTaskDependencyError extends HarnessError {
   }
 }
 
+export class DuplicateDeliveryError extends HarnessError {
+  constructor(id: string) {
+    super(`delivery already exists: ${id}`);
+  }
+}
+
+export class DeliveryNotFoundError extends HarnessError {
+  constructor(id: string) {
+    super(`delivery not found: ${id}`);
+  }
+}
+
 export class SpecificationNotFoundError extends HarnessError {
   constructor(id: string) {
     super(`specification not found: ${id}`);

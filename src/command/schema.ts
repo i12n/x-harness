@@ -81,4 +81,12 @@ export const COMMAND_SCHEMAS: Record<CommandType, CommandSchema> = {
     fields: { specificationId: { type: "string", required: true } },
     roles: OPERATORS,
   },
+  "delivery.show": {
+    fields: { deliveryId: { type: "string", required: true } },
+    roles: ALL_ROLES,
+  },
+  "delivery.release": {
+    fields: { deliveryId: { type: "string", required: true } },
+    roles: REVIEWERS,
+  },
 };

@@ -3,6 +3,8 @@ import type { MessageBlock } from "../src/channel/message.js";
 import { renderReviewMessage, REVIEW_ACTIONS } from "../src/channel/rendering/review.js";
 import { renderRunMessage } from "../src/channel/rendering/run.js";
 import { renderTaskMessage } from "../src/channel/rendering/task.js";
+import { renderDeliveryMessage } from "../src/channel/rendering/delivery.js";
+import { buildDelivery, buildRelease } from "../src/domain/delivery.js";
 import type { Run } from "../src/domain/run.js";
 import type { Task } from "../src/domain/task.js";
 
@@ -281,5 +283,71 @@ describe("Business rendering (TASK-1105)", () => {
     expect(rendered).toContain("✗ auth (supporting)");
     expect(rendered).toContain("- 0 passed");
     expect(rendered).toContain("- 1 failed");
+  });
+
+  it("renders a delivery aggregation with blocking and release state (TASK-1205)", () => {
+    const delivery = buildDelivery({
+      id: "dlv-001",
+      specificationId: "spec-001",
+      status: "BLOCKED",
+    });
+    const rendered = textOf(
+      renderDeliveryMessage({
+        delivery,
+        tasks: [
+          task({ id: "task-a", title: "接口", status: "DONE" }),
+          task({ id: "task-b", title: "页面", status: "BLOCKED" }),
+          task({
+            id: "task-c",
+            title: "文档",
+            status: "REVIEW",
+            targets: [
+              {
+                id: "tgt-c",
+                taskId: "task-c",
+                repositoryId: "repo-a",
+                role: "primary",
+                position: 0,
+                required: false,
+                createdAt: "",
+              },
+            ],
+          }),
+        ],
+        blocking: [task({ id: "task-b", title: "页面", status: "BLOCKED" })],
+      }).blocks,
+    );
+
+    expect(rendered).toContain("dlv-001 · Delivery");
+    expect(rendered).toContain("Specification: spec-001");
+    expect(rendered).toContain("Status: BLOCKED");
+    expect(rendered).toContain("✓ task-a 接口 · DONE · required");
+    expect(rendered).toContain("✗ task-b 页面 · BLOCKED · required");
+    expect(rendered).toContain("○ task-c 文档 · REVIEW · optional");
+    expect(rendered).toContain("task-b is BLOCKED");
+    expect(rendered).toContain("(not released)");
+  });
+
+  it("renders a released delivery with its release record", () => {
+    const rendered = textOf(
+      renderDeliveryMessage({
+        delivery: buildDelivery({
+          id: "dlv-002",
+          specificationId: "spec-002",
+          status: "RELEASED",
+        }),
+        tasks: [task({ id: "task-a", title: "接口", status: "DONE" })],
+        release: buildRelease({
+          id: "rel-001",
+          deliveryId: "dlv-002",
+          status: "RELEASED",
+          createdBy: "cli:reviewer-1",
+        }),
+      }).blocks,
+    );
+
+    expect(rendered).toContain("Status: RELEASED");
+    expect(rendered).toContain("rel-001 · RELEASED");
+    expect(rendered).toContain("by cli:reviewer-1");
   });
 });

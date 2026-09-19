@@ -20,6 +20,15 @@ export interface PlanningServiceDeps {
   tasks: TaskStore;
   planner: TaskPlanner;
   events?: EventStore;
+  /**
+   * TASK-1205: a planned Specification gets its Delivery automatically, so
+   * users never create one by hand. Idempotent (one per Specification).
+   */
+  deliveries?: DeliveryCreationPort;
+}
+
+export interface DeliveryCreationPort {
+  createForSpecification(specificationId: string): Promise<unknown>;
 }
 
 export interface PlanningOutcome {
@@ -110,6 +119,14 @@ export class PlanningService {
     }
 
     const { tasks, created } = await this.materializeTasks(specification, items);
+    if (this.deps.deliveries) {
+      try {
+        await this.deps.deliveries.createForSpecification(specificationId);
+      } catch {
+        // Delivery creation must never fail planning: the aggregate is
+        // recomputed from Task facts whenever it is queried.
+      }
+    }
     const refreshed = await this.deps.specifications.findSpecification(specificationId);
     return {
       specification: refreshed,

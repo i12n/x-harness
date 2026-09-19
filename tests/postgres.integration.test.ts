@@ -31,7 +31,9 @@ import { PostgresConversationStore } from "../src/store/postgresConversationStor
 import { PostgresSpecificationStore } from "../src/store/postgresSpecificationStore.js";
 import { PostgresSpecificationPlanStore } from "../src/store/postgresSpecificationPlanStore.js";
 import { PostgresTaskDependencyStore } from "../src/store/postgresTaskDependencyStore.js";
+import { PostgresDeliveryStore } from "../src/store/postgresDeliveryStore.js";
 import { TaskDependencyService } from "../src/task/application/dependencyService.js";
+import { DeliveryService } from "../src/delivery/application/service.js";
 import { SpecificationService } from "../src/specification/application/service.js";
 import { PlanningService } from "../src/specification/application/planning.js";
 import { DeterministicTaskPlanner } from "../src/specification/application/planner.js";
@@ -84,7 +86,7 @@ describePostgres("PostgreSQL integration", () => {
       cleanup();
     }
     await pool?.query(
-      "DELETE FROM conversation_messages; DELETE FROM conversations; DELETE FROM specification_plans; DELETE FROM specification_targets; DELETE FROM specifications; DELETE FROM clarification_answers; DELETE FROM clarifications; DELETE FROM problem_analyses; DELETE FROM problems; DELETE FROM events; DELETE FROM executions; DELETE FROM workspaces; DELETE FROM task_dependencies; DELETE FROM task_targets; DELETE FROM runs; DELETE FROM tasks; DELETE FROM repositories;",
+      "DELETE FROM conversation_messages; DELETE FROM conversations; DELETE FROM releases; DELETE FROM deliveries; DELETE FROM specification_plans; DELETE FROM specification_targets; DELETE FROM specifications; DELETE FROM clarification_answers; DELETE FROM clarifications; DELETE FROM problem_analyses; DELETE FROM problems; DELETE FROM events; DELETE FROM executions; DELETE FROM workspaces; DELETE FROM task_dependencies; DELETE FROM task_targets; DELETE FROM runs; DELETE FROM tasks; DELETE FROM repositories;",
     );
   });
 
@@ -795,5 +797,104 @@ describePostgres("PostgreSQL integration", () => {
     const created = await runs.listRuns({ taskId: "task-race" });
     expect(created).toHaveLength(1);
     expect(created[0]?.status).toBe("QUEUED");
+  });
+
+  it("aggregates a delivery and records exactly one release (TASK-1205)", async () => {
+    const repositories = new PostgresRepositoryStore(pool!);
+    const problems = new PostgresProblemStore(pool!);
+    const specifications = new PostgresSpecificationStore(pool!);
+    const plans = new PostgresSpecificationPlanStore(pool!);
+    const tasks = new PostgresTaskStore(pool!);
+    const deliveries = new PostgresDeliveryStore(pool!);
+    const events = new PostgresEventStore(pool!);
+    const specificationService = new SpecificationService({
+      specifications,
+      problems,
+      events,
+    });
+    const deliveryService = new DeliveryService({ deliveries, plans, tasks, events });
+    const planning = new PlanningService({
+      specifications,
+      plans,
+      tasks,
+      planner: new DeterministicTaskPlanner(),
+      events,
+      deliveries: deliveryService,
+    });
+
+    await repositories.createRepository({
+      id: "repo-a",
+      name: "app",
+      url: "git@github.com:example/app.git",
+      localPath: "/tmp/repos/app",
+    });
+    await problems.createProblem({
+      id: "prob-001",
+      title: "专辑页面",
+      statement: "用户希望有一个专辑页面。",
+      status: "CONFIRMED",
+    });
+    await problems.setProblemSpec("prob-001", {
+      problem: "专辑页面不存在",
+      expected: "可以浏览专辑曲目",
+    });
+    const specification = await specificationService.createFromProblem({
+      problemId: "prob-001",
+      requirements: ["A: 列表接口", "B: 页面"],
+      acceptance: ["可以打开专辑页"],
+      targets: [{ repositoryId: "repo-a" }],
+    });
+    await specificationService.markReady(specification.id);
+
+    // Planning creates the Delivery automatically (one per Specification).
+    const planned = await planning.plan(specification.id);
+    await planning.plan(specification.id);
+    const delivery = await deliveries.findDeliveryBySpecification(specification.id);
+    expect(delivery).toBeDefined();
+    expect(await deliveries.listDeliveries()).toHaveLength(1);
+    await expect(
+      deliveries.createDelivery({ specificationId: specification.id }),
+    ).rejects.toThrow(/already has a delivery/);
+
+    // Aggregation follows the persisted Task facts.
+    await expect(deliveryService.show(delivery!.id)).resolves.toMatchObject({
+      delivery: { status: "IN_PROGRESS" },
+    });
+    for (const task of planned.tasks) {
+      await tasks.updateTaskStatus(task.id, "DONE");
+    }
+    await expect(deliveryService.show(delivery!.id)).resolves.toMatchObject({
+      delivery: { status: "READY_FOR_RELEASE" },
+    });
+
+    const released = await deliveryService.release(delivery!.id, {
+      channel: "feishu",
+      userId: "ou_reviewer",
+    });
+    expect(released.created).toBe(true);
+    expect(released.release).toMatchObject({
+      status: "RELEASED",
+      createdBy: "feishu:ou_reviewer",
+    });
+    expect(released.delivery.status).toBe("RELEASED");
+
+    // Idempotent release + DB backstop for a second RELEASED row.
+    const again = await deliveryService.release(delivery!.id, {
+      channel: "feishu",
+      userId: "ou_reviewer",
+    });
+    expect(again.created).toBe(false);
+    await expect(deliveries.listReleases(delivery!.id)).resolves.toHaveLength(1);
+    await expect(
+      pool!.query(
+        `INSERT INTO releases (id, delivery_id, status, created_by, created_at, released_at)
+         VALUES ('rel-dup', $1, 'RELEASED', 'raw', now(), now())`,
+        [delivery!.id],
+      ),
+    ).rejects.toMatchObject({ code: "23505" });
+
+    const releaseEvents = await events.listEvents({ type: "release.released" });
+    expect(releaseEvents).toHaveLength(1);
+    expect(releaseEvents[0]?.payload).toMatchObject({ releaseId: released.release.id });
   });
 });

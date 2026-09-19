@@ -3,6 +3,7 @@ import { createPool } from "../db/pool.js";
 import { InMemoryRepositoryStore } from "./inMemoryRepositoryStore.js";
 import { InMemoryEventStore } from "./inMemoryEventStore.js";
 import { InMemoryConversationStore } from "./inMemoryConversationStore.js";
+import { InMemoryDeliveryStore } from "./inMemoryDeliveryStore.js";
 import { InMemoryExecutionStore } from "./inMemoryExecutionStore.js";
 import { InMemoryProblemStore } from "./inMemoryProblemStore.js";
 import { InMemoryRunStore } from "./inMemoryRunStore.js";
@@ -12,6 +13,7 @@ import { InMemoryTaskDependencyStore } from "./inMemoryTaskDependencyStore.js";
 import { InMemoryTaskStore } from "./inMemoryTaskStore.js";
 import { PostgresEventStore } from "./postgresEventStore.js";
 import { PostgresConversationStore } from "./postgresConversationStore.js";
+import { PostgresDeliveryStore } from "./postgresDeliveryStore.js";
 import { PostgresExecutionStore } from "./postgresExecutionStore.js";
 import { PostgresRepositoryStore } from "./postgresRepositoryStore.js";
 import { PostgresProblemStore } from "./postgresProblemStore.js";
@@ -25,6 +27,7 @@ import type { RunStore } from "./runStore.js";
 import type { TaskStore } from "./taskStore.js";
 import type { EventStore } from "./eventStore.js";
 import type { ConversationStore } from "./conversationStore.js";
+import type { DeliveryStore } from "./deliveryStore.js";
 import type { ExecutionStore } from "./executionStore.js";
 import type { ProblemStore } from "./problemStore.js";
 import type { SpecificationStore } from "./specificationStore.js";
@@ -36,6 +39,7 @@ export type { TaskStore } from "./taskStore.js";
 export type { RunStore } from "./runStore.js";
 export type { EventStore } from "./eventStore.js";
 export type { ConversationStore } from "./conversationStore.js";
+export type { DeliveryStore } from "./deliveryStore.js";
 export type { ExecutionStore } from "./executionStore.js";
 export type { ProblemStore } from "./problemStore.js";
 export type { SpecificationStore } from "./specificationStore.js";
@@ -59,6 +63,12 @@ export type {
   AddTaskDependencyInput,
 } from "../domain/taskDependency.js";
 export type {
+  Delivery,
+  DeliveryStatus,
+  Release,
+  ReleaseStatus,
+} from "../domain/delivery.js";
+export type {
   Conversation,
   ConversationMessage,
   ConversationStatus,
@@ -81,6 +91,7 @@ export interface StoreHandle {
   specifications: SpecificationStore;
   specificationPlans: SpecificationPlanStore;
   taskDependencies: TaskDependencyStore;
+  deliveries: DeliveryStore;
   executions: ExecutionStore;
   conversations: ConversationStore;
   close(): Promise<void>;
@@ -102,6 +113,7 @@ export async function openStores(): Promise<StoreHandle> {
       specifications: new InMemorySpecificationStore(),
       specificationPlans: new InMemorySpecificationPlanStore(),
       taskDependencies: new InMemoryTaskDependencyStore(),
+      deliveries: new InMemoryDeliveryStore(),
       executions: new InMemoryExecutionStore(),
       conversations: new InMemoryConversationStore(),
       close: async () => {},
@@ -121,6 +133,7 @@ export async function openStores(): Promise<StoreHandle> {
     specifications: new PostgresSpecificationStore(pool),
     specificationPlans: new PostgresSpecificationPlanStore(pool),
     taskDependencies: new PostgresTaskDependencyStore(pool),
+    deliveries: new PostgresDeliveryStore(pool),
     executions: new PostgresExecutionStore(pool),
     conversations: new PostgresConversationStore(pool),
     close: async () => {

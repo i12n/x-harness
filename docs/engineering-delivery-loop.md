@@ -4,7 +4,8 @@
 > 目标是让 Harness 能把一个需求持续推进到交付。
 > TASK-1201（Specification Model）、TASK-1202（Specification → Task
 > Planning）、TASK-1203（Task Dependency / DAG）、TASK-1204
-> （Dependency-aware Scheduler）已实现；TASK-1205 起尚未开始。
+> （Dependency-aware Scheduler）、TASK-1205（Delivery / Release Model）
+> 已实现；TASK-1206 起尚未开始。
 
 ## 目标链路
 
@@ -23,8 +24,8 @@ TASK-1201  Specification Model                      ✅ 完成
 TASK-1202  Specification → Task Planning            ✅ 完成
 TASK-1203  Task Dependency / DAG                    ✅ 完成
 TASK-1204  Dependency-aware Scheduler               ✅ 完成
-TASK-1205  Delivery / Release Model                 ← 当前
-TASK-1206  Delivery Loop
+TASK-1205  Delivery / Release Model                 ✅ 完成
+TASK-1206  Delivery Loop                            ← 当前
 TASK-1207  Failure / Retry / Recovery Hardening
 TASK-1208  Phase 12 Generic E2E Acceptance
 ```
@@ -120,8 +121,8 @@ TASK-1201  Specification Model                 ✅ 实现完成（迁移 008 + �
 TASK-1202  Specification → Task Planning       ✅ 实现完成（迁移 009 + Command/CLI + E2E）
 TASK-1203  Task Dependency / DAG               ✅ 实现完成（迁移 010 + Service + E2E）
 TASK-1204  Dependency-aware Scheduler          ✅ 实现完成（迁移 011 + Scheduler + E2E）
-TASK-1205  Delivery / Release Model            ← 下一步
-TASK-1206  Delivery Loop
+TASK-1205  Delivery / Release Model            ✅ 实现完成（迁移 012 + Command/CLI + E2E）
+TASK-1206  Delivery Loop                       ← 下一步
 TASK-1207  Failure / Retry / Recovery Hardening
 TASK-1208  Phase 12 Generic E2E Acceptance
 ```
@@ -287,3 +288,73 @@ migrations/011_active_run_uniqueness.sql    # 每 Task 至多一个 active Run�
 
 刻意未做：DAG-aware 之外的新调度策略（公平性/优先级反转）、依赖失败级联
 （`dependency_failed` / auto-unblock，留待 Delivery Policy）、Worker/Run/Retry 改动。
+
+## TASK-1205 Delivery / Release Model（已完成）
+
+```text
+Specification 1:1 Delivery 1:N Release
+
+Task facts（required / status）
+        ↓  aggregate
+Delivery.status（PLANNED → IN_PROGRESS → READY_FOR_RELEASE → RELEASED）
+        ↓  人工确认
+Release(RELEASED)  ← 只是记录，不是发布动作
+```
+
+实现：
+
+```text
+src/domain/delivery.ts                     # Delivery/Release + 聚合规则
+src/delivery/application/service.ts        # DeliveryService（refresh/show/release）
+src/store/{deliveryStore,inMemoryDeliveryStore,postgresDeliveryStore}.ts
+migrations/012_deliveries.sql              # deliveries + releases
+src/command/handlers/delivery.ts           # delivery.show / delivery.release
+src/channel/rendering/delivery.ts          # Delivery → OutgoingMessage
+src/cli/deliveryOutput.ts + ai delivery show|release
+src/specification/application/planning.ts  # spec.plan 成功后自动建 Delivery
+```
+
+聚合规则（**只看 required Task**，Optional 不阻塞）：
+
+```text
+no required tasks                      → PLANNED
+任一 required Task BLOCKED / FAILED     → BLOCKED（FAILED 也需要人工决策）
+全部 required Task DONE                → READY_FOR_RELEASE
+其他                                   → IN_PROGRESS
+RELEASED                               → 人工动作，不被聚合覆盖
+```
+
+Task 的 required 语义直接复用 `TaskTarget.required`（primary target）：不新增
+Task 字段，也不建立 `tasks.delivery_id` —— Delivery 通过
+`specification_plans` 找到自己的 Task 集合。
+
+Delivery status **不是写死的事实**：每次 `show` / `release` 都从当前 Task 状态
+重新聚合；persist 的状态只用于"状态迁移可观测"+ 事件触发。因此：
+
+```text
+A DONE + B DONE → READY_FOR_RELEASE
+B → BLOCKED     → 再次 show 得到 BLOCKED（回归可见）
+```
+
+事件（迁移时才产生，重复 `show` 不重复触发）：
+`delivery.created` / `delivery.in_progress` / `delivery.ready_for_release` /
+`delivery.blocked` / `release.created` / `release.released`
+（`delivery.in_progress` 是对"READY_FOR_RELEASE 回归"的审计补充。）
+
+Release 语义与幂等：
+
+```text
+delivery.release 前置：Delivery.status == READY_FOR_RELEASE
+  否则 rejected(delivery_not_ready_for_release)
+成功：Release(RELEASED, createdBy=channel:user) + Delivery=RELEASED
+重复：返回已有 Release（created:false），不产生第二条
+DB 兜底：READY_FOR_RELEASE → RELEASED 用 compare-and-set 抢占；
+        releases_one_released_idx = UNIQUE(delivery_id) WHERE status='RELEASED'
+```
+
+命令/CLI：`delivery.show`（所有角色）、`delivery.release`（reviewer/admin）；
+`ai delivery show|release` 经 Command 层进入 Application。**没有**
+`delivery.create` —— Delivery 由 `spec.plan` 自动建立（1 Specification : 1 Delivery，
+`UNIQUE(specification_id)`）。
+
+刻意未做：GitHub/GitLab/PR/Merge/Push/Deploy/CI-CD/自动发布/回滚/版本化发布流水线。

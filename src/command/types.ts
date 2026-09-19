@@ -13,6 +13,8 @@ export const COMMAND_TYPES = [
   "review.request_changes",
   "spec.show",
   "spec.plan",
+  "delivery.show",
+  "delivery.release",
 ] as const;
 
 export type CommandType = (typeof COMMAND_TYPES)[number];

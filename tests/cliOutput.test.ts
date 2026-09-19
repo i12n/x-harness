@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import { formatRunDetails, formatTaskTargets } from "../src/cli/output.js";
 import { formatTaskDependencies } from "../src/cli/output.js";
 import { formatSpecificationPlan } from "../src/cli/specificationOutput.js";
+import { formatDeliveryView } from "../src/cli/deliveryOutput.js";
+import { buildDelivery, buildRelease } from "../src/domain/delivery.js";
 import { buildSpecification } from "../src/domain/specification.js";
 import type { Run } from "../src/domain/run.js";
 import type { Task } from "../src/domain/task.js";
@@ -166,6 +168,72 @@ describe("formatTaskDependencies (TASK-1204)", () => {
   it("prints only the runnable line when there are no prerequisites", () => {
     const lines = formatTaskDependencies({ runnable: true, prerequisites: [] });
     expect(lines).toEqual(["Runnable: yes"]);
+  });
+});
+
+describe("formatDeliveryView (TASK-1205)", () => {
+  const optionalTask: Task = {
+    ...task,
+    id: "task-optional",
+    title: "文档",
+    status: "REVIEW",
+    targets: [
+      {
+        id: "tgt-c",
+        taskId: "task-optional",
+        repositoryId: "repo-a",
+        role: "primary",
+        position: 0,
+        required: false,
+        createdAt: "",
+      },
+    ],
+  };
+
+  it("prints status, task marks, blocking reasons and release state", () => {
+    const lines = formatDeliveryView({
+      delivery: buildDelivery({
+        id: "dlv-001",
+        specificationId: "spec-001",
+        status: "BLOCKED",
+      }),
+      tasks: [
+        { ...task, id: "task-a", title: "接口", status: "DONE" },
+        { ...task, id: "task-b", title: "页面", status: "BLOCKED" },
+        optionalTask,
+      ],
+      blocking: [{ ...task, id: "task-b", title: "页面", status: "BLOCKED" }],
+    }).join("\n");
+
+    expect(lines).toContain("Delivery: dlv-001");
+    expect(lines).toContain("Specification: spec-001");
+    expect(lines).toContain("Status: BLOCKED");
+    expect(lines).toContain("✓ task-a  DONE       required");
+    expect(lines).toContain("✗ task-b  BLOCKED    required");
+    expect(lines).toContain("○ task-optional  REVIEW     optional");
+    expect(lines).toContain("task-b is BLOCKED");
+    expect(lines).toContain("(not released)");
+  });
+
+  it("prints the release record once released", () => {
+    const lines = formatDeliveryView({
+      delivery: buildDelivery({
+        id: "dlv-002",
+        specificationId: "spec-002",
+        status: "RELEASED",
+      }),
+      tasks: [task],
+      release: buildRelease({
+        id: "rel-001",
+        deliveryId: "dlv-002",
+        status: "RELEASED",
+        createdBy: "cli:reviewer-1",
+      }),
+    }).join("\n");
+
+    expect(lines).toContain("Status: RELEASED");
+    expect(lines).toContain("rel-001 · RELEASED");
+    expect(lines).toContain("by cli:reviewer-1");
   });
 });
 

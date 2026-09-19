@@ -66,9 +66,12 @@ import {
   type CommandType,
 } from "../command/index.js";
 import { createSpecificationCommandHandlers } from "../command/handlers/specification.js";
+import { createDeliveryCommandHandlers } from "../command/handlers/delivery.js";
 import type { SpecificationPlanView } from "./specificationOutput.js";
 import { PlanningService } from "../specification/application/planning.js";
 import { DeterministicTaskPlanner } from "../specification/application/planner.js";
+import { DeliveryService } from "../delivery/application/service.js";
+import { formatDeliveryView, type DeliveryViewLike } from "./deliveryOutput.js";
 import { TaskDependencyService } from "../task/application/dependencyService.js";
 import { makeId } from "../util/id.js";
 
@@ -508,6 +511,43 @@ specGroup
     });
   });
 
+const deliveryGroup = program
+  .command("delivery")
+  .description("delivery aggregation and release records (Phase 12)");
+
+deliveryGroup
+  .command("show <id>")
+  .description("show a delivery, its tasks and its release state")
+  .option("--role <role>", "authorization role (default: guest)")
+  .action(async (id: string, options: { role?: string }) => {
+    await withStores(async (handle) => {
+      const view = await dispatchDeliveryCommand(handle, "delivery.show", id, options.role);
+      await cliChannel.send({
+        conversationId: id,
+        text: formatDeliveryView(view).join("\n"),
+      });
+    });
+  });
+
+deliveryGroup
+  .command("release <id>")
+  .description("record a release (requires reviewer/admin; no publish side effects)")
+  .option("--role <role>", "authorization role (default: reviewer)")
+  .action(async (id: string, options: { role?: string }) => {
+    await withStores(async (handle) => {
+      const view = await dispatchDeliveryCommand(
+        handle,
+        "delivery.release",
+        id,
+        options.role,
+      );
+      await cliChannel.send({
+        conversationId: id,
+        text: formatDeliveryView(view).join("\n"),
+      });
+    });
+  });
+
 program
   .command("review <run-id>")
   .description("run a reviewer agent over a SUCCEEDED run's workspace diff")
@@ -807,6 +847,8 @@ function dispatchSpecificationCommand(
     tasks: handle.tasks,
     planner: new DeterministicTaskPlanner(),
     events: handle.events,
+    // TASK-1205: planning a Specification creates its Delivery automatically.
+    deliveries: deliveryService(handle),
   });
   const dispatcher = new CommandDispatcher({
     handlers: createSpecificationCommandHandlers({ planning }),
@@ -832,6 +874,51 @@ function dispatchSpecificationCommand(
       }
       return result.data as SpecificationPlanView;
     });
+}
+
+/** TASK-1205: Delivery aggregation + release records. */
+function deliveryService(handle: StoreHandle): DeliveryService {
+  return new DeliveryService({
+    deliveries: handle.deliveries,
+    plans: handle.specificationPlans,
+    tasks: handle.tasks,
+    events: handle.events,
+  });
+}
+
+async function dispatchDeliveryCommand(
+  handle: StoreHandle,
+  type: Extract<CommandType, "delivery.show" | "delivery.release">,
+  deliveryId: string,
+  roleOption?: string,
+): Promise<DeliveryViewLike> {
+  const role = roleOption?.trim() || (type === "delivery.release" ? "reviewer" : "guest");
+  if (!isRole(role)) {
+    throw new Error(`invalid role '${role}' (use guest|developer|reviewer|admin)`);
+  }
+  const dispatcher = new CommandDispatcher({
+    handlers: createDeliveryCommandHandlers({
+      deliveries: deliveryService(handle),
+    }),
+    idempotency: new InMemoryIdempotencyStore(),
+  });
+  const result = await dispatcher.dispatch(
+    {
+      id: makeId("cmd"),
+      type,
+      version: COMMAND_VERSION,
+      actor: { channel: "cli", userId: "cli-user" },
+      payload: { deliveryId },
+      idempotencyKey: `cli:${makeId("msg")}:${type}`,
+      createdAt: new Date().toISOString(),
+    },
+    { channel: "cli", userId: "cli-user", roles: [role] },
+  );
+  if (result.status !== "succeeded") {
+    const code = result.error?.code ?? "unknown";
+    throw new Error(`${type} ${result.status}: ${code} ${result.error?.message ?? ""}`.trim());
+  }
+  return result.data as DeliveryViewLike;
 }
 
 type RepositoryCreateCliOptions = RepositoryCreateOptions & {

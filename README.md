@@ -73,6 +73,8 @@ Implemented in TypeScript (Node >= 18, ESM). The full plan lives in
   `TaskDependencyService`：环检测、重复/自依赖防护、runnable 判定；
   Scheduler 未改动）、TASK-1204 Dependency-aware Scheduler（Scheduler 只消费
   runnable 查询，依赖不占并发额度；迁移 011 保证每 Task 至多一个 active Run）
+  、TASK-1205 Delivery / Release Model（迁移 012：Delivery 按 required Task
+  状态聚合、每次读取重算，Release 只是人工记录；`ai delivery show|release`）
   已完成 —— 见
   [docs/engineering-delivery-loop.md](docs/engineering-delivery-loop.md)。
 
@@ -194,6 +196,7 @@ src/
   run/          # run + task-run application services
   scheduler/    # READY task scheduling with max_concurrency
   specification/# Specification domain/application (Phase 12)
+  delivery/     # Delivery aggregation + release records (Phase 12)
   store/        # repository/task/run stores: in-memory + postgres
   task/         # task application services (dependency graph, Phase 12)
   util/         # ids, slugs
@@ -201,7 +204,7 @@ src/
   worker/       # run executor with leases and heartbeats
   workspace/    # git-worktree workspace isolation (one run = one worktree)
 config/         # config/config.yaml
-migrations/     # SQL schema (001 core ... 011 active run uniqueness)
+migrations/     # SQL schema (001 core ... 012 deliveries and releases)
 scripts/        # db:migrate runner
 tests/          # vitest unit tests
 docs/           # v0.1 plan, v0.2 roadmap, phase 9 isolation/acceptance,
