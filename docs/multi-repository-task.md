@@ -31,7 +31,15 @@
   mounts 持久化到 `executions.mounts` 供 recovery 使用
 - 回归：单测 137 passed；Postgres 集成 4 passed；真实 codex E2E passed；
   **Phase 9 真机 Docker 验收重跑 12 passed / 1 skipped**（单挂载路径无回归）
-- 下一步：TASK-1007 Multi-Repository Context →
+- TASK-1007 ✅：Multi-Repository Context —— `buildAgentContext({targets[]})`
+  支持多仓库：prompt 增加 `## Targets`（Primary/Supporting、Repository、
+  Branch、Workdir）与 `## Project Context`（每个仓库独立小节，从各自的 host
+  workspace 收集 AGENTS.md/PROJECT.md/README.md/docs/*.md）；上下文严格按
+  target 分块，不跨仓库混淆；总预算 256KB、单 target 上限 96KB，超限写入
+  `(truncated)` 标记；缺文档不报错；单仓库路径保持原 prompt 格式不变；
+  Context Builder 不依赖 Docker/Postgres（测试只用临时目录）
+- 回归：单测 142 passed；真实 codex E2E passed（单仓库 prompt 无回归）
+- 下一步：TASK-1008 Target-level Verification →
   TASK-1007 Context → TASK-1008 Target 级 Verification → TASK-1009 Worker →
   TASK-1010 Retry/Recovery → TASK-1011 CLI → TASK-1012 真机多挂载验收
 >
