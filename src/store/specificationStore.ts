@@ -29,4 +29,14 @@ export interface SpecificationStore {
     id: string,
     status: SpecificationStatus,
   ): Promise<Specification>;
+  /**
+   * Compare-and-set status. Returns `undefined` when the specification is not
+   * in `expected` (someone else already moved it) — this is the DB-level guard
+   * that stops a second planning run from creating a second Task batch.
+   */
+  updateSpecificationStatusIf(
+    id: string,
+    expected: SpecificationStatus,
+    status: SpecificationStatus,
+  ): Promise<Specification | undefined>;
 }

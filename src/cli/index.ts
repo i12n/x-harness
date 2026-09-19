@@ -52,7 +52,20 @@ import {
 } from "./commands/reviewCommands.js";
 import { cleanupWorkspacesCommand } from "./commands/workspaceCommands.js";
 import { formatRunDetails, formatTaskTargets } from "./output.js";
+import { formatSpecificationPlan } from "./specificationOutput.js";
 import { CliChannel } from "../channel/cli/adapter.js";
+import {
+  COMMAND_VERSION,
+  CommandDispatcher,
+  InMemoryIdempotencyStore,
+  isRole,
+  type CommandType,
+} from "../command/index.js";
+import { createSpecificationCommandHandlers } from "../command/handlers/specification.js";
+import type { SpecificationPlanView } from "./specificationOutput.js";
+import { PlanningService } from "../specification/application/planning.js";
+import { DeterministicTaskPlanner } from "../specification/application/planner.js";
+import { makeId } from "../util/id.js";
 
 const cliChannel = new CliChannel();
 
@@ -440,6 +453,38 @@ problemGroup
     });
   });
 
+const specGroup = program
+  .command("spec")
+  .description("specification & task planning (Phase 12)");
+
+specGroup
+  .command("show <id>")
+  .description("show a specification, its targets and its plan")
+  .option("--role <role>", "authorization role (default: developer)")
+  .action(async (id: string, options: { role?: string }) => {
+    await withStores(async (handle) => {
+      const view = await dispatchSpecificationCommand(handle, "spec.show", id, options.role);
+      await cliChannel.send({
+        conversationId: id,
+        text: formatSpecificationPlan(view).join("\n"),
+      });
+    });
+  });
+
+specGroup
+  .command("plan <id>")
+  .description("plan a READY specification into Tasks (idempotent)")
+  .option("--role <role>", "authorization role (default: developer)")
+  .action(async (id: string, options: { role?: string }) => {
+    await withStores(async (handle) => {
+      const view = await dispatchSpecificationCommand(handle, "spec.plan", id, options.role);
+      await cliChannel.send({
+        conversationId: id,
+        text: formatSpecificationPlan(view).join("\n"),
+      });
+    });
+  });
+
 program
   .command("review <run-id>")
   .description("run a reviewer agent over a SUCCEEDED run's workspace diff")
@@ -710,6 +755,54 @@ function confirmationLoop(handle: StoreHandle): ConfirmationLoop {
       new CodexEngine({ sandbox: process.env.AI_ANALYZER_SANDBOX ?? "read-only" }),
     ),
   });
+}
+
+/**
+ * Phase 12 / TASK-1202: specification commands go through the command layer
+ * (validation → authorization → idempotency → handler). The CLI never calls
+ * PlanningService directly, so chat and CLI share one entry point.
+ */
+function dispatchSpecificationCommand(
+  handle: StoreHandle,
+  type: Extract<CommandType, "spec.show" | "spec.plan">,
+  specificationId: string,
+  roleOption?: string,
+): Promise<SpecificationPlanView> {
+  const role = roleOption?.trim() || "developer";
+  if (!isRole(role)) {
+    throw new Error(`invalid role '${role}' (use guest|developer|reviewer|admin)`);
+  }
+  const planning = new PlanningService({
+    specifications: handle.specifications,
+    plans: handle.specificationPlans,
+    tasks: handle.tasks,
+    planner: new DeterministicTaskPlanner(),
+    events: handle.events,
+  });
+  const dispatcher = new CommandDispatcher({
+    handlers: createSpecificationCommandHandlers({ planning }),
+    idempotency: new InMemoryIdempotencyStore(),
+  });
+  return dispatcher
+    .dispatch(
+      {
+        id: makeId("cmd"),
+        type,
+        version: COMMAND_VERSION,
+        actor: { channel: "cli", userId: "cli-user" },
+        payload: { specificationId },
+        idempotencyKey: `cli:${makeId("msg")}:${type}`,
+        createdAt: new Date().toISOString(),
+      },
+      { channel: "cli", userId: "cli-user", roles: [role] },
+    )
+    .then((result) => {
+      if (result.status !== "succeeded") {
+        const code = result.error?.code ?? "unknown";
+        throw new Error(`${type} ${result.status}: ${code} ${result.error?.message ?? ""}`.trim());
+      }
+      return result.data as SpecificationPlanView;
+    });
 }
 
 type RepositoryCreateCliOptions = RepositoryCreateOptions & {

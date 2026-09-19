@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { formatRunDetails, formatTaskTargets } from "../src/cli/output.js";
+import { formatSpecificationPlan } from "../src/cli/specificationOutput.js";
+import { buildSpecification } from "../src/domain/specification.js";
 import type { Run } from "../src/domain/run.js";
 import type { Task } from "../src/domain/task.js";
 
@@ -141,5 +143,63 @@ describe("CLI output (TASK-1011)", () => {
     expect(lines).toContain("tgt-b [supporting] repo-b FAIL");
     expect(lines).toContain("check: npm test failed (exit 1)");
     expect(lines).toContain("output: 3 tests failed");
+  });
+});
+
+describe("formatSpecificationPlan (TASK-1202)", () => {
+  const specification = {
+    ...buildSpecification({
+      id: "spec-001",
+      problemId: "prob-001",
+      title: "专辑页面",
+      summary: "浏览专辑曲目",
+      acceptance: ["可以打开专辑页"],
+      status: "PLANNED",
+      requirements: ["列表页显示曲目", "详情页显示歌词"],
+      targets: [
+        { repositoryId: "repo-a", role: "primary", position: 0, baseRef: "main" },
+        { repositoryId: "repo-b", role: "supporting", position: 1 },
+      ],
+    }),
+  };
+
+  it("prints status, targets and the plan item → task mapping", () => {
+    const lines = formatSpecificationPlan({
+      specification,
+      planItems: [
+        {
+          id: "plan-spec-001-0",
+          specificationId: "spec-001",
+          position: 0,
+          title: "列表页显示曲目",
+          description: "",
+          taskId: "task-spec-001-0",
+          createdAt: "",
+          updatedAt: "",
+        },
+      ],
+      tasks: [{ ...task, id: "task-spec-001-0", status: "INBOX" }],
+      replayed: false,
+    }).join("\n");
+
+    expect(lines).toContain("spec-001 · 专辑页面");
+    expect(lines).toContain("Status: PLANNED");
+    expect(lines).toContain("#0  primary    repository: repo-a  base_ref: main");
+    expect(lines).toContain("#1  supporting repository: repo-b");
+    expect(lines).toContain("#0  列表页显示曲目");
+    expect(lines).toContain("task: task-spec-001-0  status: INBOX");
+    expect(lines).toContain("Replayed: no");
+  });
+
+  it("prints an unplanned specification safely", () => {
+    const lines = formatSpecificationPlan({
+      specification: { ...specification, status: "READY", targets: [] },
+      planItems: [],
+      tasks: [],
+    }).join("\n");
+
+    expect(lines).toContain("Status: READY");
+    expect(lines).toContain("(not planned)");
+    expect(lines).not.toContain("Replayed");
   });
 });

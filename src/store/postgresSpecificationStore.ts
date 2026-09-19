@@ -185,6 +185,31 @@ export class PostgresSpecificationStore implements SpecificationStore {
     return rowToSpecification(row, await this.loadTargets(id));
   }
 
+  async updateSpecificationStatusIf(
+    id: string,
+    expected: SpecificationStatus,
+    status: SpecificationStatus,
+  ): Promise<Specification | undefined> {
+    const { rows } = await this.pool.query<SpecificationRow>(
+      `UPDATE specifications SET status = $1, updated_at = $2
+       WHERE id = $3 AND status = $4
+       RETURNING *`,
+      [status, new Date().toISOString(), id, expected],
+    );
+    const row = rows[0];
+    if (!row) {
+      // Either the row does not exist or it is no longer in `expected`.
+      const { rows: existing } = await this.pool.query("SELECT id FROM specifications WHERE id = $1", [
+        id,
+      ]);
+      if (existing.length === 0) {
+        throw new SpecificationNotFoundError(id);
+      }
+      return undefined;
+    }
+    return rowToSpecification(row, await this.loadTargets(id));
+  }
+
   private async replaceTargets(
     client: PoolClient,
     specificationId: string,

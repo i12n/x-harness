@@ -7,6 +7,7 @@ import { InMemoryExecutionStore } from "./inMemoryExecutionStore.js";
 import { InMemoryProblemStore } from "./inMemoryProblemStore.js";
 import { InMemoryRunStore } from "./inMemoryRunStore.js";
 import { InMemorySpecificationStore } from "./inMemorySpecificationStore.js";
+import { InMemorySpecificationPlanStore } from "./inMemorySpecificationPlanStore.js";
 import { InMemoryTaskStore } from "./inMemoryTaskStore.js";
 import { PostgresEventStore } from "./postgresEventStore.js";
 import { PostgresConversationStore } from "./postgresConversationStore.js";
@@ -15,6 +16,7 @@ import { PostgresRepositoryStore } from "./postgresRepositoryStore.js";
 import { PostgresProblemStore } from "./postgresProblemStore.js";
 import { PostgresRunStore } from "./postgresRunStore.js";
 import { PostgresSpecificationStore } from "./postgresSpecificationStore.js";
+import { PostgresSpecificationPlanStore } from "./postgresSpecificationPlanStore.js";
 import { PostgresTaskStore } from "./postgresTaskStore.js";
 import type { RepositoryStore } from "./repositoryStore.js";
 import type { RunStore } from "./runStore.js";
@@ -24,6 +26,7 @@ import type { ConversationStore } from "./conversationStore.js";
 import type { ExecutionStore } from "./executionStore.js";
 import type { ProblemStore } from "./problemStore.js";
 import type { SpecificationStore } from "./specificationStore.js";
+import type { SpecificationPlanStore } from "./specificationPlanStore.js";
 
 export type { RepositoryStore } from "./repositoryStore.js";
 export type { TaskStore } from "./taskStore.js";
@@ -33,6 +36,7 @@ export type { ConversationStore } from "./conversationStore.js";
 export type { ExecutionStore } from "./executionStore.js";
 export type { ProblemStore } from "./problemStore.js";
 export type { SpecificationStore } from "./specificationStore.js";
+export type { SpecificationPlanStore } from "./specificationPlanStore.js";
 export type { Repository } from "../domain/repository.js";
 export type { Task, TaskStatus } from "../domain/task.js";
 export type { Run, RunStatus } from "../domain/run.js";
@@ -42,6 +46,10 @@ export type {
   SpecificationStatus,
   SpecificationTarget,
 } from "../domain/specification.js";
+export type {
+  SpecificationPlanItem,
+  CreateSpecificationPlanItemInput,
+} from "../domain/specificationPlan.js";
 export type {
   Conversation,
   ConversationMessage,
@@ -63,6 +71,7 @@ export interface StoreHandle {
   events: EventStore;
   problems: ProblemStore;
   specifications: SpecificationStore;
+  specificationPlans: SpecificationPlanStore;
   executions: ExecutionStore;
   conversations: ConversationStore;
   close(): Promise<void>;
@@ -82,6 +91,7 @@ export async function openStores(): Promise<StoreHandle> {
       events: new InMemoryEventStore(),
       problems: new InMemoryProblemStore(),
       specifications: new InMemorySpecificationStore(),
+      specificationPlans: new InMemorySpecificationPlanStore(),
       executions: new InMemoryExecutionStore(),
       conversations: new InMemoryConversationStore(),
       close: async () => {},
@@ -99,6 +109,7 @@ export async function openStores(): Promise<StoreHandle> {
     events: new PostgresEventStore(pool),
     problems: new PostgresProblemStore(pool),
     specifications: new PostgresSpecificationStore(pool),
+    specificationPlans: new PostgresSpecificationPlanStore(pool),
     executions: new PostgresExecutionStore(pool),
     conversations: new PostgresConversationStore(pool),
     close: async () => {

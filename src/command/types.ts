@@ -11,6 +11,8 @@ export const COMMAND_TYPES = [
   "review.show",
   "review.approve",
   "review.request_changes",
+  "spec.show",
+  "spec.plan",
 ] as const;
 
 export type CommandType = (typeof COMMAND_TYPES)[number];

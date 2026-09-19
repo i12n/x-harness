@@ -29,7 +29,10 @@ import {
 import { PostgresProblemStore } from "../src/store/postgresProblemStore.js";
 import { PostgresConversationStore } from "../src/store/postgresConversationStore.js";
 import { PostgresSpecificationStore } from "../src/store/postgresSpecificationStore.js";
+import { PostgresSpecificationPlanStore } from "../src/store/postgresSpecificationPlanStore.js";
 import { SpecificationService } from "../src/specification/application/service.js";
+import { PlanningService } from "../src/specification/application/planning.js";
+import { DeterministicTaskPlanner } from "../src/specification/application/planner.js";
 import { buildExecutionProfile } from "../src/domain/executionProfile.js";
 import { RunNotCancellableError } from "../src/errors.js";
 import { Verifier } from "../src/verification/runner.js";
@@ -79,7 +82,7 @@ describePostgres("PostgreSQL integration", () => {
       cleanup();
     }
     await pool?.query(
-      "DELETE FROM conversation_messages; DELETE FROM conversations; DELETE FROM specification_targets; DELETE FROM specifications; DELETE FROM clarification_answers; DELETE FROM clarifications; DELETE FROM problem_analyses; DELETE FROM problems; DELETE FROM events; DELETE FROM executions; DELETE FROM workspaces; DELETE FROM task_targets; DELETE FROM runs; DELETE FROM tasks; DELETE FROM repositories;",
+      "DELETE FROM conversation_messages; DELETE FROM conversations; DELETE FROM specification_plans; DELETE FROM specification_targets; DELETE FROM specifications; DELETE FROM clarification_answers; DELETE FROM clarifications; DELETE FROM problem_analyses; DELETE FROM problems; DELETE FROM events; DELETE FROM executions; DELETE FROM workspaces; DELETE FROM task_targets; DELETE FROM runs; DELETE FROM tasks; DELETE FROM repositories;",
     );
   });
 
@@ -508,5 +511,100 @@ describePostgres("PostgreSQL integration", () => {
       (event) => event.type,
     );
     expect(types).toEqual(["specification.created", "specification.ready"]);
+  });
+
+  it("plans a READY specification into tasks once (TASK-1202)", async () => {
+    const repositories = new PostgresRepositoryStore(pool!);
+    const problems = new PostgresProblemStore(pool!);
+    const specifications = new PostgresSpecificationStore(pool!);
+    const plans = new PostgresSpecificationPlanStore(pool!);
+    const tasks = new PostgresTaskStore(pool!);
+    const events = new PostgresEventStore(pool!);
+    const specificationService = new SpecificationService({
+      specifications,
+      problems,
+      events,
+    });
+    const planning = new PlanningService({
+      specifications,
+      plans,
+      tasks,
+      planner: new DeterministicTaskPlanner(),
+      events,
+    });
+
+    for (const id of ["repo-a", "repo-b"]) {
+      await repositories.createRepository({
+        id,
+        name: id,
+        url: `git@github.com:example/${id}.git`,
+        localPath: `/tmp/repos/${id}`,
+      });
+    }
+    await problems.createProblem({
+      id: "prob-001",
+      title: "专辑页面",
+      statement: "用户希望有一个专辑页面。",
+      status: "CONFIRMED",
+    });
+    await problems.setProblemSpec("prob-001", {
+      problem: "专辑页面不存在",
+      expected: "可以浏览专辑曲目",
+    });
+
+    const specification = await specificationService.createFromProblem({
+      problemId: "prob-001",
+      requirements: ["列表页显示曲目", "详情页显示歌词"],
+      acceptance: ["可以打开专辑页"],
+      targets: [{ repositoryId: "repo-a" }, { repositoryId: "repo-b" }],
+    });
+    await specificationService.markReady(specification.id);
+
+    const first = await planning.plan(specification.id);
+    expect(first.replayed).toBe(false);
+    expect(first.specification.status).toBe("PLANNED");
+    expect(first.tasks.map((task) => task.id)).toEqual([
+      `task-${specification.id}-0`,
+      `task-${specification.id}-1`,
+    ]);
+    expect(first.tasks[0]?.status).toBe("INBOX");
+    expect(first.tasks[0]?.targets.map((target) => target.repositoryId)).toEqual([
+      "repo-a",
+      "repo-b",
+    ]);
+
+    const reloaded = await plans.listPlanItems(specification.id);
+    expect(reloaded.map((item) => item.taskId)).toEqual(
+      first.tasks.map((task) => task.id),
+    );
+    expect((await tasks.listTasks()).length).toBe(2);
+
+    // Second planning is a replay, not a second batch of tasks.
+    const second = await planning.plan(specification.id);
+    expect(second.replayed).toBe(true);
+    expect(second.tasks.map((task) => task.id)).toEqual(
+      first.tasks.map((task) => task.id),
+    );
+    expect((await tasks.listTasks()).length).toBe(2);
+
+    // The DB backstop: one plan item per (specification, position).
+    await expect(
+      plans.createPlanItem({
+        specificationId: specification.id,
+        position: 0,
+        title: "duplicate",
+      }),
+    ).rejects.toThrow(/already has a plan item at position 0/);
+
+    // Compare-and-set status guard (READY → PLANNED once).
+    await expect(
+      specifications.updateSpecificationStatusIf(specification.id, "READY", "PLANNED"),
+    ).resolves.toBeUndefined();
+    await expect(
+      specifications.updateSpecificationStatusIf(specification.id, "PLANNED", "READY"),
+    ).resolves.toMatchObject({ status: "READY" });
+
+    const planned = await events.listEvents({ type: "specification.planned" });
+    expect(planned).toHaveLength(1);
   });
 });

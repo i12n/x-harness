@@ -84,4 +84,16 @@ export class InMemorySpecificationStore implements SpecificationStore {
     this.specifications.set(id, updated);
     return updated;
   }
+
+  async updateSpecificationStatusIf(
+    id: string,
+    expected: SpecificationStatus,
+    status: SpecificationStatus,
+  ): Promise<Specification | undefined> {
+    const current = await this.findSpecification(id);
+    if (current.status !== expected) {
+      return undefined;
+    }
+    return this.updateSpecificationStatus(id, status);
+  }
 }

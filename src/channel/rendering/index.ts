@@ -20,3 +20,8 @@ export {
   PROBLEM_ANSWER_ACTION,
   type ProblemRenderOptions,
 } from "./problem.js";
+export {
+  renderSpecificationMessage,
+  type SpecificationPlanView,
+  type SpecificationRenderOptions,
+} from "./specification.js";

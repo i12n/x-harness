@@ -73,4 +73,12 @@ export const COMMAND_SCHEMAS: Record<CommandType, CommandSchema> = {
     },
     roles: REVIEWERS,
   },
+  "spec.show": {
+    fields: { specificationId: { type: "string", required: true } },
+    roles: ALL_ROLES,
+  },
+  "spec.plan": {
+    fields: { specificationId: { type: "string", required: true } },
+    roles: OPERATORS,
+  },
 };

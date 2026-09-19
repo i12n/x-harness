@@ -66,7 +66,10 @@ Implemented in TypeScript (Node >= 18, ESM). The full plan lives in
   [docs/conversational-interface.md](docs/conversational-interface.md)。
 - Phase 12 (Engineering Delivery Loop, in progress): Problem → Specification
   → Task → Dependency → Scheduler 的交付闭环。TASK-1201 Specification Model
-  已完成（领域模型 + 迁移 008 + store + application service）—— 见
+  （领域模型 + 迁移 008 + store + application service）与 TASK-1202
+  Specification → Task Planning（迁移 009 + `TaskPlanner` + `PlanningService`
+  → N Tasks；`spec.show` / `spec.plan` Command 与 `ai spec show|plan`；
+  幂等且不自动执行）已完成 —— 见
   [docs/engineering-delivery-loop.md](docs/engineering-delivery-loop.md)。
 
 ## Requirements
@@ -193,7 +196,7 @@ src/
   worker/       # run executor with leases and heartbeats
   workspace/    # git-worktree workspace isolation (one run = one worktree)
 config/         # config/config.yaml
-migrations/     # SQL schema (001 core ... 008 specifications)
+migrations/     # SQL schema (001 core ... 009 specification plans)
 scripts/        # db:migrate runner
 tests/          # vitest unit tests
 docs/           # v0.1 plan, v0.2 roadmap, phase 9 isolation/acceptance,
