@@ -83,7 +83,30 @@
 - 回归：单测 166 passed；Postgres 集成 4 passed；真实 codex E2E passed；
   CLI 真库冒烟（多 --repo + --base-ref + task show）；真机 Docker 验收
   12 passed / 1 skipped，无残留资源
-- 下一步：TASK-1012 Full E2E（Phase 10 Release Gate） →
+- TASK-1012 ✅：Phase 10 Release Gate（真机 <验收主机>）——
+  `tests/multiRepoDockerAcceptance.integration.test.ts` **10/10 passed**：
+  双仓库正常（2 mounts / 1 Agent / SUCCEEDED / 容器清理）、Target
+  verification failure（FAILED + 2/2 workspace 与 network/proxy 清理）、
+  Agent failure、Timeout（TIMED_OUT + 证据落盘 + 清理）、Cancel、
+  Worker crash（恢复使用**持久化 executions.mounts**，2/2 workspace 清理）、
+  Retry（run-002 全新目录/分支）、Cleanup failure（Run 状态不被覆盖，
+  removed/skipped 可追踪）、单仓库回归、资源残留 Gate（无 ai-harness
+  容器 / 无 ai-net-* / 无 ai-proxy-*）
+
+## Phase 10 — DONE（2026-09-19）
+
+```text
+✓ Multi-Repository 正常链路闭环
+✓ 所有异常路径闭环（失败/超时/取消/崩溃/清理失败）
+✓ Retry 不复用 Workspace
+✓ 单仓库完全回归
+✓ Docker 无残留 / Network 无残留 / Git Worktree 无残留
+✓ DB / Execution / 实际资源状态一致（恢复以 executions.mounts 为准）
+✓ CLI/API 与 Scheduler/Loop 使用同一 Application 语义
+```
+
+后续不再扩展 Multi-Repository；下一阶段为 Phase 11（Conversational
+Interface），从 TASK-1101 开始。
   TASK-1007 Context → TASK-1008 Target 级 Verification → TASK-1009 Worker →
   TASK-1010 Retry/Recovery → TASK-1011 CLI → TASK-1012 真机多挂载验收
 >

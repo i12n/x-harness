@@ -52,6 +52,11 @@ Implemented in TypeScript (Node >= 18, ESM). The full plan lives in
   [docs/remote-execution-isolation.md](docs/remote-execution-isolation.md)。
   真机验收 runbook：[docs/phase9-acceptance.md](docs/phase9-acceptance.md)
   （`npm run test:docker` / `npm run test:docker:network`）。
+- Phase 10 (Multi Repository Task): `Task.targets[]`（primary/supporting +
+  baseRef）、per-target Workspace、Execution 多挂载、多仓库 Context、
+  TargetVerifier、Worker/Run 聚合、异常恢复与 CLI/API —— 真机 Release Gate
+  10/10 通过，**DONE**。设计见
+  [docs/multi-repository-task.md](docs/multi-repository-task.md)。
 
 ## Requirements
 
