@@ -61,6 +61,7 @@ export class InMemoryExecutionStore implements ExecutionStore {
       startedAt: update.startedAt ?? current.startedAt,
       finishedAt: update.finishedAt ?? current.finishedAt,
       cleanedAt: update.cleanedAt ?? current.cleanedAt,
+      mounts: update.mounts ?? current.mounts,
     };
     this.executions.set(id, updated);
     return updated;

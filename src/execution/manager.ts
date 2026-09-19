@@ -7,6 +7,11 @@ import type { ExecutionProfile } from "../domain/executionProfile.js";
 import { HarnessError } from "../errors.js";
 import { killProcessGroup } from "../util/process.js";
 import { validateExecutionProfileContract } from "./contract.js";
+import {
+  normalizeExecutionMounts,
+  validateExecutionMounts,
+} from "./mounts.js";
+import type { ExecutionMount } from "./mounts.js";
 import type { EventStore } from "../store/eventStore.js";
 import type { ExecutionStore } from "../store/executionStore.js";
 import { makeId } from "../util/id.js";
@@ -21,8 +26,11 @@ const execFileAsync = promisify(execFile);
 
 export interface ExecutionRequest {
   runId: string;
-  workspacePath: string;
   profile: ExecutionProfile;
+  /** TASK-1006 multi-workspace mounts (legacy callers may use workspacePath). */
+  mounts?: ExecutionMount[];
+  workspacePath?: string;
+  primaryTargetId?: string;
 }
 
 export interface ExecutionEnvironment {
@@ -31,6 +39,8 @@ export interface ExecutionEnvironment {
   workspacePath: string;
   /** Path the agent/verifier should run in (host path or container path). */
   containerWorkspace: string;
+  mounts?: ExecutionMount[];
+  primaryTargetId?: string;
   profile: ExecutionProfile;
   driver: string;
   containerId?: string;
@@ -51,6 +61,9 @@ export interface ExecutionContext {
   workspacePath: string;
   /** Working directory for agent/verifier commands. */
   workdir: string;
+  /** targetId -> container workdir (Phase 10 multi-workspace). */
+  workdirs?: Record<string, string>;
+  primaryTargetId?: string;
   driver: string;
   containerId?: string;
   exec?: ExecutionExec;
@@ -65,6 +78,13 @@ export function toExecutionContext(
     executionId: environment.id,
     workspacePath: environment.workspacePath,
     workdir: environment.containerWorkspace || environment.workspacePath,
+    workdirs: Object.fromEntries(
+      (environment.mounts ?? []).map((mount) => [
+        mount.targetId,
+        mount.target || mount.source,
+      ]),
+    ),
+    primaryTargetId: environment.primaryTargetId,
     driver: environment.driver,
     containerId: environment.containerId,
     exec,
@@ -113,12 +133,20 @@ export class LocalExecutionDriver implements ExecutionDriver {
   readonly name = "local";
 
   async create(request: ExecutionRequest): Promise<ExecutionEnvironment> {
-    const workspacePath = resolve(request.workspacePath);
+    // Local driver runs on the host: the "container path" becomes the host
+    // workspace path so exec() works transparently.
+    const mounts = normalizeExecutionMounts(request).map((mount) => ({
+      ...mount,
+      target: resolve(mount.source),
+    }));
+    const primary = mounts.find((mount) => mount.primary) ?? mounts[0]!;
     return {
       id: `local-${request.runId}`,
       runId: request.runId,
-      workspacePath,
-      containerWorkspace: workspacePath,
+      workspacePath: resolve(primary.source),
+      containerWorkspace: primary.target,
+      mounts,
+      primaryTargetId: primary.targetId,
       profile: request.profile,
       driver: this.name,
     };
@@ -149,6 +177,8 @@ export interface DockerExecutionDriverOptions {
   dockerBinary?: string;
   secretStore?: SecretStore;
   proxyImage?: string;
+  /** Only workspace sources under these roots may be mounted (safety rule 4). */
+  workspaceRoots?: string[];
 }
 
 /** One Run = one container, mounted with only that Run's worktree. */
@@ -157,20 +187,26 @@ export class DockerExecutionDriver implements ExecutionDriver {
   private readonly dockerBinary: string;
   private readonly secretStore: SecretStore;
   private readonly proxyImage: string;
+  private readonly workspaceRoots: string[] | undefined;
 
   constructor(options: DockerExecutionDriverOptions = {}) {
     this.dockerBinary = options.dockerBinary ?? process.env.AI_DOCKER_BIN ?? "docker";
     this.secretStore = options.secretStore ?? new EnvSecretStore();
     this.proxyImage =
       options.proxyImage ?? process.env.AI_PROXY_IMAGE ?? "harness/execution-proxy:latest";
+    this.workspaceRoots = options.workspaceRoots;
   }
 
   async create(request: ExecutionRequest): Promise<ExecutionEnvironment> {
+    const mounts = normalizeExecutionMounts(request);
+    const primary = mounts.find((mount) => mount.primary) ?? mounts[0]!;
     return {
       id: containerNameFor(request.runId),
       runId: request.runId,
-      workspacePath: resolve(request.workspacePath),
-      containerWorkspace: request.profile.workspace,
+      workspacePath: resolve(primary.source),
+      containerWorkspace: primary.target,
+      mounts,
+      primaryTargetId: request.primaryTargetId ?? primary.targetId,
       profile: request.profile,
       driver: this.name,
     };
@@ -178,7 +214,14 @@ export class DockerExecutionDriver implements ExecutionDriver {
 
   async start(environment: ExecutionEnvironment): Promise<ExecutionEnvironment> {
     validateExecutionProfileContract(environment.profile);
-    await ensureWorkspaceOwnership(environment.workspacePath);
+    const mounts = environment.mounts ?? normalizeExecutionMounts(environment);
+    validateExecutionMounts(mounts, {
+      allowedSourceRoots: this.workspaceRoots,
+      primaryTargetId: environment.primaryTargetId,
+    });
+    for (const mount of mounts) {
+      await ensureWorkspaceOwnership(mount.source);
+    }
     const secrets = await this.secretStore.resolve(environment.profile.secrets);
     let networkName: string | undefined;
     let proxyUrl: string | undefined;
@@ -215,6 +258,7 @@ export class DockerExecutionDriver implements ExecutionDriver {
       secrets,
       networkName,
       proxyUrl,
+      mounts,
     });
     const { stdout } = await this.runDocker(args);
     return {
@@ -223,6 +267,8 @@ export class DockerExecutionDriver implements ExecutionDriver {
       startedAt: new Date().toISOString(),
       networkName,
       proxyContainerId,
+      mounts,
+      primaryTargetId: environment.primaryTargetId,
     };
   }
 
@@ -367,10 +413,14 @@ export class ExecutionManager {
   }
 
   async prepare(request: ExecutionRequest): Promise<ExecutionEnvironment> {
-    const record = await this.createRecord(request);
+    const normalized: ExecutionRequest = {
+      ...request,
+      mounts: normalizeExecutionMounts(request),
+    };
+    const record = await this.createRecord(normalized);
     let environment: ExecutionEnvironment;
     try {
-      environment = await this.driver.create(request);
+      environment = await this.driver.create(normalized);
     } catch (error) {
       await this.update(record, { status: "FAILED", error: messageOf(error) });
       await this.emit(record, "execution.failed", { phase: "create" });
@@ -491,14 +541,20 @@ export class ExecutionManager {
     if (!this.executions) {
       return undefined;
     }
+    const mounts = request.mounts ?? [];
+    const primary = mounts.find((mount) => mount.primary) ?? mounts[0];
+    if (!primary) {
+      throw new HarnessError("execution request has no mounts to record");
+    }
     return this.executions.createExecution({
       id: makeId("exec"),
       runId: request.runId,
       driver: this.driver.name,
-      workspacePath: request.workspacePath,
+      workspacePath: resolve(primary.source),
       workdir: request.profile.workspace,
       profileName: request.profile.name,
       status: "CREATING",
+      mounts: request.mounts,
     });
   }
 
@@ -551,11 +607,25 @@ export class ExecutionManager {
 }
 
 function environmentFromRecord(record: ExecutionRecord): ExecutionEnvironment {
+  const mounts =
+    record.mounts && record.mounts.length > 0
+      ? record.mounts
+      : [
+          {
+            targetId: "primary",
+            source: record.workspacePath,
+            target: record.workdir,
+            primary: true,
+          },
+        ];
+  const primary = mounts.find((mount) => mount.primary) ?? mounts[0]!;
   return {
     id: record.containerId ?? record.id,
     runId: record.runId,
     workspacePath: record.workspacePath,
     containerWorkspace: record.workdir,
+    mounts,
+    primaryTargetId: primary.targetId,
     profile: defaultExecutionProfile(),
     driver: record.driver,
     containerId: record.containerId,

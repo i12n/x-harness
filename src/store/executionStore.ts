@@ -3,6 +3,7 @@ import type {
   ExecutionRecord,
   ExecutionStatus,
 } from "../domain/execution.js";
+import type { ExecutionMount } from "../execution/mounts.js";
 
 export interface ExecutionListFilter {
   runId?: string;
@@ -16,6 +17,7 @@ export interface UpdateExecutionInput {
   startedAt?: string;
   finishedAt?: string;
   cleanedAt?: string;
+  mounts?: ExecutionMount[];
 }
 
 /** Persistence contract for execution lifecycle records. */

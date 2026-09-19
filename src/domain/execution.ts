@@ -1,4 +1,5 @@
 import { ValidationError } from "../errors.js";
+import type { ExecutionMount } from "../execution/mounts.js";
 
 /** Execution lifecycle (docs/remote-execution-isolation.md, TASK-901). */
 export const EXECUTION_STATUSES = [
@@ -32,6 +33,8 @@ export interface ExecutionRecord {
   finishedAt?: string;
   cleanedAt?: string;
   error?: unknown;
+  /** TASK-1006: workspaces mounted into the execution environment. */
+  mounts?: ExecutionMount[];
 }
 
 export interface CreateExecutionInput {
@@ -42,6 +45,7 @@ export interface CreateExecutionInput {
   workdir: string;
   profileName?: string;
   status?: ExecutionStatus;
+  mounts?: ExecutionMount[];
 }
 
 export function isExecutionStatus(value: unknown): value is ExecutionStatus {
@@ -62,6 +66,7 @@ export function buildExecutionRecord(input: CreateExecutionInput): ExecutionReco
     workspacePath: input.workspacePath,
     workdir: input.workdir,
     profileName: input.profileName,
+    mounts: input.mounts,
     createdAt: new Date().toISOString(),
   };
 }

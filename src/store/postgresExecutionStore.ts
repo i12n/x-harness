@@ -6,6 +6,7 @@ import type {
   ExecutionStatus,
 } from "../domain/execution.js";
 import { ExecutionNotFoundError } from "../errors.js";
+import type { ExecutionMount } from "../execution/mounts.js";
 import type {
   ExecutionListFilter,
   ExecutionStore,
@@ -26,6 +27,7 @@ interface ExecutionRow {
   finished_at: Date | string | null;
   cleaned_at: Date | string | null;
   error: unknown;
+  mounts: unknown;
 }
 
 export class PostgresExecutionStore implements ExecutionStore {
@@ -36,8 +38,8 @@ export class PostgresExecutionStore implements ExecutionStore {
     const { rows } = await this.pool.query<ExecutionRow>(
       `INSERT INTO executions
          (id, run_id, driver, status, container_id, workspace_path, workdir,
-          profile_name, created_at, started_at, finished_at, cleaned_at, error)
-       VALUES ($1,$2,$3,$4,NULL,$5,$6,$7,$8,NULL,NULL,NULL,NULL)
+          profile_name, created_at, started_at, finished_at, cleaned_at, error, mounts)
+       VALUES ($1,$2,$3,$4,NULL,$5,$6,$7,$8,NULL,NULL,NULL,NULL,$9)
        RETURNING *`,
       [
         execution.id,
@@ -48,6 +50,7 @@ export class PostgresExecutionStore implements ExecutionStore {
         execution.workdir,
         execution.profileName ?? null,
         execution.createdAt,
+        execution.mounts ? JSON.stringify(execution.mounts) : null,
       ],
     );
     return rowToExecution(requireRow(rows, "createExecution"));
@@ -109,6 +112,7 @@ export class PostgresExecutionStore implements ExecutionStore {
     if (update.startedAt !== undefined) push("started_at", update.startedAt);
     if (update.finishedAt !== undefined) push("finished_at", update.finishedAt);
     if (update.cleanedAt !== undefined) push("cleaned_at", update.cleanedAt);
+    if (update.mounts !== undefined) push("mounts", JSON.stringify(update.mounts));
     if (sets.length === 0) {
       return this.findExecution(id);
     }
@@ -140,7 +144,33 @@ function rowToExecution(row: ExecutionRow): ExecutionRecord {
     finishedAt: row.finished_at ? toIso(row.finished_at) : undefined,
     cleanedAt: row.cleaned_at ? toIso(row.cleaned_at) : undefined,
     error: parseJson(row.error),
+    mounts: parseMounts(row.mounts),
   };
+}
+
+function parseMounts(raw: unknown): ExecutionMount[] | undefined {
+  const parsed = parseJson(raw);
+  if (!Array.isArray(parsed)) {
+    return undefined;
+  }
+  const mounts: ExecutionMount[] = [];
+  for (const entry of parsed) {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+      continue;
+    }
+    const mount = entry as Record<string, unknown>;
+    if (typeof mount.targetId !== "string" || typeof mount.source !== "string" || typeof mount.target !== "string") {
+      continue;
+    }
+    mounts.push({
+      targetId: mount.targetId,
+      source: mount.source,
+      target: mount.target,
+      readOnly: mount.readOnly === true ? true : undefined,
+      primary: mount.primary === true ? true : undefined,
+    });
+  }
+  return mounts.length > 0 ? mounts : undefined;
 }
 
 function parseJson(raw: unknown): unknown {

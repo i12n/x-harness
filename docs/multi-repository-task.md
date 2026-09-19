@@ -21,7 +21,17 @@
   旧 `createWorkspace()` API 保留（单仓库路径零迁移）
 - 回归：单测 122 passed；Postgres 集成 4 passed（含多 target round-trip）；
   真实 codex E2E passed（单仓库零迁移）
-- 下一步：TASK-1006 Execution 多挂载 →
+- TASK-1006 ✅：Execution 多挂载 —— `ExecutionMount{targetId, source, target,
+  readOnly?, primary?}`；Run 层决定 primary→`/workspace`、supporting→
+  `/workspaces/<targetId>`，Docker 层只把 `mounts[]` 翻译成 `--mount`（无 role
+  业务逻辑）。校验规则：target 必须位于 `/workspace*`、source 必须绝对且在
+  允许的 workspace roots 内、container target 不重复、恰好一个 primary、
+  `primaryTargetId` 与 primary mount 一致。`ExecutionContext` 增加
+  `workdirs`/`primaryTargetId`，`workdir` 保持 = primary（legacy API 不变）；
+  mounts 持久化到 `executions.mounts` 供 recovery 使用
+- 回归：单测 137 passed；Postgres 集成 4 passed；真实 codex E2E passed；
+  **Phase 9 真机 Docker 验收重跑 12 passed / 1 skipped**（单挂载路径无回归）
+- 下一步：TASK-1007 Multi-Repository Context →
   TASK-1007 Context → TASK-1008 Target 级 Verification → TASK-1009 Worker →
   TASK-1010 Retry/Recovery → TASK-1011 CLI → TASK-1012 真机多挂载验收
 >

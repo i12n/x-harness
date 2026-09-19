@@ -1,5 +1,6 @@
 import { resolve } from "node:path";
 import type { ExecutionProfile } from "../domain/executionProfile.js";
+import type { ExecutionMount } from "./mounts.js";
 
 export interface DockerRunSpec {
   runId: string;
@@ -11,6 +12,8 @@ export interface DockerRunSpec {
   networkName?: string;
   /** Proxy URL injected as HTTP(S)_PROXY when egress goes through a proxy. */
   proxyUrl?: string;
+  /** TASK-1006 multi-workspace mounts; falls back to workspacePath. */
+  mounts?: ExecutionMount[];
 }
 
 export function containerNameFor(runId: string): string {
@@ -47,6 +50,18 @@ export function buildDockerExecArgs(spec: DockerExecSpec): string[] {
 export function buildDockerRunArgs(spec: DockerRunSpec): string[] {
   const { profile } = spec;
   const workspacePath = resolve(spec.workspacePath);
+  const mounts: ExecutionMount[] =
+    spec.mounts && spec.mounts.length > 0
+      ? spec.mounts
+      : [
+          {
+            targetId: "primary",
+            source: resolve(spec.workspacePath),
+            target: profile.workspace,
+            primary: true,
+          },
+        ];
+
   const args: string[] = [
     "run",
     "--detach",
@@ -76,10 +91,17 @@ export function buildDockerRunArgs(spec: DockerRunSpec): string[] {
     "/home/agent:rw,noexec,nosuid,size=256m,uid=1000,gid=1000,mode=0700",
     "--env",
     "HOME=/home/agent",
-    "--mount",
-    // --mount uses key=value only; bind mounts are read-write by default.
-    `type=bind,src=${workspacePath},dst=${profile.workspace}`,
   ];
+
+  for (const mount of mounts) {
+    // --mount uses key=value only; bind mounts are read-write by default.
+    args.push(
+      "--mount",
+      `type=bind,src=${resolve(mount.source)},dst=${mount.target}${
+        mount.readOnly ? ",readonly" : ""
+      }`,
+    );
+  }
 
   if (spec.networkName) {
     args.push("--network", spec.networkName);
