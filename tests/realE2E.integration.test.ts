@@ -3,12 +3,15 @@
 // 默认跳过（普通单测保持离线）；显式开启：
 //
 //   pg_ctl -D /tmp/ai-pg/data -o '-p 5432 -k /tmp/ai-pg' start
-//   DATABASE_URL=postgres://ai@localhost:5432/ai_harness npm run test:e2e:real
+//   AI_TEST_DB_URL_REAL=postgres://ai@localhost:5432/ai_harness_real npm run test:e2e:real
+//
+// TASK-1208 Step 1: this suite has its own database (tests/helpers/testDatabases.ts)
+// so it can run in parallel with tests/postgres.integration.test.ts.
 
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterAll, afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { Pool } from "pg";
 import { CodexEngine } from "../src/agent/codexEngine.js";
 import { cleanupWorkspacesCommand } from "../src/cli/commands/workspaceCommands.js";
@@ -31,12 +34,17 @@ import {
   createGitFixture,
   type GitFixture,
 } from "./helpers/gitFixture.js";
+import {
+  checkDatabaseReachable,
+  resolveTestDatabase,
+} from "./helpers/testDatabases.js";
 
-const dbUrl = process.env.DATABASE_URL;
-const enabled =
-  process.env.AI_TEST_POSTGRES === "1" &&
-  process.env.AI_TEST_CODEX === "1" &&
-  Boolean(dbUrl);
+const database = resolveTestDatabase({
+  suite: "real",
+  requiredEnv: ["AI_TEST_POSTGRES", "AI_TEST_CODEX"],
+});
+const dbUrl = database.url;
+const enabled = database.enabled;
 
 const describeReal = enabled ? describe : describe.skip;
 
@@ -46,6 +54,17 @@ describeReal("v0.1 seal: real Postgres + real Codex end to end", () => {
   // Codex requires cwd inside a trusted directory; the x-harness project is
   // trusted in ~/.codex/config.toml, so keep worktrees under the repo.
   const workspaceBase = join(process.cwd(), ".ai-workspaces-e2e");
+
+  beforeAll(async () => {
+    if (!enabled) {
+      return;
+    }
+    for (const warning of database.warnings) {
+      console.warn(`[realE2E] ${warning}`);
+    }
+    console.log(`[realE2E] database: ${database.databaseName ?? "?"}`);
+    await checkDatabaseReachable(pool!, "realE2E");
+  });
 
   afterEach(async () => {
     for (const cleanup of cleanups.splice(0)) {

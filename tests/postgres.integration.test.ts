@@ -2,13 +2,18 @@
 // stays offline; run explicitly against a migrated database:
 //
 //   npm run db:migrate
-//   AI_TEST_POSTGRES=1 DATABASE_URL=postgres://ai:ai@localhost:5432/ai_harness \
+//   AI_TEST_POSTGRES=1 AI_TEST_DB_URL_INTEGRATION=postgres://ai:ai@localhost:5432/ai_harness_it \
 //     npx vitest run tests/postgres.integration.test.ts
+//
+// TASK-1208 Step 1: this suite has its own database (see tests/helpers/testDatabases.ts)
+// so it can run in parallel with tests/realE2E.integration.test.ts. Sets
+// AI_TEST_REQUIRE_DB=1 in a release gate to make a missing database a failure
+// instead of a skip.
 
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterAll, afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { Pool } from "pg";
 import { CodexEngine } from "../src/agent/codexEngine.js";
 import type { AgentContext, AgentEngine, AgentResult } from "../src/agent/types.js";
@@ -49,9 +54,17 @@ import {
   createGitFixture,
   type GitFixture,
 } from "./helpers/gitFixture.js";
+import {
+  checkDatabaseReachable,
+  resolveTestDatabase,
+} from "./helpers/testDatabases.js";
 
-const dbUrl = process.env.DATABASE_URL;
-const enabled = process.env.AI_TEST_POSTGRES === "1" && Boolean(dbUrl);
+const database = resolveTestDatabase({
+  suite: "integration",
+  requiredEnv: ["AI_TEST_POSTGRES"],
+});
+const dbUrl = database.url;
+const enabled = database.enabled;
 
 const describePostgres = enabled ? describe : describe.skip;
 
@@ -82,6 +95,19 @@ class QueueEngine implements AgentEngine {
 describePostgres("PostgreSQL integration", () => {
   const pool = enabled ? new Pool({ connectionString: dbUrl }) : null;
   const cleanups: (() => void)[] = [];
+
+  beforeAll(async () => {
+    if (!enabled) {
+      return;
+    }
+    // TASK-1208: report which database this suite owns, and fail fast when it
+    // is unreachable (instead of a wall of connection errors).
+    for (const warning of database.warnings) {
+      console.warn(`[postgres.integration] ${warning}`);
+    }
+    console.log(`[postgres.integration] database: ${database.databaseName ?? "?"}`);
+    await checkDatabaseReachable(pool!, "postgres.integration");
+  });
 
   afterEach(async () => {
     for (const cleanup of cleanups.splice(0)) {
