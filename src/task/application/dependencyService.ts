@@ -41,6 +41,8 @@ export interface TaskDependencyView {
   dependents: TaskDependency[];
   /** TASK-1207: computed reachability facts (runnable/waiting/blocked). */
   impact: TaskDependencyImpact;
+  /** TASK-1207 Phase C: the blocking chain resolved to tasks (for rendering). */
+  blockingChain: Task[];
 }
 
 export interface TaskDependencyServiceDeps {
@@ -139,13 +141,30 @@ export class TaskDependencyService {
         }
       }
     }
+    const impact = await this.getImpact(taskId);
     return {
       task,
       dependencies,
       prerequisites,
       dependents: await this.deps.dependencies.listDependents(taskId),
-      impact: await this.getImpact(taskId),
+      impact,
+      blockingChain: await this.resolveChain(impact.blockingChain),
     };
+  }
+
+  /** Resolves a chain of ids to tasks, skipping the ones that no longer exist. */
+  private async resolveChain(chain: string[]): Promise<Task[]> {
+    const tasks: Task[] = [];
+    for (const id of chain) {
+      try {
+        tasks.push(await this.deps.tasks.findTask(id));
+      } catch (error) {
+        if (!(error instanceof TaskNotFoundError)) {
+          throw error;
+        }
+      }
+    }
+    return tasks;
   }
 
   /**

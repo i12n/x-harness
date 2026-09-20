@@ -1,4 +1,6 @@
 import type { Run } from "../../domain/run.js";
+import { extractFailureEvidence } from "../../domain/failureEvidence.js";
+import type { FailureEvidence } from "../../domain/failureEvidence.js";
 import type { Task } from "../../domain/task.js";
 import type { RunStore } from "../../store/runStore.js";
 import type { RepositoryStore } from "../../store/repositoryStore.js";
@@ -35,6 +37,10 @@ export interface TaskDescription {
   /** Prerequisites + runnable flag (TASK-1204 visibility). */
   dependency?: TaskDependencyView;
   runnable?: boolean;
+  /** TASK-1207 Phase C: why the latest run failed (evidence only). */
+  latestFailure?: FailureEvidence;
+  /** Which task the failure evidence belongs to (the blocker, when blocked). */
+  failureTaskId?: string;
 }
 
 /**
@@ -79,12 +85,30 @@ export class TaskRunService {
     const runnable = this.deps.dependencies
       ? await this.deps.dependencies.isRunnable(taskId)
       : undefined;
+    const latestRun = await this.latestRun(task.id);
+    // When the task itself never ran but is blocked, the useful evidence is
+    // the failing ancestor's — never inferred, just read from its Run.
+    let latestFailure = extractFailureEvidence(latestRun);
+    let failureTaskId = latestFailure ? task.id : undefined;
+    if (!latestFailure && dependency?.impact.dependencyBlocked) {
+      const blockingId = dependency.impact.blockingTaskIds[0];
+      if (blockingId) {
+        const blockingRuns = await this.deps.runs.listRuns({ taskId: blockingId });
+        const evidence = extractFailureEvidence(blockingRuns[blockingRuns.length - 1]);
+        if (evidence) {
+          latestFailure = evidence;
+          failureTaskId = blockingId;
+        }
+      }
+    }
     return {
       task,
-      latestRun: await this.latestRun(task.id),
+      latestRun,
       repositoryNames,
       dependency,
       runnable,
+      latestFailure,
+      failureTaskId,
     };
   }
 

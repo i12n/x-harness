@@ -611,4 +611,82 @@ describe("Task / Run operations (TASK-1108)", () => {
     });
     expect(await runs.listRuns({ taskId: "task-001" })).toHaveLength(1);
   });
+
+  it("task.show surfaces dependency-blocked facts and the latest failure (TASK-1207)", async () => {
+    const { dispatcher, tasks, runs, dependencyService } = await setup({
+      dependencies: true,
+    });
+    await tasks.createTask({
+      id: "task-blocker",
+      repositoryId: "repo-a",
+      title: "先完成迁移",
+      status: "BLOCKED",
+    });
+    await dependencyService.addDependency("task-001", "task-blocker");
+    await runs.createRun({
+      id: "run-blocker",
+      taskId: "task-blocker",
+      attempt: 1,
+      agent: "codex",
+      engine: "codex",
+    });
+    await runs.completeRun("run-blocker", {
+      status: "FAILED",
+      exitCode: 1,
+      error: {
+        failingTargets: [
+          {
+            targetId: "tgt-blocker",
+            repositoryId: "repo-a",
+            checks: [
+              {
+                command: "npm test",
+                status: "failed",
+                exitCode: 1,
+                output: "3 tests failed",
+              },
+            ],
+          },
+        ],
+      },
+    });
+
+    const result = await handleIntent(intentMessage(), context(["guest"]), {
+      engine: new ScriptedIntentEngine({
+        command: { type: "task.show", payload: { taskId: "task-001" } },
+      }),
+      dispatcher,
+    });
+
+    expect(result.status).toBe("succeeded");
+    const data = result.data as {
+      impact: { dependencyBlocked: boolean; blockingTaskIds: string[] };
+      latestFailure: { kind: string; command?: string; output?: string };
+      dependency: { blockingChain: { id: string }[] };
+      message: { blocks?: unknown[] };
+    };
+    expect(data.impact).toMatchObject({
+      dependencyBlocked: true,
+      blockingTaskIds: ["task-blocker"],
+    });
+    expect(data.latestFailure).toMatchObject({
+      kind: "verification",
+      command: "npm test",
+      output: "3 tests failed",
+    });
+    expect(data.dependency.blockingChain.map((task) => task.id)).toEqual([
+      "task-blocker",
+      "task-001",
+    ]);
+
+    const rendered = JSON.stringify(data.message.blocks);
+    expect(rendered).toContain("Runnable: no");
+    expect(rendered).toContain("Dependency blocked: yes");
+    expect(rendered).toContain("task-blocker — BLOCKED");
+    expect(rendered).toContain("Blocking chain");
+    expect(rendered).toContain("Latest failure");
+    expect(rendered).toContain("verification: npm test · exit 1");
+    // The task itself is untouched: dependency-blocked is a computed fact.
+    await expect(tasks.findTask("task-001")).resolves.toMatchObject({ status: "READY" });
+  });
 });

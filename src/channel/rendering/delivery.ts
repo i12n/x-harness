@@ -1,7 +1,9 @@
 import type { Delivery, Release } from "../../domain/delivery.js";
+import type { DeliveryBlockingFact } from "../../domain/delivery.js";
 import type { Task } from "../../domain/task.js";
 import type { OutgoingMessage } from "../message.js";
 import { markdownBlock, sectionBlock } from "./common.js";
+import { formatFailure } from "./task.js";
 
 export interface DeliveryRenderOptions {
   conversationId?: string;
@@ -11,6 +13,8 @@ export interface DeliveryRenderFacts {
   delivery: Delivery;
   tasks: Task[];
   blocking?: Task[];
+  /** TASK-1207: structured blocking reasons (chain + failure evidence). */
+  blockingFacts?: DeliveryBlockingFact[];
   release?: Release;
 }
 
@@ -36,20 +40,63 @@ export function renderDeliveryMessage(
   const tasks =
     facts.tasks.length > 0
       ? facts.tasks
-          .map(
-            (task) =>
-              `- ${taskMark(task)} ${task.id} ${task.title} · ${task.status}` +
-              (isOptional(task) ? " · optional" : " · required"),
-          )
+          .map((task) => {
+            const fact = facts.blockingFacts?.find((entry) => entry.taskId === task.id);
+            const state =
+              fact?.state === "dependency-blocked"
+                ? "dependency-blocked" +
+                  (fact.blockingTaskIds.length > 0
+                    ? ` (blocked by ${fact.blockingTaskIds.join(", ")})`
+                    : "")
+                : task.status;
+            return (
+              `- ${fact ? "✗" : taskMark(task)} ${task.id} ${task.title} · ${state}` +
+              (isOptional(task) ? " · optional" : " · required")
+            );
+          })
           .join("\n")
       : "(no tasks)";
   blocks.push(markdownBlock(`**Tasks**\n${tasks}`));
 
-  if (facts.blocking && facts.blocking.length > 0) {
+  const chains = collectChains(facts);
+  if (chains.length > 0) {
+    blocks.push(
+      markdownBlock(
+        `**Blocking chain**\n${chains
+          .map((chain) =>
+            chain
+              .map(
+                (entry) =>
+                  `${entry.taskId}${entry.title ? ` ${entry.title}` : ""}` +
+                  (entry.status ? ` (${entry.status})` : "") +
+                  (entry.note ? ` — ${entry.note}` : ""),
+              )
+              .join("\n  ↓\n"),
+          )
+          .join("\n\n")}`,
+      ),
+    );
+  } else if (facts.blocking && facts.blocking.length > 0) {
     blocks.push(
       markdownBlock(
         `**Blocking**\n${facts.blocking
           .map((task) => `- ${task.id} is ${task.status}`)
+          .join("\n")}`,
+      ),
+    );
+  }
+
+  const failures = (facts.blockingFacts ?? [])
+    .map((fact) => ({ fact, evidence: fact.evidence }))
+    .filter((entry) => entry.evidence !== undefined);
+  if (failures.length > 0) {
+    blocks.push(
+      markdownBlock(
+        `**Failure**\n${failures
+          .map(
+            (entry) =>
+              `${failureOwner(entry.fact)}: ${formatFailure(entry.evidence!)}`,
+          )
           .join("\n")}`,
       ),
     );
@@ -87,4 +134,32 @@ function isOptional(task: Task): boolean {
   const primary =
     task.targets.find((target) => target.role === "primary") ?? task.targets[0];
   return primary ? !primary.required : false;
+}
+
+/** The failure belongs to the task that actually ran (the chain's blocker). */
+function failureOwner(fact: DeliveryBlockingFact): string {
+  if (fact.state === "dependency-blocked" && fact.blockingTaskIds.length > 0) {
+    return fact.blockingTaskIds[0]!;
+  }
+  return fact.taskId;
+}
+
+/** Distinct chains from the blocking facts (deterministic, plan order). */
+function collectChains(
+  facts: DeliveryRenderFacts,
+): DeliveryBlockingFact["chain"][] {
+  const chains: DeliveryBlockingFact["chain"][] = [];
+  const seen = new Set<string>();
+  for (const fact of facts.blockingFacts ?? []) {
+    if (fact.state !== "dependency-blocked" || fact.chain.length < 2) {
+      continue;
+    }
+    const key = fact.chain.map((entry) => entry.taskId).join(">");
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    chains.push(fact.chain);
+  }
+  return chains;
 }

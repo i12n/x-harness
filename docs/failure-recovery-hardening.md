@@ -1,6 +1,6 @@
 # TASK-1207 — Failure / Retry / Recovery Hardening（设计稿）
 
-> 状态：**Phase A、Phase B 已实现**（2026-09-20）；Phase C/D 尚未开始。
+> 状态：**Phase A、Phase B、Phase C 已实现**（2026-09-20）；Phase D 尚未开始。
 > 前置：TASK-1201–1206 已完成并冻结（Specification / Planning / DAG /
 > DAG-aware Scheduler / Delivery + Release / Delivery Reconciliation）。
 
@@ -436,6 +436,55 @@ interface LoopError {
 
 `Scheduler` / `Worker` / `Task 状态` / Delivery 聚合规则在 Phase B 中未改动
 （`git diff --stat` 可核对）。
+
+### Phase C 实现记录（已完成）
+
+没有新增 Command，只扩展现有事实视图：
+
+```text
+src/channel/rendering/task.ts       # TaskDependencyFacts + waiting /
+                                    # dependencyBlocked / blockingTaskIds /
+                                    # blockingChain + Latest failure
+                                    # （formatFailure 供 task/delivery 共用）
+src/channel/rendering/delivery.ts   # blockingFacts → dependency-blocked 标记、
+                                    # Blocking chain、Failure（含 evidence 归属）
+src/task/application/dependencyService.ts  # describe().blockingChain（解析成 Task）
+src/run/application/taskRunService.ts      # latestFailure + failureTaskId
+src/command/handlers/taskRun.ts      # task.show 暴露 impact / latestFailure
+src/command/handlers/delivery.ts     # delivery.show|release 传入 blockingFacts
+src/delivery/application/reconciler.ts # blocked 通知携带 chain + evidence
+src/cli/output.ts / deliveryOutput.ts  # 同样的字段落到 CLI 文本
+src/cli/index.ts                     # ai task show 用 impact；ai delivery 服务
+                                     # 注入 impacts + runs（Phase C 发现的接线缺口）
+```
+
+一个实现细节（避免误导）：`Latest failure` / `Failure` 的 evidence 属于**真正跑过的
+那个 Task**。当当前 Task 自己没跑过（dependency-blocked）时，证据来自阻塞链上的
+失败祖先，并标注来源 taskId；渲染器与 CLI 都不做任何推断。
+
+实测（CLI + 本地 Postgres）：
+
+```text
+ai task show task-phaseC-b
+  Runnable: no / Dependency blocked: yes
+  Dependencies: ⏳ task-phaseC-x X 迁移 (BLOCKED)
+  Blocked by:   task-phaseC-x — BLOCKED
+  Blocking chain: task-phaseC-x X 迁移 (BLOCKED) ↓ task-phaseC-b B 页面 (READY)
+  Latest failure: task-phaseC-x: verification: npm test (exit 1) / 3 tests failed
+
+ai delivery show dlv-phaseC
+  Status: BLOCKED
+  Tasks: ✗ task-phaseC-x BLOCKED (optional) / ✗ task-phaseC-b dependency-blocked (blocked by task-phaseC-x)
+  Blocking chain: … ↓ …
+  Failure: task-phaseC-x: verification: npm test (exit 1)
+
+ai loop --once（Delivery 复位为 IN_PROGRESS 后）
+  → deliveryTransitions=1 deliveryNotifications=1
+  → 通知卡片同样包含 Tasks / Blocking chain / Failure / (not released)
+```
+
+Phase C 未改动：Scheduler、Worker、Loop、Delivery 聚合规则、Task 状态机；未新增
+Command / 状态 / 自动 Retry / 自动 Release / 真实消息平台发送。
 
 ## 11. 明确不做
 

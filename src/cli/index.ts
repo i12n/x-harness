@@ -74,6 +74,7 @@ import { DeliveryService } from "../delivery/application/service.js";
 import { DeliveryReconciler } from "../delivery/application/reconciler.js";
 import { formatDeliveryView, type DeliveryViewLike } from "./deliveryOutput.js";
 import { TaskDependencyService } from "../task/application/dependencyService.js";
+import { extractFailureEvidence } from "../domain/failureEvidence.js";
 import { makeId } from "../util/id.js";
 
 const cliChannel = new CliChannel();
@@ -300,18 +301,54 @@ task
         dependencies: handle.taskDependencies,
         events: handle.events,
       });
+      // TASK-1207 Phase C: impact facts, blocking chain and latest failure.
       const dependency = await dependencyService.describe(id);
+      const taskRuns = await runs.listRuns({ taskId: id });
+      let latestFailure = extractFailureEvidence(taskRuns[taskRuns.length - 1]);
+      let failureSource: string | undefined = latestFailure ? id : undefined;
+      if (!latestFailure && dependency.impact.dependencyBlocked) {
+        const blockingId = dependency.impact.blockingTaskIds[0];
+        if (blockingId) {
+          const blockingRuns = await runs.listRuns({ taskId: blockingId });
+          const evidence = extractFailureEvidence(blockingRuns[blockingRuns.length - 1]);
+          if (evidence) {
+            latestFailure = evidence;
+            failureSource = blockingId;
+          }
+        }
+      }
       for (const line of formatTaskDependencies({
-        runnable: await dependencyService.isRunnable(id),
+        runnable: dependency.impact.runnable,
+        waiting: dependency.impact.waiting,
+        dependencyBlocked: dependency.impact.dependencyBlocked,
         prerequisites: dependency.prerequisites.map((task) => ({
           id: task.id,
           title: task.title,
           status: task.status,
         })),
+        blockingTaskIds: dependency.impact.blockingTaskIds,
+        blockingChain: dependency.blockingChain.map((task) => ({
+          id: task.id,
+          title: task.title,
+          status: task.status,
+        })),
+        latestFailure: latestFailure
+          ? {
+              label:
+                latestFailure.kind === "verification"
+                  ? `verification: ${latestFailure.command ?? "(unknown)"}` +
+                    (latestFailure.exitCode !== undefined && latestFailure.exitCode !== null
+                      ? ` (exit ${latestFailure.exitCode})`
+                      : "")
+                  : `${latestFailure.kind === "unknown" ? "failure" : latestFailure.kind}: ` +
+                    `${latestFailure.message ?? "(no details)"}`,
+              output: latestFailure.output,
+              source: failureSource === id ? undefined : failureSource,
+            }
+          : undefined,
       })) {
         console.log(line);
       }
-      const taskRuns = await runs.listRuns({ taskId: id });
       const latest = taskRuns[taskRuns.length - 1];
       if (latest) {
         console.log("");
@@ -904,6 +941,14 @@ function deliveryService(handle: StoreHandle): DeliveryService {
     plans: handle.specificationPlans,
     tasks: handle.tasks,
     events: handle.events,
+    // TASK-1207 Phase C: D1 (dependency-blocked) + blocking facts need the
+    // dependency graph and the latest failed runs.
+    impacts: new TaskDependencyService({
+      tasks: handle.tasks,
+      dependencies: handle.taskDependencies,
+      events: handle.events,
+    }),
+    runs: handle.runs,
   });
 }
 

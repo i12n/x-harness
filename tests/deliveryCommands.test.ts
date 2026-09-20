@@ -9,10 +9,14 @@ import {
 } from "../src/command/index.js";
 import { createDeliveryCommandHandlers } from "../src/command/handlers/delivery.js";
 import { DeliveryService } from "../src/delivery/application/service.js";
+import { TaskDependencyService } from "../src/task/application/dependencyService.js";
 import { InMemoryDeliveryStore } from "../src/store/inMemoryDeliveryStore.js";
 import { InMemoryEventStore } from "../src/store/inMemoryEventStore.js";
+import { InMemoryRunStore } from "../src/store/inMemoryRunStore.js";
 import { InMemorySpecificationPlanStore } from "../src/store/inMemorySpecificationPlanStore.js";
+import { InMemoryTaskDependencyStore } from "../src/store/inMemoryTaskDependencyStore.js";
 import { InMemoryTaskStore } from "../src/store/inMemoryTaskStore.js";
+import type { TaskStatus } from "../src/domain/task.js";
 
 interface Harness {
   deliveries: InMemoryDeliveryStore;
@@ -156,5 +160,113 @@ describe("delivery.show / delivery.release commands (TASK-1205)", () => {
     expect(otherMessage.status).toBe("succeeded");
     expect((otherMessage.data as { created: boolean }).created).toBe(false);
     await expect(h.deliveries.listReleases("dlv-001")).resolves.toHaveLength(1);
+  });
+
+  it("shows the blocking chain and failure evidence for a blocked delivery (TASK-1207)", async () => {
+    const deliveries = new InMemoryDeliveryStore();
+    const tasks = new InMemoryTaskStore();
+    const plans = new InMemorySpecificationPlanStore();
+    const events = new InMemoryEventStore();
+    const runs = new InMemoryRunStore();
+    const dependencyStore = new InMemoryTaskDependencyStore();
+    const dependencyService = new TaskDependencyService({
+      tasks,
+      dependencies: dependencyStore,
+      events,
+    });
+    const service = new DeliveryService({
+      deliveries,
+      plans,
+      tasks,
+      events,
+      impacts: dependencyService,
+      runs,
+    });
+    const dispatcher = new CommandDispatcher({
+      handlers: createDeliveryCommandHandlers({ deliveries: service }),
+      idempotency: new InMemoryIdempotencyStore(),
+    });
+
+    await deliveries.createDelivery({ id: "dlv-001", specificationId: "spec-001" });
+    const seed: [string, string, boolean, TaskStatus][] = [
+      ["task-a", "A 接口", true, "DONE"],
+      ["task-x", "X 迁移", false, "BLOCKED"],
+      ["task-b", "B 页面", true, "READY"],
+    ];
+    for (const [position, [id, title, required, status]] of seed.entries()) {
+      await tasks.createTask({
+        id,
+        title,
+        status,
+        targets: [
+          { repositoryId: "repo-a", role: "primary", position: 0, required },
+        ],
+      });
+      await plans.createPlanItem({
+        id: `plan-spec-001-${position}`,
+        specificationId: "spec-001",
+        position,
+        title,
+        taskId: id,
+      });
+    }
+    await dependencyService.addDependency("task-b", "task-x");
+    await runs.createRun({
+      id: "run-x",
+      taskId: "task-x",
+      attempt: 1,
+      agent: "codex",
+      engine: "codex",
+    });
+    await runs.completeRun("run-x", {
+      status: "FAILED",
+      exitCode: 1,
+      error: {
+        failingTargets: [
+          {
+            targetId: "tgt-x",
+            repositoryId: "repo-a",
+            checks: [
+              { command: "npm test", status: "failed", exitCode: 1, output: "3 tests failed" },
+            ],
+          },
+        ],
+      },
+    });
+
+    const result = await handleIntent(
+      {
+        channel: "cli",
+        conversationId: "conv-001",
+        messageId: "msg-blocked",
+        senderId: "cli-user",
+        text: "delivery",
+      },
+      { channel: "cli", userId: "cli-user", roles: ["guest"] },
+      {
+        engine: new ScriptedIntentEngine({
+          command: { type: "delivery.show", payload: { deliveryId: "dlv-001" } },
+        }),
+        dispatcher,
+      },
+    );
+
+    expect(result.status).toBe("succeeded");
+    const data = result.data as {
+      delivery: { status: string };
+      blockingFacts: { taskId: string; state: string }[];
+      message: { blocks?: unknown[] };
+    };
+    expect(data.delivery.status).toBe("BLOCKED");
+    expect(data.blockingFacts).toMatchObject([
+      { taskId: "task-b", state: "dependency-blocked" },
+    ]);
+    const rendered = JSON.stringify(data.message.blocks);
+    expect(rendered).toContain("dependency-blocked (blocked by task-x)");
+    expect(rendered).toContain("Blocking chain");
+    expect(rendered).toContain("task-x X 迁移 (BLOCKED)");
+    expect(rendered).toContain("Failure");
+    expect(rendered).toContain("task-x: verification: npm test · exit 1");
+    expect(rendered).toContain("3 tests failed");
   });
 });

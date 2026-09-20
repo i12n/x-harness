@@ -10,9 +10,12 @@ import {
   NOTIFICATION_CAPACITY,
   NOTIFICATION_MAX_PER_PASS,
 } from "../src/delivery/application/reconciler.js";
+import { TaskDependencyService } from "../src/task/application/dependencyService.js";
 import { InMemoryDeliveryStore } from "../src/store/inMemoryDeliveryStore.js";
 import { InMemoryEventStore } from "../src/store/inMemoryEventStore.js";
+import { InMemoryRunStore } from "../src/store/inMemoryRunStore.js";
 import { InMemorySpecificationPlanStore } from "../src/store/inMemorySpecificationPlanStore.js";
+import { InMemoryTaskDependencyStore } from "../src/store/inMemoryTaskDependencyStore.js";
 import { InMemoryTaskStore } from "../src/store/inMemoryTaskStore.js";
 
 interface Harness {
@@ -216,6 +219,90 @@ describe("DeliveryReconciler (TASK-1206)", () => {
       pendingNotifications: 0,
     });
     expect(new NoopDeliveryNotifier()).toBeInstanceOf(NoopDeliveryNotifier);
+  });
+
+  it("carries the blocking chain and failure evidence in the notification (TASK-1207)", async () => {
+    const deliveries = new InMemoryDeliveryStore();
+    const tasks = new InMemoryTaskStore();
+    const plans = new InMemorySpecificationPlanStore();
+    const events = new InMemoryEventStore();
+    const runs = new InMemoryRunStore();
+    const dependencyService = new TaskDependencyService({
+      tasks,
+      dependencies: new InMemoryTaskDependencyStore(),
+      events,
+    });
+    const service = new DeliveryService({
+      deliveries,
+      plans,
+      tasks,
+      events,
+      impacts: dependencyService,
+      runs,
+    });
+    const notifier = new RecordingDeliveryNotifier();
+    const reconciler = new DeliveryReconciler({ deliveries: service, notifier });
+
+    await deliveries.createDelivery({ id: "dlv-001", specificationId: "spec-001" });
+    await tasks.createTask({
+      id: "task-b",
+      title: "B 页面",
+      status: "READY",
+      targets: [{ repositoryId: "repo-a", role: "primary", position: 0, required: true }],
+    });
+    await tasks.createTask({
+      id: "task-x",
+      title: "X 迁移",
+      status: "BLOCKED",
+      targets: [{ repositoryId: "repo-a", role: "primary", position: 0, required: false }],
+    });
+    await plans.createPlanItem({
+      id: "plan-spec-001-0",
+      specificationId: "spec-001",
+      position: 0,
+      title: "B 页面",
+      taskId: "task-b",
+    });
+    await plans.createPlanItem({
+      id: "plan-spec-001-1",
+      specificationId: "spec-001",
+      position: 1,
+      title: "X 迁移",
+      taskId: "task-x",
+    });
+    await dependencyService.addDependency("task-b", "task-x");
+    await runs.createRun({
+      id: "run-x",
+      taskId: "task-x",
+      attempt: 1,
+      agent: "codex",
+      engine: "codex",
+    });
+    await runs.completeRun("run-x", {
+      status: "FAILED",
+      exitCode: 1,
+      error: {
+        failingTargets: [
+          {
+            targetId: "tgt-x",
+            repositoryId: "repo-a",
+            checks: [
+              { command: "npm test", status: "failed", exitCode: 1, output: "3 tests failed" },
+            ],
+          },
+        ],
+      },
+    });
+
+    const report = await reconciler.reconcileAll();
+
+    expect(report.transitions).toMatchObject([{ status: "BLOCKED" }]);
+    expect(notifier.notifications).toHaveLength(1);
+    const rendered = JSON.stringify(notifier.notifications[0]!.message.blocks);
+    expect(rendered).toContain("dependency-blocked (blocked by task-x)");
+    expect(rendered).toContain("Blocking chain");
+    expect(rendered).toContain("task-x X 迁移 (BLOCKED)");
+    expect(rendered).toContain("verification: npm test · exit 1");
   });
 });
 

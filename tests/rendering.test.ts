@@ -350,4 +350,84 @@ describe("Business rendering (TASK-1105)", () => {
     expect(rendered).toContain("rel-001 · RELEASED");
     expect(rendered).toContain("by cli:reviewer-1");
   });
+
+  it("renders task dependency-blocked facts with chain and latest failure (TASK-1207)", () => {
+    const rendered = textOf(
+      renderTaskMessage(task({ id: "task-b", title: "B 页面", status: "READY" }), {
+        dependency: {
+          runnable: false,
+          waiting: false,
+          dependencyBlocked: true,
+          prerequisites: [{ id: "task-x", title: "X 迁移", status: "BLOCKED" }],
+          blockingTaskIds: ["task-x"],
+          blockingChain: [
+            { taskId: "task-x", title: "X 迁移", status: "BLOCKED" },
+            { taskId: "task-b", title: "B 页面", status: "READY" },
+          ],
+        },
+        latestFailure: {
+          kind: "verification",
+          command: "npm test",
+          exitCode: 1,
+          output: "3 tests failed",
+        },
+      }).blocks,
+    );
+
+    expect(rendered).toContain("Status: READY");
+    expect(rendered).toContain("Runnable: no");
+    expect(rendered).toContain("Dependency blocked: yes");
+    expect(rendered).toContain("Blocked by");
+    expect(rendered).toContain("task-x — BLOCKED");
+    expect(rendered).toContain("Blocking chain");
+    expect(rendered).toContain("task-x X 迁移");
+    expect(rendered).toContain("task-b B 页面");
+    expect(rendered).toContain("Latest failure");
+    expect(rendered).toContain("verification: npm test · exit 1");
+    expect(rendered).toContain("3 tests failed");
+  });
+
+  it("renders delivery blocking chain and failure evidence (TASK-1207)", () => {
+    const rendered = textOf(
+      renderDeliveryMessage({
+        delivery: buildDelivery({
+          id: "dlv-003",
+          specificationId: "spec-003",
+          status: "BLOCKED",
+        }),
+        tasks: [
+          task({ id: "task-a", title: "A 接口", status: "DONE" }),
+          task({ id: "task-b", title: "B 页面", status: "READY" }),
+        ],
+        blockingFacts: [
+          {
+            taskId: "task-b",
+            taskTitle: "B 页面",
+            state: "dependency-blocked",
+            blockingTaskIds: ["task-x"],
+            chain: [
+              { taskId: "task-x", title: "X 迁移", status: "BLOCKED" },
+              { taskId: "task-b", title: "B 页面", status: "READY", note: "blocked by task-x" },
+            ],
+            evidence: {
+              kind: "verification",
+              command: "npm test",
+              exitCode: 1,
+              output: "3 tests failed",
+            },
+          },
+        ],
+      }).blocks,
+    );
+
+    expect(rendered).toContain("Status: BLOCKED");
+    expect(rendered).toContain("✓ task-a A 接口 · DONE · required");
+    expect(rendered).toContain("✗ task-b B 页面 · dependency-blocked (blocked by task-x)");
+    expect(rendered).toContain("Blocking chain");
+    expect(rendered).toContain("task-x X 迁移 (BLOCKED)");
+    expect(rendered).toContain("blocked by task-x");
+    expect(rendered).toContain("Failure");
+    expect(rendered).toContain("task-x: verification: npm test · exit 1");
+    expect(rendered).toContain("3 tests failed");
+  });
 });

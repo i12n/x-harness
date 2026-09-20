@@ -42,21 +42,62 @@ interface RunTargetResult {
 export interface TaskDependencySummary {
   runnable: boolean;
   prerequisites: { id: string; title?: string; status: string }[];
+  /** TASK-1207: computed reachability facts. */
+  waiting?: boolean;
+  dependencyBlocked?: boolean;
+  blockingTaskIds?: string[];
+  blockingChain?: { id: string; title?: string; status?: string; note?: string }[];
+  latestFailure?: { label: string; output?: string; source?: string };
 }
 
 export function formatTaskDependencies(
   dependency: TaskDependencySummary,
 ): string[] {
   const lines = [`Runnable: ${dependency.runnable ? "yes" : "no"}`];
-  if (dependency.prerequisites.length === 0) {
-    return lines;
+  if (dependency.dependencyBlocked) {
+    lines.push("Dependency blocked: yes");
   }
-  lines.push("Dependencies:");
-  for (const prerequisite of dependency.prerequisites) {
-    const mark = prerequisite.status === "DONE" ? "✓" : "⏳";
+  if (dependency.prerequisites.length > 0) {
+    lines.push("Dependencies:");
+    for (const prerequisite of dependency.prerequisites) {
+      const mark = prerequisite.status === "DONE" ? "✓" : "⏳";
+      lines.push(
+        `  ${mark} ${prerequisite.id}${prerequisite.title ? ` ${prerequisite.title}` : ""} (${prerequisite.status})`,
+      );
+    }
+  }
+  if (dependency.blockingTaskIds && dependency.blockingTaskIds.length > 0) {
+    lines.push("Blocked by:");
+    for (const id of dependency.blockingTaskIds) {
+      const entry = dependency.blockingChain?.find((item) => item.id === id);
+      lines.push(`  ${id}${entry?.status ? ` — ${entry.status}` : ""}`);
+    }
+  }
+  if (dependency.blockingChain && dependency.blockingChain.length > 1) {
+    lines.push("Blocking chain:");
+    dependency.blockingChain.forEach((entry, index) => {
+      if (index > 0) {
+        lines.push("    ↓");
+      }
+      lines.push(
+        `  ${entry.id}${entry.title ? ` ${entry.title}` : ""}` +
+          (entry.status ? ` (${entry.status})` : "") +
+          (entry.note ? ` — ${entry.note}` : ""),
+      );
+    });
+  }
+  if (dependency.latestFailure) {
+    lines.push("Latest failure:");
     lines.push(
-      `  ${mark} ${prerequisite.id}${prerequisite.title ? ` ${prerequisite.title}` : ""} (${prerequisite.status})`,
+      `  ${dependency.latestFailure.source ? `${dependency.latestFailure.source}: ` : ""}` +
+        dependency.latestFailure.label,
     );
+    if (dependency.latestFailure.output) {
+      lines.push(`  ${dependency.latestFailure.output.split("\n")[0]}`);
+    }
+  }
+  if (lines.length === 1 && dependency.prerequisites.length === 0) {
+    return lines;
   }
   return lines;
 }

@@ -29,6 +29,7 @@ import { InMemoryEventStore } from "../../../src/store/inMemoryEventStore.js";
 import { InMemoryProblemStore } from "../../../src/store/inMemoryProblemStore.js";
 import { InMemorySpecificationPlanStore } from "../../../src/store/inMemorySpecificationPlanStore.js";
 import { InMemorySpecificationStore } from "../../../src/store/inMemorySpecificationStore.js";
+import { InMemoryRunStore } from "../../../src/store/inMemoryRunStore.js";
 import { InMemoryTaskDependencyStore } from "../../../src/store/inMemoryTaskDependencyStore.js";
 import { InMemoryTaskStore } from "../../../src/store/inMemoryTaskStore.js";
 
@@ -59,6 +60,9 @@ export async function createPhase12Harness() {
   const tasks = new InMemoryTaskStore();
   const dependencies = new InMemoryTaskDependencyStore();
   const deliveries = new InMemoryDeliveryStore();
+  // No execution in this harness, but the delivery view reads failed runs for
+  // evidence, so the store exists (empty) for callers that seed runs.
+  const runs = new InMemoryRunStore();
   const events = new InMemoryEventStore();
   const conversationStore = new InMemoryConversationStore();
 
@@ -73,6 +77,21 @@ export async function createPhase12Harness() {
     problems,
     events,
   });
+  const dependencyService = new TaskDependencyService({
+    tasks,
+    runs,
+    dependencies,
+    events,
+  });
+  // TASK-1207 Phase C: the delivery view carries dependency impact + evidence.
+  const deliveryService = new DeliveryService({
+    deliveries,
+    plans,
+    tasks,
+    events,
+    impacts: dependencyService,
+    runs,
+  });
   const planning = new PlanningService({
     specifications,
     plans,
@@ -80,13 +99,7 @@ export async function createPhase12Harness() {
     planner: new DeterministicTaskPlanner(),
     events,
     // TASK-1205: planning a Specification creates its Delivery.
-    deliveries: new DeliveryService({ deliveries, plans, tasks, events }),
-  });
-  const deliveryService = new DeliveryService({ deliveries, plans, tasks, events });
-  const dependencyService = new TaskDependencyService({
-    tasks,
-    dependencies,
-    events,
+    deliveries: deliveryService,
   });
   const conversations = new ConversationService(conversationStore);
 

@@ -137,6 +137,7 @@ export class DeliveryReconciler {
         delivery: transition.delivery,
         tasks: view.tasks,
         blocking: view.blocking,
+        blockingFacts: view.blockingFacts,
         release: view.release,
       }),
     };

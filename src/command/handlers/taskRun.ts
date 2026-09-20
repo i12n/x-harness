@@ -23,12 +23,16 @@ export function createTaskRunCommandHandlers(
   return {
     "task.show": async (payload) => {
       const described = await deps.taskRun.describeTask(String(payload.taskId));
+      const impact = described.dependency?.impact;
       return {
         task: described.task,
         latestRun: described.latestRun ?? null,
         repositoryNames: described.repositoryNames,
         dependency: described.dependency ?? null,
+        impact: impact ?? null,
         runnable: described.runnable ?? null,
+        latestFailure: described.latestFailure ?? null,
+        latestFailureTaskId: described.failureTaskId ?? null,
         message: renderTaskMessage(described.task, {
           repositoryNames: described.repositoryNames,
           dependency:
@@ -36,10 +40,22 @@ export function createTaskRunCommandHandlers(
               ? undefined
               : {
                   runnable: described.runnable,
+                  waiting: impact?.waiting,
+                  dependencyBlocked: impact?.dependencyBlocked,
                   prerequisites: (described.dependency?.prerequisites ?? []).map(
                     (task) => ({ id: task.id, title: task.title, status: task.status }),
                   ),
+                  blockingTaskIds: impact?.blockingTaskIds,
+                  blockingChain: (described.dependency?.blockingChain ?? []).map(
+                    (task) => ({
+                      taskId: task.id,
+                      title: task.title,
+                      status: task.status,
+                    }),
+                  ),
                 },
+          latestFailure: described.latestFailure,
+          latestFailureTaskId: described.failureTaskId,
         }),
       };
     },

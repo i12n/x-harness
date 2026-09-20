@@ -35,6 +35,7 @@ export function createDeliveryCommandHandlers(
             delivery: view.delivery,
             tasks: view.tasks,
             blocking: view.blocking,
+            blockingFacts: view.blockingFacts,
             release: view.release,
           }),
         };
@@ -60,6 +61,7 @@ export function createDeliveryCommandHandlers(
             delivery: outcome.delivery,
             tasks: view.tasks,
             blocking: view.blocking,
+            blockingFacts: view.blockingFacts,
             release: outcome.release,
           }),
         };
