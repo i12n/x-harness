@@ -82,6 +82,9 @@ Implemented in TypeScript (Node >= 18, ESM). The full plan lives in
   跨 Task 可见性、retry/workspace/并发回归 —— 仍由人工 Release 收口）
   已完成 —— 见
   [docs/engineering-delivery-loop.md](docs/engineering-delivery-loop.md)。
+  Phase 12 的 Release Gate（TASK-1208）设计已定稿，见
+  [docs/phase12-acceptance.md](docs/phase12-acceptance.md)
+  （Acceptance Matrix / 6 Gates / 测试隔离 / 资源核对 / FROZEN 条件）。
 
 ## Requirements
 

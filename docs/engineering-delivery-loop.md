@@ -26,8 +26,8 @@ TASK-1203  Task Dependency / DAG                    ✅ 完成
 TASK-1204  Dependency-aware Scheduler               ✅ 完成
 TASK-1205  Delivery / Release Model                 ✅ 完成
 TASK-1206  Delivery Loop                            ✅ 完成
-TASK-1207  Failure / Retry / Recovery Hardening     ← 当前
-TASK-1208  Phase 12 Generic E2E Acceptance
+TASK-1207  Failure / Retry / Recovery Hardening     ✅ 完成
+TASK-1208  Phase 12 Generic E2E Acceptance          ← 当前（设计定稿，待实现）
 ```
 
 ## TASK-1201 Specification Model（设计）
@@ -125,7 +125,8 @@ TASK-1205  Delivery / Release Model            ✅ 实现完成（迁移 012 + C
 TASK-1206  Delivery Loop                       ✅ 实现完成（Loop 接入 + Notifier + E2E）
 TASK-1207  Failure / Retry / Recovery Hardening  ✅ 实现完成（Phase A–D，见
                                                  failure-recovery-hardening.md）
-TASK-1208  Phase 12 Generic E2E Acceptance      ← 下一步
+TASK-1208  Phase 12 Generic E2E Acceptance      设计定稿，实现待开始
+                                                （docs/phase12-acceptance.md）
 ```
 
 ## TASK-1202 Specification → Task Planning（已完成）
