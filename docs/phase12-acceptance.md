@@ -1,198 +1,2037 @@
-# Phase 12 Acceptance（TASK-1208 Release Gate 设计稿）
+# Phase 12 Acceptance：TASK-1208 Generic E2E Acceptance / Release Gate（正式设计稿）
 
-> 状态：**设计阶段**（2026-09-20），尚未实现。
-> 前置：TASK-1201–1207 已完成并通过逐任务评审。
-> 本任务的职责不是新增功能，而是回答一个问题：
+> 状态：**设计定稿**（2026-09-20）。已拍板的 6 项决策全部合入本稿，可直接进入实现阶段。
+> 前置：TASK-1201–TASK-1207 已完成并通过逐任务评审。
+> 实现顺序：测试隔离基建 → Gate Runner → `acceptance.test.ts` → fixture 多 check →
+> Resource Gate → 连续三次 Gate → FROZEN。
 
-> **1201–1207 组成的 Engineering Delivery Loop，能否作为以后每次改代码都重复运行的
-> 通用验收基线？**
+## 1. Task Definition
 
-## 0. 原则
+### 目标
 
-```text
-Existing capability  →  Generic acceptance  →  Regression baseline  →  Release Gate
+TASK-1208 是 **Phase 12 的最终验收任务**。
 
-❌ 不新增生产能力（无新 Command / 状态 / 领域对象 / Scheduler 或 Worker 改动）
-❌ 不绑定任何具体业务项目（继续用 tests/fixtures/sample-project/）
-✅ 一条命令可重复运行全部 gate
-✅ gate 不允许"跳过即通过"
-✅ 代码状态 = 数据库状态 = 真实资源状态
-```
+它不增加新的生产能力，而是将 TASK-1201～TASK-1207 已经实现的能力组合成一套：
 
-## 1. Acceptance Matrix（先定死，再实现）
+* Generic E2E Acceptance
+* PostgreSQL Integration Gate
+* Real Codex E2E Gate
+* Docker / Resource Acceptance
+* Regression Gate
+* Release Gate
+* Phase 12 Freeze Criteria
 
-“来源”列区分 1208 复用既有覆盖 还是 1208 新增覆盖。
+最终形成一个可以重复执行、结果可审计、不会因为测试环境隐式 Skip 而误判通过的验收体系。
 
-| ID | 场景 | 预期事实 | 来源 |
-| --- | --- | --- | --- |
-| A1 | Problem → Confirmation | 输入→分析→clarification→answer→`CONFIRMED`；重复消息只一个 Problem | 复用 `tests/e2e/phase11/problem-confirmation.test.ts` |
-| A2 | Specification | `DRAFT→READY`；READY 需 acceptance + target；DRAFT-only 编辑 | 复用 `tests/specification.test.ts` |
-| A3 | Planning | READY→N Tasks（INBOX）→`PLANNED`；重复 plan 不产生第二批；Delivery 自动建立 | 复用 `tests/e2e/phase12/specification-planning.test.ts` |
-| A4 | Dependency DAG | 自依赖/重复边/环被拒；可跨 Specification；只有 `DONE` 满足依赖 | 复用 `tests/taskDependency*.test.ts` |
-| A5 | Scheduling | 只调度 READY + runnable + 未被占用；阻塞不占并发额度；并发 scheduler 只 1 个 Run | 复用 `tests/scheduler.test.ts` + `tests/postgres.integration.test.ts` |
-| A6 | Run / Workspace | 每个 attempt / 每个 target 新 Workspace；失败 attempt 清理；成功保留（Review 需要） | 复用 `tests/workerRetry.test.ts` |
-| A7 | Verification | 逐 target 通过/失败 + evidence 落盘（command/exit/output） | 复用 `tests/workerMultiTarget.test.ts`、`tests/failureEvidence.test.ts` |
-| A8 | Review / Approval | `REVIEW→DONE`（approve）/ `REVIEW→READY`（request changes）+ 审计 | 复用 `tests/e2e/phase11/review.test.ts`、`tests/e2e/phase12/delivery-loop.test.ts` |
-| A9 | Delivery aggregation | 只算 required；PLANNED / IN_PROGRESS / READY_FOR_RELEASE / BLOCKED；每次读取重算 | 复用 `tests/delivery.test.ts` |
-| A10 | Failure / Retry / Recovery | attempts 用尽→Task `BLOCKED`；下游 `dependency-blocked`；人工 reset→新 Run/新 Workspace；LOST/TIMEOUT/CANCEL 清理 | 复用 `tests/e2e/phase12/failure-recovery.test.ts`、`tests/workerRetry.test.ts` |
-| A11 | Delivery recovery + Notification | `BLOCKED→IN_PROGRESS→READY_FOR_RELEASE`；通知只在 READY_FOR_RELEASE/BLOCKED；通知失败不回滚状态 | 复用 `tests/e2e/phase12/failure-recovery.test.ts`、`tests/deliveryReconciliation.test.ts` |
-| A12 | Human Release boundary | 未 release 前 `releases = 0` 且状态停在 `READY_FOR_RELEASE`；release 幂等；`RELEASED` 不被覆盖 | 复用 `tests/delivery.test.ts`、`tests/e2e/phase12/delivery-release.test.ts` |
-| A13 | Resource consistency | `executions` 终态 = `CLEANED`；无容器/网络/worktree 残留；无孤立 Workspace | **部分新增**（见 §4） |
-| A14 | 单仓库回归 | Phase 1–10 路径行为不变（`--repo` 单值、旧 Verification 语义） | 复用 `tests/realE2E.integration.test.ts`、`tests/cliOutput.test.ts` |
-| A15 | 全链路一次跑完 | 一条命令覆盖 A1–A12 的关键事实，最终停在人类 Release 边界 | **新增**（见 §2） |
-
-## 2. 新增产物
+核心关系：
 
 ```text
-tests/e2e/phase12/acceptance.test.ts   # A15：一次运行走完整链路（内存/进程内、确定性）
-scripts/verify-phase12.mjs             # gate runner：一条命令 + 隔离 DB + 汇总表
-tests/helpers/testDatabases.ts         # 每套 DB 测试各自的 URL 解析 + 重复 DB 守卫
-docs/phase12-acceptance.md             # 本文件（含最终结果记录）
-package.json                           # 新增 npm run test:gate:phase12
+TASK-1201 ~ TASK-1207
+        ↓
+Existing Capabilities
+        ↓
+TASK-1208
+        ↓
+Generic Acceptance
+        ↓
+Release Gate
+        ↓
+PASS
+        ↓
+PHASE 12 FROZEN
 ```
 
-A15 的验收路径（与 1201–1207 一致，仍在人类边界收口）：
+## 2. Non-Goals
+
+TASK-1208 不新增以下生产能力：
+
+* 新 Task 状态
+* 新 Run 状态
+* 新 Scheduler 策略
+* 新 Retry 策略
+* 新 Recovery 机制
+* 新 Dependency 模型
+* 新 Delivery 状态
+* 新 Notification 模型
+* `task.ready` Command
+* GitHub / GitLab Integration
+* Pull Request
+* Merge
+* Push
+* Deploy
+* CI/CD
+* Auto Release
+* Rollback
+* Web Console
+* 新 Channel
+* 新 Agent
+
+特别是：
 
 ```text
-Problem → Confirmation → Specification(READY) → Planning(N Tasks, PLANNED)
-  → Task DAG（B 依赖 A）→ Scheduler（先 A）
-  → Run / Workspace → Verification（先失败）
-  → Task BLOCKED → Delivery BLOCKED + blocked 通知
-  → 人工 reset → 新 Run / 新 Workspace → Verification PASS
-  → Review → approve → DONE → B runnable → DONE
-  → Delivery READY_FOR_RELEASE + 通知
-  → assertions: releases = 0；Delivery.status = READY_FOR_RELEASE
+TASK-1208 = Acceptance / Infrastructure / Regression
+
+TASK-1208 != Feature Development
 ```
 
-它与既有 5 个 phase12 文件的区别：那些文件各自聚焦一个关注点；A15 是
-“读这一个文件就能看到完整交付链”的验收入口，断言矩阵 A1–A12 的关键事实。
+## 3. Existing Test Structure
 
-## 3. 测试隔离（把已知的基建缺陷一并解决）
+不得建立第二套平行 Phase 12 E2E。
 
-现状：`tests/postgres.integration.test.ts` 与 `tests/realE2E.integration.test.ts`
-都读 `DATABASE_URL` 并在 `afterEach` 清表 → 同时运行会互相清表（各自单独跑都通过）。
-“全部 gate 同时跑”因此目前不是可靠的 Release Gate。
-
-### 决策 D1（建议采纳）：每个 DB 测试用自己的数据库
+当前已有 Phase 12 E2E 必须继续复用：
 
 ```text
-tests/helpers/testDatabases.ts
-  integrationDbUrl()  ← AI_TEST_DB_URL_INTEGRATION  ?? DATABASE_URL   （key: "integration"）
-  realE2eDbUrl()      ← AI_TEST_DB_URL_REAL         ?? DATABASE_URL   （key: "real")
-  assertDistinctDatabases()：两者相同则 console.warn（提示手动运行不支持并发）
+tests/e2e/phase12/
+├── specification-planning.test.ts
+├── task-dependency.test.ts
+├── scheduler-dependency.test.ts
+├── delivery-release.test.ts
+├── delivery-loop.test.ts
+└── failure-recovery.test.ts
 ```
 
-- 不设新变量时行为与今天**完全一致**（单套手动运行不受影响）。
-- gate runner 负责创建并迁移两个库，再分别注入上面两个变量：
+实际文件名以仓库当前版本为准。
+
+TASK-1208 只新增：
 
 ```text
-base URL：AI_TEST_DB_BASE ?? DATABASE_URL
-派生库名：<base-db>_it   /   <base-db>_real
-步骤：CREATE DATABASE（不存在时）→ 应用 migrations/*.sql → 注入环境变量
+tests/e2e/phase12/acceptance.test.ts
 ```
 
-被否决的替代方案（记录理由，避免反复讨论）：
+该文件不是重复实现所有测试，而是作为：
+
+> Phase 12 全链路 Acceptance Entry Point
+
+用于验证关键阶段能够串成完整交付链路。
+
+因此：
 
 ```text
-schema-per-suite：需要给所有 SQL 加 search_path 或 schema 前缀，改动面大且易漏
-串行执行（vitest sequence）：只解决"本机同时跑"，换机器/换 CI 仍会踩，且 gate 变慢
+existing tests
+    ↓
+detailed regression
+
+acceptance.test.ts
+    ↓
+cross-phase acceptance
 ```
 
-### 决策 D2（建议采纳）：gate 不允许“跳过即通过”
+两者职责不同。
+
+## 4. Documentation Structure
+
+只保留：
 
 ```text
-AI_TEST_REQUIRE_DB=1 时，DB 测试在缺少开关/连不上库时 **直接失败**（不再 skip）
-gate runner 始终设置该变量，并在运行前 preflight 检查：
-  - DATABASE_URL 可达
-  - 目标库存在且已迁移
-  - real codex gate：AI_TEST_CODEX=1 且 codex 可执行
-任一 preflight 失败 → gate FAIL（而不是静默 skip）
+docs/phase12-acceptance.md
 ```
 
-## 4. 真机资源核对（A13）
-
-与 Phase 9/10 相同的判定口径：**数据库状态 = 真实资源状态**。
+不新增：
 
 ```text
-检查项（gate 结束前 + 结束后各一次，对比基线）
-1. docker ps -a --filter label=ai-harness.run-id        → 空
-2. docker network ls | grep '^ai-net-'                  → 空（per-run 网络）
-3. 每个 fixture 仓库 git worktree list                  → 只有主 worktree
-4. workspace 根目录下无 run 残留目录
-5. Postgres：终态 Run 对应的 executions 全部 CLEANED；无 active 状态但没有 lease 的 Run
-6. Postgres：workspaces 行与磁盘目录一致（要么目录在、要么已清理并留下证据）
-7. 宿主基线对比：docker ps/images/networks 数量在 gate 前后一致（允许镜像已存在）
+docs/acceptance/
+docs/acceptance/phase12-release-gate.md
 ```
 
-运行位置：
+`docs/phase12-acceptance.md` 是 Phase 12 唯一 Acceptance / Release Gate 文档。
+
+其中合并：
+
+* Acceptance Matrix
+* Gate Definition
+* PASS / FAIL / SKIPPED Policy
+* PostgreSQL Isolation
+* Real Codex
+* Docker Resource Checks
+* Test Commands
+* Result Format
+* FROZEN Criteria
+
+## 5. Generic Test Fixture
+
+Phase 12 Generic Acceptance 使用：
 
 ```text
-本机（macOS + 本地 Postgres）        → gate 1–6（typecheck / unit / PG / real codex）
-Linux + Docker 主机（<验收主机>）→ Docker gate + A13 资源核对
-                                        （沿用 docs/phase9-acceptance.md 的部署方式）
+tests/fixtures/sample-project/
 ```
 
-若本次没有 Docker 主机可用：gate 报告中 Docker gate 记为
-`SKIPPED (no docker host)`，并且 **Phase 12 不允许因此宣布 FROZEN** ——
-与 TASK-1012 的做法一致，真机资源核对必须至少跑过一次并留档。
+该 Fixture 必须保持：
 
-## 5. Gate 清单与命令
+* 业务无关
+* 无外部服务依赖
+* 无 API Key
+* 无 npm 第三方依赖
+* 可以离线执行
+* 可以重复初始化
+* 可以作为 Agent 修改代码的 Workspace
+
+## 6. Verification Fixture
+
+当前 Fixture 只有：
+
+```json
+{
+  "scripts": {
+    "verify": "node test/verify.js"
+  }
+}
+```
+
+TASK-1208 增加零依赖 verification checks，用于验证：
+
+> 一个 Run 可以正确聚合多个 verification check 的结果和 Evidence。
+
+建议最终结构：
+
+```text
+tests/fixtures/sample-project/
+├── package.json
+├── src/
+│   └── index.js
+├── test/
+│   └── verify.js
+├── scripts/
+│   ├── lint.js
+│   └── build.js
+├── AGENTS.md
+└── README.md
+```
+
+例如：
+
+```json
+{
+  "scripts": {
+    "lint": "node scripts/lint.js",
+    "verify": "node test/verify.js",
+    "build": "node scripts/build.js"
+  }
+}
+```
+
+全部使用 Node 内置能力。
+
+不得引入 ESLint、TypeScript、Jest 等额外 npm dependency。
+
+目标不是模拟真实 lint 工具，而是验证：
+
+```text
+check 1 PASS
+check 2 PASS
+check 3 PASS
+       ↓
+Verification PASS
+       ↓
+Evidence
+```
+
+以及：
+
+```text
+check 1 PASS
+check 2 FAIL
+check 3 PASS
+       ↓
+Verification FAIL
+       ↓
+Failure Evidence
+```
+
+## 7. Real Codex Fixture
+
+Real Codex E2E **不修改现有 fixture**。
+
+继续使用：
+
+```text
+tests/realE2E.integration.test.ts
+```
+
+当前 synthetic git repository + `checks.sh` fixture。
+
+它本身已经是：
+
+```text
+business-agnostic synthetic repository
+```
+
+不为了统一 Fixture 而重写已有 Real E2E。
+
+因此 Phase 12 有两个合法的测试 Fixture：
+
+```text
+sample-project
+    ↓
+Generic Phase 12 Acceptance
+
+synthetic git repo + checks.sh
+    ↓
+Real Codex E2E
+```
+
+二者职责不同。
+
+## 8. Acceptance Main Flow
+
+`acceptance.test.ts` 必须覆盖一条完整成功链路：
+
+```text
+Problem
+  ↓
+Confirmation
+  ↓
+Specification
+  ↓
+Planning
+  ↓
+Tasks
+  ↓
+Dependency DAG
+  ↓
+READY
+  ↓
+Scheduler
+  ↓
+Run
+  ↓
+Workspace
+  ↓
+Agent
+  ↓
+Verification
+  ↓
+REVIEW
+  ↓
+Human Approval
+  ↓
+DONE
+  ↓
+Delivery
+  ↓
+READY_FOR_RELEASE
+  ↓
+Human Release
+  ↓
+RELEASED
+```
+
+其中：
+
+```text
+Human Approval
+Human Release
+```
+
+必须保持人工边界。
+
+不得由 Loop 自动完成。
+
+## 9. Problem / Confirmation Acceptance
+
+验证 Problem：
+
+```text
+Problem.create
+      ↓
+Problem
+      ↓
+Conversation association
+```
+
+覆盖：
+
+* Problem 创建成功
+* Conversation 正确关联
+* Duplicate command 不创建第二个 Problem
+* Problem 状态正确
+
+然后构造需要用户输入的场景：
+
+```text
+Problem
+  ↓
+ANALYZING
+  ↓
+NEEDS_INPUT
+  ↓
+Clarification
+```
+
+回答后：
+
+```text
+ANSWERED
+  ↓
+ANALYZING
+  ↓
+CONFIRMED
+```
+
+必须验证：
+
+* Required clarification 阻止确认
+* 正确回答后重新分析
+* 跨 Problem 回答被拒绝
+* 重复回答幂等
+* Free-text answer 正常持久化
+
+## 10. Specification Acceptance
+
+从：
+
+```text
+Problem = CONFIRMED
+```
+
+创建：
+
+```text
+Specification = DRAFT
+```
+
+然后：
+
+```text
+markReady
+    ↓
+READY
+```
+
+验证：
+
+* summary
+* requirements
+* constraints
+* targets
+* primary target
+* acceptance
+
+非法场景：
+
+```text
+Problem != CONFIRMED
+```
+
+必须：
+
+```text
+rejected(problem_not_confirmed)
+```
+
+Specification 不完整：
+
+```text
+markReady
+    ↓
+rejected(specification_incomplete)
+```
+
+## 11. Planning Acceptance
+
+执行：
+
+```text
+Specification READY
+       ↓
+spec.plan
+       ↓
+Specification PLANNED
+       ↓
+Task 1
+Task 2
+...
+```
+
+验证：
+
+* 一 Specification 可以产生多个 Task
+* Task 正确继承 Specification 信息
+* Task 初始状态 `INBOX`
+* Plan item 正确持久化
+* Delivery 自动创建
+* 重复 planning 幂等
+* 不重复创建 Task
+* deterministic IDs 生效
+
+必须保持：
+
+```text
+1 Specification → N Tasks
+```
+
+## 12. Operator Boundary
+
+当前系统没有：
+
+```text
+task.ready
+```
+
+Command。
+
+因此 Planning 后：
+
+```text
+Task
+INBOX
+```
+
+需要进入：
+
+```text
+READY
+```
+
+的现有 E2E 测试允许通过 Store / 测试辅助入口直接修改状态。
+
+该操作必须明确标记：
+
+```text
+operator boundary
+```
+
+而不是伪装成正式产品 Command。
+
+同样，Failure / Recovery E2E 中：
+
+```text
+BLOCKED → READY
+```
+
+的人工 reset 也属于：
+
+```text
+operator boundary
+```
+
+原因：
+
+> 系统当前尚无 `task.ready` Command。
+
+TASK-1208 不新增该 Command。
+
+## 13. Dependency DAG Acceptance
+
+至少构造：
+
+```text
+Task A ─────┐
+            ├──→ Task C
+Task B ─────┘
+```
+
+验证：
+
+```text
+A DONE
+B DONE
+    ↓
+C runnable
+```
+
+以及：
+
+```text
+A DONE
+B FAILED
+    ↓
+C dependencyBlocked
+```
+
+还需要覆盖：
+
+```text
+A → B → C
+```
+
+验证：
+
+```text
+blockingTaskIds
+blockingChain
+```
+
+例如：
+
+```text
+blockingTaskIds = [A]
+blockingChain   = [A, B, C]
+```
+
+同时验证：
+
+* self dependency rejected
+* direct cycle rejected
+* transitive cycle rejected
+* duplicate edge idempotent
+* dependency 不修改 Task state
+* dependency 不创建 Run
+
+## 14. Scheduler Acceptance
+
+验证：
+
+```text
+READY + Runnable
+       ↓
+Run QUEUED
+```
+
+以及：
+
+```text
+READY + dependencyBlocked
+       ↓
+No Run
+```
+
+并覆盖：
+
+* maxConcurrency
+* active Run protection
+* concurrent scheduler
+* DB unique active Run constraint
+
+最终保证：
+
+```text
+same Task
+   ↓
+at most one active Run
+```
+
+Scheduler 不直接：
+
+* 查询 `task_dependencies`
+* 做 DFS
+* 创建 dependency edge
+* 修改 Task status
+
+Scheduler 只消费：
+
+```text
+RunnableTaskQuery
+```
+
+## 15. Run / Workspace Acceptance
+
+每一个 Run 使用独立 Workspace。
+
+验证：
+
+```text
+Run A → workspace-A
+Run B → workspace-B
+```
+
+必须：
+
+```text
+workspace-A != workspace-B
+```
+
+Multi-target：
+
+```text
+Primary
+  → /workspace
+
+Supporting
+  → /workspaces/<targetId>
+```
+
+验证：
+
+* Primary 正确
+* Supporting 正确
+* Workdir 正确
+* Retry 使用新 Workspace
+* 不发生 Workspace contamination
+
+## 16. Verification / Evidence Acceptance
+
+使用多 verification checks：
+
+```text
+lint
+test
+build
+```
+
+验证：
+
+```text
+check A PASS
+check B PASS
+check C PASS
+       ↓
+Verification PASS
+```
+
+以及：
+
+```text
+check A PASS
+check B FAIL
+check C PASS
+       ↓
+Verification FAIL
+```
+
+Evidence 必须包含现有系统能够提供的事实：
+
+* check name
+* status
+* exit code
+* output
+* failing check
+* target
+* Run
+
+不得通过 LLM 推测 Failure。
+
+## 17. Review / Approval Acceptance
+
+成功 Run：
+
+```text
+Verification PASS
+       ↓
+Task REVIEW
+```
+
+验证：
+
+```text
+review.show
+```
+
+然后：
+
+```text
+review.approve
+       ↓
+Task DONE
+```
+
+另一条：
+
+```text
+review.request_changes
+       ↓
+Task READY
+```
+
+必须确认：
+
+* reviewer 被记录
+* timestamp 被记录
+* event 被记录
+* request changes 不直接创建 Run
+* 下一次 Run 由 Loop / Scheduler 产生
+
+## 18. Delivery Acceptance
+
+Delivery 聚合 required Tasks。
+
+成功：
+
+```text
+A DONE
+B DONE
+C DONE
+   ↓
+READY_FOR_RELEASE
+```
+
+失败：
+
+```text
+A DONE
+B FAILED
+   ↓
+BLOCKED
+```
+
+Dependency blocked：
+
+```text
+B READY
+B dependencyBlocked
+   ↓
+Delivery BLOCKED
+```
+
+必须验证：
+
+* 只聚合 required Tasks
+* required Task 未完成不能 Release
+* Delivery status 根据当前 Task facts 重新计算
+* RELEASED 不被后续 reconciliation 覆盖
+
+## 19. Failure / Retry Acceptance
+
+构造：
+
+```text
+Run #1
+   ↓
+Verification FAIL
+   ↓
+Task READY
+   ↓
+Run #2
+```
+
+验证：
+
+```text
+workspace-1 != workspace-2
+```
+
+失败 Workspace：
+
+```text
+Run #1
+   ↓
+cleanup
+```
+
+Retry：
+
+```text
+Run #2
+   ↓
+fresh Workspace
+```
+
+至少覆盖：
+
+* FAILED retry
+* TIMEOUT retry
+* LOST recovery
+* CANCELLED recovery
+* retry concurrency
+* active Run duplicate protection
+
+## 20. Cancellation Semantics
+
+必须按照当前实现验收，而不是引入新的“恢复”语义。
+
+### QUEUED
+
+```text
+QUEUED
+  ↓
+cancel
+  ↓
+CANCELLED
+  ↓
+Task READY / BLOCKED
+```
+
+Cancellation：
+
+> 消耗一次 attempt。
+
+因此：
+
+```text
+attempt += 1
+```
+
+之后根据现有 retry policy：
+
+```text
+attempt < maxAttempts
+    ↓
+READY
+
+attempt >= maxAttempts
+    ↓
+BLOCKED
+```
+
+### Active Run
+
+```text
+STARTING / RUNNING / VERIFYING
+            ↓
+      cancel request
+            ↓
+Worker / Loop
+            ↓
+        CANCELLED
+```
+
+不新增：
+
+```text
+CANCELLING
+CANCEL_REQUESTED
+```
+
+Run status。
+
+### Terminal Run
+
+```text
+terminal
+   ↓
+run.cancel
+   ↓
+rejected(run_not_cancellable)
+```
+
+## 21. LOST Recovery Semantics
+
+Worker 消失：
+
+```text
+RUNNING
+   ↓
+reconciliation
+   ↓
+LOST
+```
+
+然后系统可以在同一次：
+
+```text
+Loop.tick()
+```
+
+中继续：
+
+```text
+cleanup
+  ↓
+Task recovery
+  ↓
+schedule
+  ↓
+execute
+```
+
+因此 E2E **不得断言新 Run 的中间状态**。
+
+例如不得要求：
+
+```text
+new Run == QUEUED
+```
+
+只需要断言：
+
+```text
+old Run == LOST
+```
+
+以及：
+
+```text
+Task 任意时刻最多一个 active Run
+```
+
+最终如果重跑成功，则验证新的 Run 结果即可。
+
+## 22. Delivery Notification Acceptance
+
+只验证已有 notification semantics：
+
+```text
+READY_FOR_RELEASE
+       ↓
+delivery.ready_for_release
+       ↓
+notification
+```
+
+以及：
+
+```text
+BLOCKED
+   ↓
+delivery.blocked
+   ↓
+notification
+```
+
+必须验证：
+
+* transition 不重复
+* notification failure 不回滚 Delivery
+* pending notification 可以 retry
+* FIFO
+* maxPerPass
+* capacity
+* overflow policy
+* notification 不触发 Auto Release
+
+## 23. Human Release Boundary
+
+这是 Phase 12 的关键 Release Gate。
+
+Loop：
+
+```text
+tick()
+tick()
+tick()
+```
+
+不能：
+
+```text
+READY_FOR_RELEASE
+        ↓
+RELEASED
+```
+
+必须保持：
+
+```text
+READY_FOR_RELEASE
+        ↓
+WAITING FOR HUMAN
+```
+
+只有：
+
+```text
+delivery.release
+```
+
+才能：
+
+```text
+READY_FOR_RELEASE
+        ↓
+RELEASED
+```
+
+重复 Release：
+
+```text
+delivery.release
+delivery.release
+```
+
+必须得到：
+
+```text
+one Release record
+created = false
+```
+
+## 24. PostgreSQL Isolation
+
+当前：
+
+```text
+tests/postgres.integration.test.ts
+tests/realE2E.integration.test.ts
+```
+
+不能共享会互相清理的测试数据库。
+
+TASK-1208 使用：
+
+```text
+Independent PostgreSQL Database
+```
+
+推荐：
+
+```text
+ai_harness_test
+ai_harness_e2e
+```
+
+例如：
+
+```text
+postgres.integration
+        ↓
+ai_harness_test
+
+realE2E
+        ↓
+ai_harness_e2e
+```
+
+要求：
+
+```text
+Suite A
+   +
+Suite B
+```
+
+可以并行执行而不：
+
+* 删除对方数据
+* truncate 对方数据
+* 修改对方 migration state
+* 覆盖对方 fixture
+
+## 25. AI_TEST_REQUIRE_DB
+
+新增 / 固化：
+
+```text
+AI_TEST_REQUIRE_DB=1
+```
+
+语义：
+
+```text
+AI_TEST_REQUIRE_DB != 1
+    ↓
+环境允许 skip
+
+AI_TEST_REQUIRE_DB=1
+    ↓
+DB unavailable
+    ↓
+FAIL
+```
+
+禁止：
+
+```text
+DB unavailable
+    ↓
+SKIPPED
+    ↓
+Release Gate PASS
+```
+
+PostgreSQL Gate 必须明确：
+
+```text
+PASS
+```
+
+才能通过。
+
+## 26. Real Codex Gate
+
+Real Codex Gate 使用：
+
+```text
+AI_TEST_REQUIRE_DB=1
+AI_TEST_CODEX=1
+```
+
+并使用独立 E2E database。
+
+要求：
+
+```text
+Generic synthetic repo
+       ↓
+Codex Engine
+       ↓
+Execution
+       ↓
+Verification
+       ↓
+Evidence
+       ↓
+Run result
+```
+
+不使用具体业务项目。
+
+Real Codex 所需 Provider / API Key 由环境提供。
+
+不得：
+
+* hard-code API key
+* 把 secret 提交到 repository
+* 测试中伪造 PASS
+
+## 27. SKIPPED Policy
+
+最终 Policy 固定如下：
+
+| Gate | SKIPPED | 规则 |
+| --- | --- | --- |
+| Typecheck | ❌ | 必须 PASS |
+| Unit / Memory E2E | ❌ | 必须 PASS |
+| PostgreSQL | ❌ | 必须 PASS |
+| Phase 12 E2E | ❌ | 必须 PASS |
+| Real Codex | ✅ | 无 Provider 时允许 |
+| Docker / Resource | ✅ | 无 Docker 主机时允许 |
+
+但是：
+
+```text
+Docker / Resource
+```
+
+至少必须成功执行过一次。
+
+因此：
+
+```text
+Docker 从未执行
+    ↓
+不能 FROZEN
+```
+
+Real Codex 如果 Skip：
+
+必须记录：
+
+```text
+SKIPPED
+reason = provider unavailable
+```
+
+不能显示：
+
+```text
+PASSED
+```
+
+## 28. Docker Resource Gate
+
+Docker Gate 使用代码中的实际资源命名约定。
+
+### Run Containers
 
 ```bash
-npm run typecheck                 # 类型
-npm test                          # 单元 + 内存 E2E（离线、无外部依赖）
-npm run test:postgres             # DB gate #1（隔离库）
-npm run test:e2e:real             # DB gate #2 + 真实 codex（隔离库）
-npm run test:gate:phase12         # 一条命令跑完上面全部 + 汇总 + 资源核对
-
-# Linux + Docker 主机（可选 gate，但 FROZEN 前必须至少通过一次）
-AI_TEST_DOCKER=1 AI_EXECUTION_IMAGE=harness/execution:node22 npm run test:docker
+docker ps -a \
+  --filter label=ai-harness.run-id \
+  --format '{{.Names}}'
 ```
 
-`test:gate:phase12` 的输出格式（也作为最终记录写进本文件）：
+预期：
 
 ```text
-Phase 12 Release Gate — <date> <host>
-  typecheck            PASS
-  unit + in-memory E2E PASS  (N passed / M skipped)
-  postgres integration PASS  (db: ai_harness_it,  13 tests)
-  real codex E2E       PASS  (db: ai_harness_real, 1 test)
-  resource checks      PASS  (containers/networks/worktrees/workspaces/executions)
-  docker gate          SKIPPED (no docker host) | PASS (12 passed / 1 skipped)
-=> PHASE 12 FROZEN
+empty
 ```
 
-## 6. 实施顺序
+### Execution Networks
+
+```bash
+docker network ls \
+  --filter name=ai-net- \
+  --format '{{.Name}}'
+```
+
+预期：
 
 ```text
-Step 1  测试隔离基础设施：testDatabases.ts + 两个 DB suite 改用各自 URL
-        + AI_TEST_REQUIRE_DB 守卫（只动测试基建，不动生产代码）
-Step 2  A15 验收测试：tests/e2e/phase12/acceptance.test.ts
-Step 3  gate runner：scripts/verify-phase12.mjs + npm script（preflight/隔离/汇总/资源核对）
-Step 4  本地跑 gate 1–6，记录结果
-Step 5  Linux + Docker 主机跑 docker gate + A13，记录结果
-Step 6  把结果与 PHASE 12 FROZEN 写进本文件；如有发现则回到对应 TASK 修复
+empty
 ```
 
-每步完成标准：`npm run typecheck` ✅、`npm test` ✅、Postgres 集成 ✅（隔离库）、
-real codex E2E ✅（隔离库）。
+### Allow-list Proxy
 
-## 7. 明确不做
+```bash
+docker ps -a \
+  --filter name=ai-proxy- \
+  --format '{{.Names}}'
+```
+
+预期：
 
 ```text
-❌ 新生产能力（Command / 状态 / 领域对象 / Scheduler / Worker / Loop 改动）
-❌ GitHub / PR / Merge / Push / Deploy / CI-CD（外部交付集成留给后续阶段）
-❌ 真实 Feishu/DingTalk/Slack 发送（部署环境验证，另立任务）
-❌ CI 服务配置（GitHub Actions 等属于基础设施决策，不在本 gate）
-❌ 把 gate 做成"永远绿"（跳过即失败；缺 Docker 主机就如实记录 SKIPPED）
+empty
 ```
 
-## 8. 需要确认的决策
+## 29. Workspace Resource Gate
+
+Workspace 不能简单要求：
 
 ```text
-D1  测试隔离用"每套 suite 独立数据库 + gate 创建/迁移"（替代方案见 §3）
-D2  gate 设置 AI_TEST_REQUIRE_DB=1：缺库/缺凭证直接 FAIL，不再静默 skip
-D3  新增 A15 全链路验收测试（tests/e2e/phase12/acceptance.test.ts）作为验收入口
-D4  Docker/真机资源核对必须在 Linux 主机至少通过一次才允许 PHASE 12 FROZEN；
-    无主机时如实记录 SKIPPED，不宣布 FROZEN
+workspace count == baseline
 ```
+
+因为成功 Run 进入 Review 时 Workspace 按当前设计可能需要保留。
+
+因此检查：
+
+```text
+Expected Resources
+vs
+Unexpected Resources
+```
+
+成功 Run：
+
+```text
+REVIEW
+    ↓
+Workspace may remain
+```
+
+失败：
+
+```text
+FAILED
+    ↓
+Workspace cleaned
+```
+
+Timeout：
+
+```text
+TIMED_OUT
+    ↓
+Workspace cleaned
+```
+
+Cancelled：
+
+```text
+CANCELLED
+    ↓
+Workspace cleaned
+```
+
+Lost：
+
+```text
+LOST
+    ↓
+Workspace cleaned
+```
+
+## 30. Execution Resource Gate
+
+检查：
+
+```text
+Run
+Execution
+Container
+Network
+Proxy
+Workspace
+```
+
+最终必须满足：
+
+```text
+terminal Run
+    ↓
+terminal Execution
+    ↓
+no unexpected container
+    ↓
+no unexpected network
+    ↓
+no leaked workspace
+```
+
+成功 Review Workspace 属于：
+
+```text
+expected persistent resource
+```
+
+不能误判为 leak。
+
+## 31. Acceptance Matrix
+
+正式记录：
+
+| Area | Scenario | Expected |
+| --- | --- | --- |
+| Problem | create | Problem created |
+| Problem | clarification | NEEDS_INPUT |
+| Problem | answer | CONFIRMED |
+| Specification | create | DRAFT |
+| Specification | ready | READY |
+| Planning | plan | Tasks created |
+| Planning | replay | no duplicate |
+| DAG | dependency | edge created |
+| DAG | cycle | rejected |
+| Scheduler | runnable | Run created |
+| Scheduler | blocked | no Run |
+| Run | success | REVIEW |
+| Verification | multiple checks | aggregated |
+| Verification | failure | FAILED + Evidence |
+| Review | approve | DONE |
+| Review | changes | READY |
+| Delivery | all required DONE | READY_FOR_RELEASE |
+| Delivery | failed required | BLOCKED |
+| Delivery | dependency blocked | BLOCKED |
+| Retry | failure | fresh Workspace |
+| Recovery | LOST | recovered |
+| Cancel | queued | CANCELLED |
+| Cancel | active | cancellation processed |
+| Cancel | terminal | rejected |
+| Notification | ready | notified |
+| Notification | blocked | notified |
+| Release | ready | Release created |
+| Release | repeat | idempotent |
+| Release | Loop | no auto release |
+| PostgreSQL | integration | PASS |
+| Docker | cleanup | PASS |
+| Real Codex | execution | PASS / allowed SKIPPED |
+
+## 32. Gate Runner
+
+最终提供统一 Release Gate。
+
+建议新增 npm script：
+
+```json
+{
+  "scripts": {
+    "test:release-gate": "..."
+  }
+}
+```
+
+逻辑：
+
+```text
+Gate 1
+  ↓
+Gate 2
+  ↓
+Gate 3
+  ↓
+Gate 4
+  ↓
+Gate 5
+  ↓
+Gate 6
+```
+
+Gate 之间默认串行。
+
+原因：
+
+* Docker / Git / Workspace 操作较重
+* PostgreSQL 资源独立但仍需可控
+* 宿主机负载可能较高
+* 避免测试竞争导致非确定性失败
+
+必要时使用：
+
+```bash
+--no-file-parallelism
+```
+
+具体参数根据 Vitest 当前配置确定。
+
+## 33. Release Gate Definition
+
+最终 Gate 固定为：
+
+```text
+Gate 1
+Typecheck
+
+Gate 2
+Unit + Memory E2E
+
+Gate 3
+PostgreSQL Integration
+
+Gate 4
+Phase 12 E2E
+
+Gate 5
+Real Codex E2E
+
+Gate 6
+Docker / Workspace / Execution Resource
+```
+
+其中：
+
+```text
+Gate 2
+```
+
+排除：
+
+```text
+**/*.integration.test.ts
+```
+
+避免 PostgreSQL / Real Codex 被意外包含。
+
+## 34. Recommended Commands
+
+### Gate 1
+
+```bash
+npm run typecheck
+```
+
+### Gate 2
+
+```bash
+vitest run --exclude '**/*.integration.test.ts'
+```
+
+### Gate 3
+
+```bash
+AI_TEST_REQUIRE_DB=1 \
+vitest run tests/postgres.integration.test.ts
+```
+
+### Gate 4
+
+```bash
+vitest run tests/e2e/phase12
+```
+
+### Gate 5
+
+```bash
+AI_TEST_REQUIRE_DB=1 \
+AI_TEST_CODEX=1 \
+vitest run tests/realE2E.integration.test.ts
+```
+
+### Gate 6
+
+执行 Resource Acceptance：
+
+```bash
+docker ps -a \
+  --filter label=ai-harness.run-id \
+  --format '{{.Names}}'
+
+docker network ls \
+  --filter name=ai-net- \
+  --format '{{.Name}}'
+
+docker ps -a \
+  --filter name=ai-proxy- \
+  --format '{{.Names}}'
+```
+
+具体 npm script 名称可根据现有 `package.json` 调整。
+
+## 35. Vitest JSON Result
+
+Release Gate 使用 Vitest JSON Reporter：
+
+```bash
+vitest run \
+  --reporter=json \
+  --outputFile=artifacts/phase12-release-gate.json
+```
+
+结果由 runner 解析：
+
+```json
+{
+  "acceptance": {
+    "total": 0,
+    "passed": 0,
+    "failed": 0,
+    "skipped": 0
+  }
+}
+```
+
+这些数字必须来自测试 Runner 的实际结果。
+
+禁止人工填写。
+
+## 36. Artifacts
+
+生成：
+
+```text
+artifacts/
+└── phase12-release-gate.json
+```
+
+加入：
+
+```text
+.gitignore
+```
+
+Artifact 不提交 Git。
+
+## 37. Gate Result
+
+每个 Gate 必须产生：
+
+```text
+PASS
+FAIL
+SKIPPED
+```
+
+完整结果：
+
+```json
+{
+  "phase": "12",
+  "task": "TASK-1208",
+  "commit": "<sha>",
+  "host": "<host>",
+  "date": "<timestamp>",
+  "gates": {
+    "typecheck": "PASS",
+    "unit": "PASS",
+    "postgres": "PASS",
+    "phase12E2E": "PASS",
+    "realCodex": "SKIPPED",
+    "resources": "PASS"
+  },
+  "status": "PASS"
+}
+```
+
+如果 Gate 为：
+
+```text
+SKIPPED
+```
+
+必须同时记录：
+
+```text
+reason
+```
+
+## 38. Three Consecutive Runs
+
+Release Gate 不是只跑一次。
+
+必须：
+
+```text
+Run #1 → PASS
+Run #2 → PASS
+Run #3 → PASS
+```
+
+连续三次通过。
+
+目的：
+
+验证：
+
+* test isolation
+* deterministic behavior
+* workspace cleanup
+* DB isolation
+* concurrency
+* resource cleanup
+
+不存在：
+
+```text
+Run #1 PASS
+Run #2 FAIL
+Run #3 PASS
+```
+
+仍宣布 FROZEN。
+
+## 39. Commit / Host / Date Record
+
+每次最终 Gate 记录：
+
+```text
+commit SHA
+host
+date/time
+```
+
+例如：
+
+```text
+Commit:
+abc123...
+
+Host:
+linux-builder-01
+
+Date:
+2026-09-20T...
+```
+
+这样未来可以回答：
+
+> 这个 Phase 12 Release Gate 到底在哪台机器、哪个 commit 上通过的？
+
+## 40. FROZEN Definition
+
+Phase 12 FROZEN 必须同时满足：
+
+```text
+1. TASK-1201 ~ TASK-1207 已完成
+2. TASK-1208 Acceptance 完成
+3. Typecheck PASS
+4. Unit / Memory E2E PASS
+5. PostgreSQL PASS
+6. Phase 12 E2E PASS
+7. Docker / Resource 至少成功执行过一次
+8. 连续三次 Release Gate PASS
+9. 所有允许 SKIPPED 项均有明确原因
+10. Acceptance Matrix 全部覆盖
+11. docs/phase12-acceptance.md 完成
+```
+
+Real Codex 可以因为环境原因：
+
+```text
+SKIPPED
+```
+
+但必须有明确记录。
+
+如果 Docker 从未成功运行：
+
+```text
+Phase 12 = NOT FROZEN
+```
+
+## 41. FROZEN Semantics
+
+`PHASE 12 FROZEN` 的含义不是：
+
+> 永远不能修改代码。
+
+而是：
+
+> TASK-1201～TASK-1207 所定义的 Phase 12 生产语义已经通过正式 Acceptance Gate；后续修改不得在没有新 Task / 新验收的情况下改变这些语义。
+
+因此：
+
+```text
+Phase 12 Frozen
+       ↓
+bug discovered
+       ↓
+new Task
+       ↓
+change
+       ↓
+regression
+       ↓
+new Release Gate
+```
+
+而不是直接修改后继续声称：
+
+```text
+Phase 12 FROZEN
+```
+
+## 42. Operator Boundary Documentation
+
+`docs/phase12-acceptance.md` 必须明确记录：
+
+```text
+Operator Boundary #1
+
+Planning
+  ↓
+Task INBOX
+  ↓
+operator sets READY
+```
+
+以及：
+
+```text
+Operator Boundary #2
+
+Task BLOCKED
+  ↓
+operator reset
+  ↓
+READY
+```
+
+说明：
+
+```text
+No task.ready command exists in current Phase 12.
+TASK-1208 does not introduce one.
+```
+
+这些操作是：
+
+```text
+test/operator boundary
+```
+
+而不是正式产品流程。
+
+## 43. Resource Acceptance Environment
+
+Docker Resource Gate 依赖：
+
+```text
+Linux
+Docker
+Git
+Node
+PostgreSQL
+```
+
+如果没有 Docker 主机：
+
+```text
+Docker / Resource Gate = SKIPPED
+```
+
+但是：
+
+```text
+PHASE 12 FROZEN = prohibited
+```
+
+直到至少成功执行过一次 Docker / Resource Gate。
+
+## 44. Acceptance Test Boundaries
+
+E2E 测试应优先通过正式 Application / Command / Loop / Scheduler / Worker 入口驱动。
+
+允许的例外：
+
+```text
+Operator Boundary
+```
+
+即：
+
+```text
+INBOX → READY
+BLOCKED → READY
+```
+
+除此之外：
+
+禁止为了方便测试直接：
+
+```text
+INSERT Run
+INSERT Release
+UPDATE Delivery
+UPDATE Problem
+```
+
+来伪造被测试流程。
+
+测试 helper 不得绕过被测试的业务边界。
+
+## 45. Regression Boundary
+
+TASK-1208 不修改：
+
+```text
+Scheduler semantics
+Worker semantics
+Loop semantics
+Delivery aggregation semantics
+Retry semantics
+Cancellation semantics
+Recovery semantics
+Dependency semantics
+Review semantics
+Release semantics
+```
+
+如果实现过程中发现现有语义与 Acceptance 不一致：
+
+```text
+先确认现有语义
+      ↓
+更新 Acceptance
+```
+
+而不是为了让测试通过而顺手修改生产代码。
+
+如果确实需要改变语义：
+
+```text
+TASK-1208 STOP
+      ↓
+new feature/design task
+```
+
+## 46. Acceptance Completion Criteria
+
+TASK-1208 完成必须满足：
+
+### Test Structure
+
+* [ ] 不创建第二套 Phase 12 E2E
+* [ ] 保留现有 Phase 12 测试
+* [ ] 新增 `acceptance.test.ts`
+* [ ] 使用 `.test.ts`
+
+### Fixture
+
+* [ ] `sample-project` 增加多 verification checks
+* [ ] 无第三方 npm dependency
+* [ ] 离线运行
+* [ ] Real Codex fixture 不修改
+
+### Isolation
+
+* [ ] PostgreSQL 使用独立 database
+* [ ] `AI_TEST_REQUIRE_DB=1`
+* [ ] DB unavailable 时 FAIL
+* [ ] postgres 与 realE2E 可独立运行
+* [ ] 不互相清理数据
+
+### Acceptance
+
+* [ ] Problem
+* [ ] Confirmation
+* [ ] Specification
+* [ ] Planning
+* [ ] DAG
+* [ ] Scheduling
+* [ ] Run
+* [ ] Workspace
+* [ ] Verification
+* [ ] Review
+* [ ] Approval
+* [ ] Delivery
+* [ ] Failure
+* [ ] Retry
+* [ ] Recovery
+* [ ] Cancellation
+* [ ] Notification
+* [ ] Human Release
+
+### Resource
+
+* [ ] Container cleanup
+* [ ] Network cleanup
+* [ ] Proxy cleanup
+* [ ] Execution cleanup
+* [ ] Workspace lifecycle
+* [ ] Retry workspace isolation
+
+### Gate
+
+* [ ] Typecheck PASS
+* [ ] Unit / Memory E2E PASS
+* [ ] PostgreSQL PASS
+* [ ] Phase 12 E2E PASS
+* [ ] Real Codex PASS / documented SKIPPED
+* [ ] Resource PASS / documented SKIPPED
+* [ ] Resource 至少成功执行过一次
+* [ ] 连续三次 Gate PASS
+
+### Documentation
+
+* [ ] `docs/phase12-acceptance.md`
+* [ ] Acceptance Matrix
+* [ ] Gate Policy
+* [ ] SKIPPED Policy
+* [ ] Operator Boundary
+* [ ] Docker commands
+* [ ] DB isolation
+* [ ] Result format
+* [ ] FROZEN definition
+
+## 47. Final Phase 12 State
+
+最终系统：
+
+```text
+                    ┌───────────────┐
+                    │    Problem    │
+                    └───────┬───────┘
+                            ↓
+                    ┌───────────────┐
+                    │ Confirmation  │
+                    └───────┬───────┘
+                            ↓
+                    ┌───────────────┐
+                    │ Specification │
+                    └───────┬───────┘
+                            ↓
+                    ┌───────────────┐
+                    │    Planning   │
+                    └───────┬───────┘
+                            ↓
+                    ┌───────────────┐
+                    │ Dependency DAG│
+                    └───────┬───────┘
+                            ↓
+                    ┌───────────────┐
+                    │   Scheduler   │
+                    └───────┬───────┘
+                            ↓
+                    ┌───────────────┐
+                    │      Run      │
+                    └───────┬───────┘
+                            ↓
+                    ┌───────────────┐
+                    │     Agent     │
+                    └───────┬───────┘
+                            ↓
+                    ┌───────────────┐
+                    │ Verification  │
+                    └───────┬───────┘
+                            ↓
+                    ┌───────────────┐
+                    │     Review    │
+                    └───────┬───────┘
+                            ↓
+                         DONE
+                            ↓
+                    ┌───────────────┐
+                    │    Delivery   │
+                    └───────┬───────┘
+                            ↓
+                    READY_FOR_RELEASE
+                            ↓
+                    ┌───────────────┐
+                    │ Human Release │
+                    └───────┬───────┘
+                            ↓
+                         RELEASED
+```
+
+最终 Release Gate：
+
+```text
+Typecheck
+    ↓
+Unit / Memory E2E
+    ↓
+PostgreSQL
+    ↓
+Phase 12 E2E
+    ↓
+Real Codex
+    ↓
+Docker / Resource
+    ↓
+Acceptance Matrix
+    ↓
+3 consecutive PASS
+    ↓
+PHASE 12 FROZEN
+```
+
+TASK-1208 的最终产物不是新的业务功能，而是：
+
+```text
+A repeatable
+generic
+isolated
+auditable
+release gate
+```
+
+用于证明：
+
+> Phase 12 已经从“功能实现完成”进入“可重复验收、可回归验证、边界明确”的冻结状态。
