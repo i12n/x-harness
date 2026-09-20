@@ -1,6 +1,6 @@
 # TASK-1207 — Failure / Retry / Recovery Hardening（设计稿）
 
-> 状态：**Phase A、Phase B、Phase C 已实现**（2026-09-20）；Phase D 尚未开始。
+> 状态：**TASK-1207 全部完成**（Phase A/B/C/D，2026-09-20）。
 > 前置：TASK-1201–1206 已完成并冻结（Specification / Planning / DAG /
 > DAG-aware Scheduler / Delivery + Release / Delivery Reconciliation）。
 
@@ -485,6 +485,52 @@ ai loop --once（Delivery 复位为 IN_PROGRESS 后）
 
 Phase C 未改动：Scheduler、Worker、Loop、Delivery 聚合规则、Task 状态机；未新增
 Command / 状态 / 自动 Retry / 自动 Release / 真实消息平台发送。
+
+### Phase D 实现记录（已完成）
+
+Phase D 只写测试（外加 Phase C 发现的接线修复），**没有改动任何生产语义**：
+
+```text
+tests/workerRetry.test.ts                     # 新：Retry / Workspace / 隔离 / 清理
+tests/e2e/phase12/failure-recovery.test.ts    # 新：Generic Phase 12 E2E
+tests/postgres.integration.test.ts            # +1 例：并发 retry / recovery
+```
+
+矩阵 → 覆盖位置（含既有测试，避免重复实现）：
+
+```text
+13/14 FAILED Run → fresh retry Run / 新 Workspace   workerRetry（Worker 级）
+15   多 target retry：A1≠A2、B1≠B2、A1≠B1…          workerRetry（4 条路径互不相同）
+16   单 target 失败不污染另一个 target              workerRetry（跨 workdir marker 探针）
+17   failed attempt 清理（单/多 target）             workerRetry（失败目录已被删除）
+18   timeout 清理                                    workerRetry（多 target）+ workerExecution
+19   lost / crash 清理                               workerRecoveryMulti（lease 过期）
+27   并发 retry / scheduler / recovery+scheduler     postgres.integration（DB 兜底）
+```
+
+实测发现的两个既有语义（已写进断言注释，避免后人误判为 bug）：
+
+```text
+1. 成功的 Run 会**保留** Workspace（Review 需要看 diff）；只有
+   FAILED / TIMED_OUT / CANCELLED / LOST 才清理。
+2. 失败的 attempt 清理后，retry 一定是新的目录/分支 —— 失败目录不会被复用。
+```
+
+Generic E2E（`failure-recovery.test.ts`）走完整链路，最终停在人类边界：
+
+```text
+Specification → Planning → Task DAG（B 依赖 A）
+  → A 连续 3 次 verification 失败（maxAttempts=3）→ Task A BLOCKED
+  → Delivery：PLANNED→IN_PROGRESS→BLOCKED（+ blocked 通知，含 Failure evidence）
+  → B 不可执行（dependency-blocked）
+  → 人工 reset（等价 task validate）→ BLOCKED→IN_PROGRESS
+  → 第 4 次 attempt：全新 Workspace → PASS → Task A REVIEW → approve → DONE
+  → B runnable → Run → REVIEW → approve → DONE
+  → Delivery IN_PROGRESS→READY_FOR_RELEASE（+ 通知）
+  → releases = 0；后续 tick 保持安静（无迁移、无通知）
+
+4 次 A attempt 的 Workspace 路径互不相同（Set 去重后仍为 4）
+```
 
 ## 11. 明确不做
 

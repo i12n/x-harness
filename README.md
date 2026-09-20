@@ -77,7 +77,9 @@ Implemented in TypeScript (Node >= 18, ESM). The full plan lives in
   状态聚合、每次读取重算，Release 只是人工记录；`ai delivery show|release`）
   、TASK-1206 Delivery Reconciliation Loop（`Loop.tick()` 调度前后各做一次
   Delivery 聚合，只在 READY_FOR_RELEASE / BLOCKED 迁移时通过 DeliveryNotifier
-  通知，绝不自动 release）
+  通知，绝不自动 release）、TASK-1207 Failure / Retry / Recovery Hardening
+  （依赖失败影响与阻塞链、失败证据、Loop 阶段级错误隔离、有界 FIFO 通知队列、
+  跨 Task 可见性、retry/workspace/并发回归 —— 仍由人工 Release 收口）
   已完成 —— 见
   [docs/engineering-delivery-loop.md](docs/engineering-delivery-loop.md)。
 

@@ -34,6 +34,8 @@ import { PostgresTaskDependencyStore } from "../src/store/postgresTaskDependency
 import { PostgresDeliveryStore } from "../src/store/postgresDeliveryStore.js";
 import { TaskDependencyService } from "../src/task/application/dependencyService.js";
 import { DeliveryService } from "../src/delivery/application/service.js";
+import { ACTIVE_RUN_STATUSES } from "../src/domain/run.js";
+import { DuplicateActiveRunError } from "../src/errors.js";
 import { SpecificationService } from "../src/specification/application/service.js";
 import { PlanningService } from "../src/specification/application/planning.js";
 import { DeterministicTaskPlanner } from "../src/specification/application/planner.js";
@@ -896,5 +898,81 @@ describePostgres("PostgreSQL integration", () => {
     const releaseEvents = await events.listEvents({ type: "release.released" });
     expect(releaseEvents).toHaveLength(1);
     expect(releaseEvents[0]?.payload).toMatchObject({ releaseId: released.release.id });
+  });
+
+  it("concurrent retry and recovery keep one active run (TASK-1207)", async () => {
+    const repositories = new PostgresRepositoryStore(pool!);
+    const tasks = new PostgresTaskStore(pool!);
+    const runs = new PostgresRunStore(pool!);
+
+    await repositories.createRepository({
+      id: "repo-a",
+      name: "app",
+      url: "git@github.com:example/app.git",
+      localPath: "/tmp/repos/app",
+    });
+    await tasks.createTask({
+      id: "task-retry",
+      repositoryId: "repo-a",
+      title: "retry",
+      status: "READY",
+    });
+
+    // 1. Two retry attempts racing for the same task: one active run only.
+    const raced = await Promise.allSettled([
+      runs.createRun({
+        id: "run-a",
+        taskId: "task-retry",
+        attempt: 1,
+        agent: "codex",
+        engine: "codex",
+      }),
+      runs.createRun({
+        id: "run-b",
+        taskId: "task-retry",
+        attempt: 2,
+        agent: "codex",
+        engine: "codex",
+      }),
+    ]);
+    expect(raced.map((entry) => entry.status).sort()).toEqual([
+      "fulfilled",
+      "rejected",
+    ]);
+    const activeAfterRace = await runs.listRuns({
+      taskId: "task-retry",
+      statuses: [...ACTIVE_RUN_STATUSES],
+    });
+    expect(activeAfterRace).toHaveLength(1);
+
+    // 2. Scheduler + a direct retry while the run is active: still one.
+    const scheduler = new Scheduler({
+      taskStore: tasks,
+      runStore: runs,
+      maxConcurrency: 2,
+    });
+    await expect(scheduler.schedule()).resolves.toHaveLength(0);
+    await expect(
+      runs.createRun({
+        id: "run-c",
+        taskId: "task-retry",
+        attempt: 3,
+        agent: "codex",
+        engine: "codex",
+      }),
+    ).rejects.toBeInstanceOf(DuplicateActiveRunError);
+
+    // 3. Recovery frees the slot; the next schedule creates exactly one run.
+    const active = activeAfterRace[0]!;
+    await runs.updateRunStatus(active.id, "LOST");
+    await tasks.updateTaskStatus("task-retry", "READY");
+    const afterRecovery = await scheduler.schedule();
+    expect(afterRecovery.map((run) => run.taskId)).toEqual(["task-retry"]);
+    await expect(
+      runs.listRuns({ taskId: "task-retry", statuses: [...ACTIVE_RUN_STATUSES] }),
+    ).resolves.toHaveLength(1);
+    await expect(
+      runs.listRuns({ taskId: "task-retry", statuses: ["LOST"] }),
+    ).resolves.toHaveLength(1);
   });
 });
