@@ -79,7 +79,6 @@ export async function createPhase12Harness() {
   });
   const dependencyService = new TaskDependencyService({
     tasks,
-    runs,
     dependencies,
     events,
   });
@@ -210,6 +209,7 @@ export async function createPhase12Harness() {
     specifications,
     plans,
     tasks,
+    runs,
     dependencies,
     deliveries,
     events,
