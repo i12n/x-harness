@@ -17,6 +17,9 @@ dist/
 coverage/
 *.tsbuildinfo
 
+# TASK-1208 release gate reports (scripts/verify-phase12.mjs)
+artifacts/
+
 # Local codex demo workspace (created by npm run demo:codex)
 .ai-workspaces-codex-demo/
 .ai-workspaces-e2e/
