@@ -1,6 +1,7 @@
 # Phase 12 Acceptance：TASK-1208 Generic E2E Acceptance / Release Gate（正式设计稿）
 
-> 状态：**设计定稿**（2026-09-20）。已拍板的 6 项决策全部合入本稿，可直接进入实现阶段。
+> 状态：**已实现并通过 Release Gate**（2026-09-23）→ **PHASE 12 FROZEN**。
+> 验收记录见文末 §48（commit / host / 三次连跑 / 资源核对 / FROZEN 判定）。
 > 前置：TASK-1201–TASK-1207 已完成并通过逐任务评审。
 > 实现顺序：测试隔离基建 → Gate Runner → `acceptance.test.ts` → fixture 多 check →
 > Resource Gate → 连续三次 Gate → FROZEN。
@@ -2035,3 +2036,83 @@ release gate
 用于证明：
 
 > Phase 12 已经从“功能实现完成”进入“可重复验收、可回归验证、边界明确”的冻结状态。
+
+## 48. Phase 12 Release Gate Result（TASK-1208 验收记录）
+
+```text
+结论：        PHASE 12 FROZEN
+日期：        2026-09-23
+验收对象：    commit 77d7b55
+              （相对 Step 4 基线 90fe47d 仅 scripts/verify-phase12.mjs 一个文件不同，
+                `git diff --name-only 90fe47d..77d7b55` 已核对；
+                src / tests / fixtures / migrations 与 90fe47d 完全一致，
+                即 1201–1208 的验收语义就是 90fe47d 的语义）
+主机：        <验收主机>（Linux 6.8.0 x86_64，Docker 29.7.2）
+运行方式：    每次新建一次性 postgres:16-alpine 容器 →
+              Runner 从零创建并迁移 ai_harness_it / ai_harness_real →
+              AI_GATE_COMMIT=77d7b55 DATABASE_URL=…127.0.0.1:55432/ai_harness
+              node scripts/verify-phase12.mjs
+```
+
+### 48.1 连续三次 Release Gate
+
+| Run | 时间 (UTC) | typecheck | unit | postgres | phase12E2E | realCodex | resources (docker) | acceptance | overall |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| #1 | 2026-09-23T15:20:07Z | PASS | PASS 439 | PASS 13 | PASS 24 | SKIPPED | PASS (docker PASS) | 476 / 0 / 0 | **PASS** |
+| #2 | 2026-09-23T15:24:01Z | PASS | PASS 439 | PASS 13 | PASS 24 | SKIPPED | PASS (docker PASS) | 476 / 0 / 0 | **PASS** |
+| #3 | 2026-09-23T15:28:31Z | PASS | PASS 439 | PASS 13 | PASS 24 | SKIPPED | PASS (docker PASS) | 476 / 0 / 0 | **PASS** |
+
+三次均满足：
+
+```text
+acceptance.failed = 0        acceptance.skipped = 0
+docker = PASS                dockerGateEverPassed = true
+每次 Runner 均报 created: ai_harness_it, ai_harness_real（各 12 migrations 全新迁移）
+真实 codex：SKIPPED（主机无 codex provider，AI_TEST_CODEX 未 opt-in）—— 按 §9 政策记录，不当作 PASS
+```
+
+### 48.2 Docker Resource Gate（同主机，Step 5 实测）
+
+```text
+tests/dockerAcceptance.integration.test.ts                      10 passed / 3 skipped
+tests/dockerAcceptance.integration.test.ts (+NETWORK_ENFORCEMENT) 12 passed / 1 skipped
+tests/multiRepoDockerAcceptance.integration.test.ts               10 passed / 0 skipped
+
+资源残留（三套件后 / 每次 Gate 后 / 全部结束后均核对）
+  docker ps -a --filter label=ai-harness.run-id   → 0
+  docker network ls --filter name=ai-net-         → 0
+  docker ps -a --filter name=ai-proxy-            → 0
+  /srv/ai-harness/.ai-workspaces*                 → 0
+一次性 PostgreSQL 容器在每个 Run 结束后销毁（最终 0 个 phase12-gate-pg）
+```
+
+### 48.3 FROZEN 判定（对照 §40）
+
+```text
+1  TASK-1201 ~ 1207 完成                       ✅
+2  TASK-1208 Acceptance 完成                    ✅
+3  Gate 1 Typecheck PASS                        ✅（×3）
+4  Gate 2 Unit / Memory E2E PASS                ✅（439 ×3）
+5  Gate 3 PostgreSQL PASS                       ✅（13 ×3，独立库）
+6  Gate 4 Phase 12 E2E PASS                     ✅（24 ×3）
+7  Gate 6 Docker / Resource 至少成功一次         ✅（同主机多轮 docker PASS）
+8  连续三次 Release Gate PASS                   ✅（#1/#2/#3）
+9  所有 SKIPPED 项均有 reason                   ✅（real codex: provider unavailable）
+10 Acceptance Matrix（§31）全部覆盖              ✅
+11 docs/phase12-acceptance.md 完成并含结果记录    ✅（本节）
+```
+
+### 48.4 证据位置与冻结范围
+
+```text
+原始 JSON（不入库，.gitignore 内）
+  artifacts/host-phase12/run1.json
+  artifacts/host-phase12/run2.json
+  artifacts/host-phase12/run3.json
+  artifacts/host-phase12/host-history.jsonl
+
+冻结范围：TASK-1201 / 1202 / 1203 / 1204 / 1205 / 1206 / 1207 / 1208
+
+后续若要修改这些语义：建立新 Task + 新的 Acceptance Gate，
+不在本冻结基线上直接修改（见 §41）。
+```
