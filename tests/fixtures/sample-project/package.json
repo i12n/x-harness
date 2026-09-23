@@ -5,6 +5,9 @@
   "description": "Generic offline fixture used by the Phase 11 acceptance suite.",
   "main": "src/index.js",
   "scripts": {
+    "lint": "node scripts/lint.js",
+    "test": "node test/verify.js",
+    "build": "node scripts/build.js",
     "verify": "node test/verify.js"
   }
 }

@@ -3,6 +3,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { defaultExecutionProfile } from "../../../src/domain/executionProfile.js";
+import { extractFailureEvidence } from "../../../src/domain/failureEvidence.js";
+import type { AgentContext, AgentEngine, AgentResult } from "../../../src/agent/types.js";
 import {
   ExecutionManager,
   LocalExecutionDriver,
@@ -51,7 +53,9 @@ describe("Phase 12 Acceptance — generic delivery loop (TASK-1208)", () => {
   });
 
   /** sample-project fixture + the shared phase12 harness + execution wiring. */
-  async function setup() {
+  async function setup(
+    options: { verificationCommands?: string[]; agent?: AgentEngine } = {},
+  ) {
     const fixture: GitFixture = createGitFixture();
     cleanups.push(fixture.cleanup);
     cpSync(SAMPLE_PROJECT_DIR, fixture.path, { recursive: true });
@@ -71,7 +75,7 @@ describe("Phase 12 Acceptance — generic delivery loop (TASK-1208)", () => {
       name: "sample-project",
       url: "git@github.com:example/sample-project.git",
       localPath: fixture.path,
-      verificationCommands: ["node test/verify.js"],
+      verificationCommands: options.verificationCommands ?? ["node test/verify.js"],
       executionProfile: defaultExecutionProfile(),
     });
 
@@ -82,7 +86,7 @@ describe("Phase 12 Acceptance — generic delivery loop (TASK-1208)", () => {
       executions,
       events: h.events,
     });
-    const engine = new SampleAgentEngine();
+    const engine = options.agent ?? new SampleAgentEngine();
     const worker = new Worker({
       runStore: h.runs,
       taskStore: h.tasks,
@@ -423,4 +427,139 @@ describe("Phase 12 Acceptance — generic delivery loop (TASK-1208)", () => {
     await expect(h.runs.listRuns({ taskId: taskA!.id })).resolves.toHaveLength(2);
     await expect(h.tasks.findTask(taskA!.id)).resolves.toMatchObject({ status: "REVIEW" });
   });
+
+  it("aggregates the three fixture checks when every one passes", async () => {
+    const checks = [
+      "node scripts/lint.js",
+      "node test/verify.js",
+      "node scripts/build.js",
+    ];
+    const s = await setup({ verificationCommands: checks });
+    const { h } = s;
+
+    const specification = await h.seedReadySpecification({ requirements: ["A: greet"] });
+    const planned = await h.planning.plan(specification.id);
+    const [taskA] = planned.tasks;
+    await s.markReady(taskA!.id);
+
+    const run = await s.runToReview(taskA!.id);
+
+    expect(run.status).toBe("SUCCEEDED");
+    const target = (run.result as {
+      targets: { passed: boolean; checks: { command: string; status: string; output?: string }[] }[];
+    }).targets[0]!;
+    expect(target.passed).toBe(true);
+    // Every configured check ran, in order, and each result is preserved.
+    expect(target.checks.map((check) => check.command)).toEqual(checks);
+    expect(target.checks.map((check) => check.status)).toEqual([
+      "passed",
+      "passed",
+      "passed",
+    ]);
+    // A successful run records no error block.
+    expect(run.error).toBeUndefined();
+    await expect(h.tasks.findTask(taskA!.id)).resolves.toMatchObject({ status: "REVIEW" });
+  });
+
+  it("keeps every check result and the failure evidence when one check fails", async () => {
+    const checks = [
+      "node scripts/lint.js",
+      "node test/verify.js",
+      "node scripts/build.js",
+    ];
+    // The fixture produces the failure: a wrong implementation passes lint and
+    // build (the export exists) but fails the behaviour test.
+    const s = await setup({ verificationCommands: checks, agent: new WrongImplementationAgent() });
+    const { h } = s;
+
+    const specification = await h.seedReadySpecification({ requirements: ["A: greet"] });
+    const planned = await h.planning.plan(specification.id);
+    const [taskA] = planned.tasks;
+    await s.markReady(taskA!.id);
+
+    const report = await s.loop.tick();
+    expect(report.scheduled.map((run) => run.taskId)).toEqual([taskA!.id]);
+    const runs = await h.runs.listRuns({ taskId: taskA!.id });
+    const run = runs[runs.length - 1]!;
+    expect(run.status).toBe("FAILED");
+    // Attempts remain, so the existing retry policy returns the task to READY.
+    await expect(h.tasks.findTask(taskA!.id)).resolves.toMatchObject({ status: "READY" });
+
+    const verification = (run.error as {
+      verification: { command: string; status: string; exitCode: number | null; output: string }[];
+    }).verification;
+    // All three checks are reported even though the middle one failed.
+    expect(verification.map((check) => check.command)).toEqual(checks);
+    expect(verification.map((check) => check.status)).toEqual([
+      "passed",
+      "failed",
+      "passed",
+    ]);
+    const failing = verification[1]!;
+    expect(failing.exitCode).toBe(1);
+    expect(failing.output.length).toBeGreaterThan(0);
+    // The passing checks still carry their own evidence.
+    expect(verification[0]?.output).toContain("lint ok");
+    expect(verification[2]?.output).toContain("build ok");
+    // Per-target evidence mirrors the same run facts.
+    const failingTarget = (run.error as {
+      failingTargets: { repositoryId: string; checks: { command: string; status: string }[] }[];
+    }).failingTargets[0]!;
+    expect(failingTarget.repositoryId).toBe("repo-a");
+    expect(failingTarget.checks.map((check) => check.status)).toEqual([
+      "passed",
+      "failed",
+      "passed",
+    ]);
+
+    // The Phase A evidence extractor reads the same persisted facts.
+    expect(extractFailureEvidence(run)).toMatchObject({
+      kind: "verification",
+      command: "node test/verify.js",
+      exitCode: 1,
+    });
+  });
 });
+
+/**
+ * Writes a `greet` implementation with the wrong behaviour: `lint` and `build`
+ * still pass (the export exists), only the behaviour check fails — the fixture
+ * itself produces the failure, so Harness verification code stays untouched.
+ */
+class WrongImplementationAgent implements AgentEngine {
+  async execute(context: AgentContext): Promise<AgentResult> {
+    const exec = context.execution?.exec;
+    if (!exec) {
+      throw new Error("wrong-implementation agent requires execution.exec");
+    }
+    const source = [
+      "function greet(name) {",
+      "  return `Hi, ${name}!`;",
+      "}",
+      "",
+      "module.exports = { greet };",
+      "",
+    ].join("\n");
+    for (const workdir of Object.values(context.execution?.workdirs ?? {})) {
+      const result = await exec(
+        ["sh", "-lc", `cat > src/index.js <<'EOF'\n${source}EOF`],
+        { cwd: workdir },
+      );
+      if (result.exitCode !== 0) {
+        throw new Error(`wrong-implementation write failed: ${result.stderr}`);
+      }
+    }
+    const now = new Date().toISOString();
+    return {
+      runId: context.runId,
+      exitCode: 0,
+      signal: undefined,
+      stdout: "wrote a wrong implementation",
+      stderr: "",
+      startedAt: now,
+      finishedAt: now,
+    };
+  }
+
+  async cancel(): Promise<void> {}
+}
