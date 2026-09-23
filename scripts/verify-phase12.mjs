@@ -118,9 +118,18 @@ async function preflight() {
     warnings.push(`node ${process.versions.node} is older than engines (${pkg.engines.node})`);
   }
 
-  const commit = await capture("git", ["rev-parse", "HEAD"]).then((r) => r.stdout.trim());
+  // Deployed trees are often rsync'd copies without .git, so fall back to an
+  // explicit override instead of recording an empty commit.
+  const gitCommit = (await capture("git", ["rev-parse", "HEAD"])).stdout.trim();
+  const overrideCommit = (process.env.AI_GATE_COMMIT ?? "").trim();
+  const commit = gitCommit || overrideCommit || "unknown";
+  if (!gitCommit && !overrideCommit) {
+    warnings.push(
+      "commit unknown (no git checkout); set AI_GATE_COMMIT to record the commit under test",
+    );
+  }
   const status = await capture("git", ["status", "--porcelain"]);
-  const worktreeDirty = status.stdout.trim().length > 0;
+  const worktreeDirty = status.code === 0 && status.stdout.trim().length > 0;
   if (worktreeDirty) {
     warnings.push("worktree is dirty; the recorded commit does not describe the code under test");
   }
