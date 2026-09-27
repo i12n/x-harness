@@ -3,7 +3,7 @@
 > 路线状态：Phase 9 / 10 / 11 / 12 均已 **FROZEN**（v0.2 技术基线）。
 > 盘点与债务：[docs/v0.2-milestone-review.md](docs/v0.2-milestone-review.md)；
 > 基线：[docs/v0.2-baseline.md](docs/v0.2-baseline.md)；
-> 真实环境验证：[docs/v0.2-environment-validation.md](docs/v0.2-environment-validation.md)。
+> 真实环境验证（含真实 Codex 闭环）：[docs/v0.2-environment-validation.md](docs/v0.2-environment-validation.md)。
 
 **AI Coding Harness v0.1** — a task-driven harness that runs end-to-end coding
 tasks against multiple repositories:
