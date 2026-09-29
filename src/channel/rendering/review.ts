@@ -14,6 +14,30 @@ export const REVIEW_ACTIONS = {
   requestChanges: "review.request_changes",
 } as const;
 
+/** What happened when a Task's worktree was committed/pushed (plain facts). */
+export interface PublishView {
+  repositoryId: string;
+  branch: string;
+  remote: string;
+  committed: boolean;
+  pushed: boolean;
+  filesChanged: number;
+  skipped?: string;
+  message: string;
+}
+
+/** One line per repository, so a multi-repo Task reports each target. */
+export function renderPublishLines(outcomes: PublishView[]): string[] {
+  return outcomes.map((outcome) => {
+    const mark = outcome.pushed ? "⬆️" : outcome.skipped === "push_disabled" ? "🔒" : "⚠️";
+    const detail = outcome.pushed
+      ? `${outcome.remote}/${outcome.branch}` +
+        (outcome.filesChanged > 0 ? ` · ${outcome.filesChanged} 个文件` : "")
+      : outcome.message;
+    return `${mark} ${outcome.repositoryId}: ${detail}`;
+  });
+}
+
 /**
  * TASK-1105: Review card. Buttons are structural placeholders only — approval
  * semantics (merge / rerun) belong to later tasks.

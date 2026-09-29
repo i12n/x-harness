@@ -10,6 +10,7 @@
 .env
 .env.*
 !.env.example
+deploy/ai-harness.env
 
 # Node / TypeScript
 node_modules/

@@ -28,15 +28,25 @@ import { openStores, type StoreHandle } from "../store/index.js";
 import { WorkspaceManager } from "../workspace/manager.js";
 import { Verifier } from "../verification/runner.js";
 import { Worker } from "../worker/worker.js";
+import { ExecutionManager } from "../execution/manager.js";
 import {
-  ExecutionManager,
-  LocalExecutionDriver,
-} from "../execution/manager.js";
+  codexSandboxFor,
+  createExecutionDriver,
+  parseExecutionDriverMode,
+} from "../execution/driverSelection.js";
+import { GitService } from "../git/gitService.js";
+import { GitPublishService } from "../git/publishService.js";
 import {
   createRepositoryCommand,
   listRepositoriesCommand,
   showRepositoryCommand,
 } from "./commands/repositoryCommands.js";
+import {
+  exportConversationCommand,
+  listConversationsCommand,
+  pruneConversationsCommand,
+  showConversationCommand,
+} from "./commands/conversationCommands.js";
 import type { RepositoryCreateOptions } from "./commands/repositoryCommands.js";
 import {
   createTaskCommand,
@@ -168,6 +178,10 @@ repository
   .option("--network <mode>", "container network mode: none | restricted")
   .option("--allow <host>", "allowed egress host in restricted mode (repeatable)", collect, [])
   .option("--secret <name>", "secret NAME injected per run (repeatable)", collect, [])
+  .option(
+    "--git-push <mode>",
+    "allow the harness to commit+push this repo's ai/ branches on approval (deny|allow)",
+  )
   .option("--cpus <n>", "container CPU limit (e.g. 2 or 0.5)", parsePositiveNumber)
   .option("--memory-mb <n>", "container memory limit in MB", parsePositiveInt)
   .option("--pids-limit <n>", "container pids limit", parsePositiveInt)
@@ -209,6 +223,20 @@ repository
     await withStores(async ({ repositories }) => {
       const repo = await showRepositoryCommand(repositories, id);
       printRepository(repo);
+    });
+  });
+
+repository
+  .command("sync <id>")
+  .description("fetch + fast-forward the local base checkout (task branches are cut from it)")
+  .action(async (id: string) => {
+    await withStores(async ({ repositories }) => {
+      const repository = await repositories.findRepository(id);
+      const outcome = await new GitService().syncRepository(repository);
+      console.log(`${outcome.repositoryId} [${outcome.branch}] ${outcome.message}`);
+      if (outcome.skipped) {
+        process.exitCode = 1;
+      }
     });
   });
 
@@ -381,9 +409,21 @@ task
   .description("approve a REVIEW task -> DONE (human approval)")
   .option("--note <text>", "optional approval note")
   .action(async (id: string, options: { note?: string }) => {
-    await withStores(async ({ tasks, events }) => {
+    await withStores(async ({ tasks, runs, repositories, events }) => {
       const updated = await approveTaskCommand(tasks, id, options.note, events);
       console.log(`${updated.id} -> ${updated.status}`);
+      // Approval is the human boundary; the same commit+push runs here as in
+      // chat, so the two entry points cannot diverge.
+      const outcomes = await new GitPublishService({
+        tasks,
+        runs,
+        repositories,
+        git: new GitService(),
+        events,
+      }).publishTask(updated.id);
+      for (const outcome of outcomes) {
+        console.log(`${outcome.pushed ? "pushed" : "not-pushed"}: ${outcome.message}`);
+      }
     });
   });
 
@@ -395,6 +435,27 @@ task
     await withStores(async ({ tasks, runs, events }) => {
       const updated = await rejectTaskCommand(tasks, runs, id, options.feedback, events);
       console.log(`${updated.id} -> ${updated.status}`);
+    });
+  });
+
+task
+  .command("publish <id>")
+  .description("commit + push the ai/ branch of the task's latest succeeded run")
+  .action(async (id: string) => {
+    await withStores(async ({ tasks, runs, repositories, events }) => {
+      const outcomes = await new GitPublishService({
+        tasks,
+        runs,
+        repositories,
+        git: new GitService(),
+        events,
+      }).publishTask(id);
+      for (const outcome of outcomes) {
+        console.log(`${outcome.pushed ? "pushed" : "not-pushed"}: ${outcome.message}`);
+      }
+      if (!outcomes.some((outcome) => outcome.pushed)) {
+        process.exitCode = 1;
+      }
     });
   });
 
@@ -609,6 +670,93 @@ program
   });
 
 const event = program.command("event").description("inspect event history");
+const conversation = program
+  .command("conversation")
+  .description("read the chat history the bot keeps (also the model's context)");
+
+conversation
+  .command("list")
+  .description("list conversations with their message counts")
+  .option("--channel <name>", "only this channel (feishu, cli)")
+  .option("--limit <n>", "keep only the N most recently active", parsePositiveInt)
+  .action(async (options: { channel?: string; limit?: number }) => {
+    await withStores(async ({ conversations }) => {
+      const summaries = await listConversationsCommand(conversations, {
+        channel: options.channel,
+        limit: options.limit,
+      });
+      if (summaries.length === 0) {
+        console.log("No conversations found.");
+        return;
+      }
+      console.log("ID\tCHANNEL\tCHAT\tSUBJECT\tMESSAGES\tLAST");
+      for (const item of summaries) {
+        const subject = item.conversation.subjectType
+          ? `${item.conversation.subjectType}:${item.conversation.subjectId}`
+          : "-";
+        console.log(
+          `${item.conversation.id}\t${item.conversation.channel}\t` +
+            `${item.conversation.externalChatId}\t${subject}\t` +
+            `${item.messageCount}\t${item.lastMessageAt ?? item.conversation.updatedAt}`,
+        );
+      }
+    });
+  });
+
+conversation
+  .command("show <id>")
+  .description("print one conversation's transcript (internal id or chat id)")
+  .option("--limit <n>", "only the N most recent messages", parsePositiveInt)
+  .action(async (id: string, options: { limit?: number }) => {
+    await withStores(async ({ conversations }) => {
+      const { conversation: item, messages } = await showConversationCommand(
+        conversations,
+        id,
+        { limit: options.limit },
+      );
+      console.log(`conversation: ${item.id} (${item.channel}, ${item.externalChatId})`);
+      console.log(
+        `subject: ${item.subjectType ? `${item.subjectType}:${item.subjectId}` : "(none)"}`,
+      );
+      console.log(`messages: ${messages.length}`);
+      for (const message of messages) {
+        const who = message.direction === "INBOUND" ? `user:${message.senderId}` : "harness";
+        console.log(`\n[${message.createdAt}] ${who}`);
+        console.log(message.content);
+      }
+    });
+  });
+
+conversation
+  .command("export <id>")
+  .description("print one conversation as a markdown transcript (redirect to a file)")
+  .action(async (id: string) => {
+    await withStores(async ({ conversations }) => {
+      console.log(await exportConversationCommand(conversations, id));
+    });
+  });
+
+conversation
+  .command("prune")
+  .description("delete messages older than N days (dry run unless --execute)")
+  .requiredOption("--keep-days <n>", "keep messages newer than N days", parsePositiveInt)
+  .option("--execute", "actually delete (default: report only)")
+  .action(async (options: { keepDays: number; execute?: boolean }) => {
+    await withStores(async ({ conversations }) => {
+      const result = await pruneConversationsCommand(conversations, {
+        keepDays: options.keepDays,
+        execute: options.execute,
+      });
+      console.log(
+        `${result.executed ? "deleted" : "would delete"} ${result.deleted} message(s) ` +
+          `older than ${result.before} (keep-days=${result.keepDays})`,
+      );
+      if (!result.executed && result.deleted > 0) {
+        console.log("re-run with --execute to apply");
+      }
+    });
+  });
+
 event
   .command("list")
   .description("list recorded events (optionally filtered)")
@@ -654,7 +802,7 @@ program
       });
       const workspaceManager = new WorkspaceManager();
       const executionManager = new ExecutionManager({
-        driver: new LocalExecutionDriver(),
+        driver: createExecutionDriver(),
         executions: handle.executions,
         events: handle.events,
       });
@@ -663,7 +811,9 @@ program
         taskStore: handle.tasks,
         repositoryStore: handle.repositories,
         workspaceManager,
-        agentEngine: new CodexEngine(),
+        agentEngine: new CodexEngine({
+          sandbox: codexSandboxFor(parseExecutionDriverMode(process.env.AI_EXECUTION_DRIVER)),
+        }),
         verifier: new Verifier(),
         executionManager,
         eventStore: handle.events,
@@ -728,9 +878,11 @@ program
   .action(async (options: { once?: boolean; intervalMs?: number }) => {
     const handle = await openStores();
     const workspaceManager = new WorkspaceManager();
-    const engine = new CodexEngine();
+    const engine = new CodexEngine({
+      sandbox: codexSandboxFor(parseExecutionDriverMode(process.env.AI_EXECUTION_DRIVER)),
+    });
     const executionManager = new ExecutionManager({
-      driver: new LocalExecutionDriver(),
+      driver: createExecutionDriver(),
       executions: handle.executions,
       events: handle.events,
     });
@@ -815,6 +967,18 @@ program
     if (!stopping) {
       await handle.close();
     }
+  });
+
+program
+  .command("serve")
+  .description(
+    "run the Harness service: reconcile loop + scheduler/worker + Feishu bot (long connection)",
+  )
+  .action(async () => {
+    // Loaded lazily so every other CLI command keeps working without the
+    // Feishu/LLM dependencies being configured.
+    const { runHarnessService } = await import("../server/index.js");
+    await runHarnessService();
   });
 
 // ---------------------------------------------------------------------------
@@ -993,6 +1157,7 @@ type RepositoryCreateCliOptions = RepositoryCreateOptions & {
   network?: string;
   allow?: string[];
   secret?: string[];
+  gitPush?: string;
   cpus?: number;
   memoryMb?: number;
   pidsLimit?: number;
@@ -1010,6 +1175,7 @@ function buildExecutionProfileFromCliOptions(
     options.execImage ||
       options.execProfile ||
       options.network ||
+      options.gitPush ||
       options.cpus ||
       options.memoryMb ||
       options.pidsLimit ||
@@ -1034,7 +1200,17 @@ function buildExecutionProfileFromCliOptions(
       pidsLimit: options.pidsLimit,
     },
     secrets: options.secret ?? [],
+    policy: options.gitPush ? { gitPush: parseGitPush(options.gitPush) } : undefined,
   });
+}
+
+/** Pushing to the remote is opt-in per repository; anything else is denied. */
+function parseGitPush(value: string): "allow" | "deny" {
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "allow" || normalized === "deny") {
+    return normalized;
+  }
+  throw new Error(`invalid --git-push '${value}' (use allow|deny)`);
 }
 
 function normalizeProblemStatus(value: string): ProblemStatus {

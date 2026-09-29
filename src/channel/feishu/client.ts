@@ -15,6 +15,19 @@ export interface SendCardRequest {
   card: Record<string, unknown>;
 }
 
+export interface ReplyMessageRequest {
+  /** The message id being replied to (the user's message). */
+  messageId: string;
+  msgType: "text" | "interactive";
+  /** JSON string, as required by the Feishu open API. */
+  content: string;
+  /**
+   * `true` puts the answer into a topic thread on the replied message instead
+   * of the chat's main flow — what a group console wants.
+   */
+  replyInThread?: boolean;
+}
+
 export interface SendMessageResult {
   messageId: string;
   raw?: unknown;
@@ -24,6 +37,15 @@ export interface SendMessageResult {
 export interface FeishuClient {
   sendMessage(request: SendMessageRequest): Promise<SendMessageResult>;
   sendCard(request: SendCardRequest): Promise<SendMessageResult>;
+  /** Reply to a specific message, optionally inside a new thread. */
+  replyMessage(request: ReplyMessageRequest): Promise<SendMessageResult>;
+  /** The bot's own identity — used to tell "mentioned me" from "mentioned someone". */
+  getBotInfo(): Promise<BotInfo>;
+}
+
+export interface BotInfo {
+  openId: string;
+  name?: string;
 }
 
 export interface FeishuCredentials {
@@ -113,6 +135,56 @@ export class HttpFeishuClient implements FeishuClient {
     );
   }
 
+  async replyMessage(request: ReplyMessageRequest): Promise<SendMessageResult> {
+    const token = await this.tenantAccessToken();
+    const response = await this.request(
+      `${this.baseUrl}/open-apis/im/v1/messages/${encodeURIComponent(
+        request.messageId,
+      )}/reply`,
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json; charset=utf-8",
+          authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          msg_type: request.msgType,
+          content: request.content,
+          reply_in_thread: request.replyInThread === true,
+        }),
+      },
+    );
+    return parseMessageId(response.payload as ApiMessageResponse);
+  }
+
+  async getBotInfo(): Promise<BotInfo> {
+    const token = await this.tenantAccessToken();
+    const response = await this.request(`${this.baseUrl}/open-apis/bot/v3/info`, {
+      method: "GET",
+      headers: { authorization: `Bearer ${token}` },
+    });
+    const payload = response.payload as {
+      code?: number;
+      msg?: string;
+      bot?: { open_id?: string; app_name?: string };
+    };
+    if (typeof payload.code === "number" && payload.code !== 0) {
+      throw new FeishuError(
+        "api_error",
+        `feishu bot info failed ${payload.code}: ${payload.msg ?? "unknown"}`,
+        { retryable: false, details: payload },
+      );
+    }
+    const openId = payload.bot?.open_id;
+    if (!openId) {
+      throw new FeishuError("invalid_response", "feishu bot info has no open_id", {
+        retryable: false,
+        details: payload,
+      });
+    }
+    return { openId, name: payload.bot?.app_name };
+  }
+
   private async send(
     body: Record<string, unknown>,
     receiveIdType: FeishuReceiveIdType,
@@ -131,26 +203,7 @@ export class HttpFeishuClient implements FeishuClient {
         body: JSON.stringify(body),
       },
     );
-    const payload = response.payload as {
-      code?: number;
-      msg?: string;
-      data?: { message_id?: string };
-    };
-    if (typeof payload.code === "number" && payload.code !== 0) {
-      throw new FeishuError(
-        "api_error",
-        `feishu api error ${payload.code}: ${payload.msg ?? "unknown"}`,
-        { retryable: false, details: payload },
-      );
-    }
-    const messageId = payload.data?.message_id;
-    if (!messageId) {
-      throw new FeishuError("invalid_response", "feishu response has no message_id", {
-        retryable: false,
-        details: payload,
-      });
-    }
-    return { messageId, raw: payload };
+    return parseMessageId(response.payload as ApiMessageResponse);
   }
 
   private async tenantAccessToken(): Promise<string> {
@@ -244,4 +297,29 @@ export class HttpFeishuClient implements FeishuClient {
     }
     return { status: response.status, payload };
   }
+}
+
+interface ApiMessageResponse {
+  code?: number;
+  msg?: string;
+  data?: { message_id?: string };
+}
+
+/** Shared by send() and replyMessage(): both return the created message id. */
+function parseMessageId(payload: ApiMessageResponse): SendMessageResult {
+  if (typeof payload.code === "number" && payload.code !== 0) {
+    throw new FeishuError(
+      "api_error",
+      `feishu api error ${payload.code}: ${payload.msg ?? "unknown"}`,
+      { retryable: false, details: payload },
+    );
+  }
+  const messageId = payload.data?.message_id;
+  if (!messageId) {
+    throw new FeishuError("invalid_response", "feishu response has no message_id", {
+      retryable: false,
+      details: payload,
+    });
+  }
+  return { messageId, raw: payload };
 }

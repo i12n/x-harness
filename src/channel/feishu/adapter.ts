@@ -10,6 +10,8 @@ export interface FeishuAdapterOptions {
   receiveIdType?: FeishuReceiveIdType;
   /** Optional inbound wiring; webhook ingestion itself is TASK-1104. */
   onMessage?: IncomingHandler;
+  /** Called when a reply-in-thread had to degrade to a normal send. */
+  onThreadFallback?: (error: unknown) => void;
 }
 
 /**
@@ -23,12 +25,14 @@ export class FeishuAdapter implements Channel {
   private readonly defaultReceiveId: string | undefined;
   private readonly receiveIdType: FeishuReceiveIdType;
   private readonly handler: IncomingHandler | undefined;
+  private readonly onThreadFallback: ((error: unknown) => void) | undefined;
 
   constructor(options: FeishuAdapterOptions) {
     this.client = options.client;
     this.defaultReceiveId = options.defaultReceiveId;
     this.receiveIdType = options.receiveIdType ?? "chat_id";
     this.handler = options.onMessage;
+    this.onThreadFallback = options.onThreadFallback;
   }
 
   async send(message: OutgoingMessage): Promise<void> {
@@ -42,6 +46,28 @@ export class FeishuAdapter implements Channel {
       receiveId,
       receiveIdType: this.receiveIdType,
     });
+    const replyToMessageId =
+      typeof message.metadata?.replyToMessageId === "string"
+        ? message.metadata.replyToMessageId
+        : undefined;
+    const replyInThread = message.metadata?.replyInThread === true;
+    if (replyToMessageId) {
+      // Answering the triggering message keeps a busy group readable, and
+      // `reply_in_thread` puts the whole exchange into a topic.
+      try {
+        await this.client.replyMessage({
+          messageId: replyToMessageId,
+          msgType: payload.msgType === "interactive" ? "interactive" : "text",
+          content: payload.content,
+          replyInThread,
+        });
+        return;
+      } catch (error) {
+        // Threading is a presentation nicety: never lose the answer because a
+        // chat type rejects it. Degrade to a normal send and report.
+        this.onThreadFallback?.(error);
+      }
+    }
     if (payload.msgType === "interactive") {
       await this.client.sendCard({
         receiveId: payload.receiveId,

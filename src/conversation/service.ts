@@ -59,6 +59,15 @@ export class ConversationService {
     return this.store.findConversation(id);
   }
 
+  /** Lookup by platform ids (used to inherit context across a thread). */
+  async findByExternal(input: {
+    channel: string;
+    externalChatId: string;
+    externalThreadId?: string;
+  }): Promise<Conversation | undefined> {
+    return this.store.findConversationByExternal(input);
+  }
+
   /**
    * Idempotent inbound handling. The duplicate check happens BEFORE any other
    * side effect, so a retried webhook neither creates a second conversation

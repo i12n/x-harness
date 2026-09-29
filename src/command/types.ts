@@ -15,6 +15,20 @@ export const COMMAND_TYPES = [
   "spec.plan",
   "delivery.show",
   "delivery.release",
+  "config.show",
+  "config.set",
+  "config.setDirect",
+  "config.apply",
+  "access.grant",
+  "access.revoke",
+  "git.publish",
+  "conversation.show",
+  "repository.list",
+  "repository.show",
+  "task.list",
+  "run.list",
+  "problem.list",
+  "delivery.list",
 ] as const;
 
 export type CommandType = (typeof COMMAND_TYPES)[number];
@@ -76,6 +90,14 @@ export interface IntentResult {
   /** Unvalidated command shape produced by an IntentEngine. */
   command: unknown;
   confidence?: number;
+  /**
+   * Triage classification (TASK: intent triage). "query" = read-only question,
+   * "act" = action on existing work, "work" = new development work,
+   * "chat" = neither.
+   */
+  kind?: "query" | "act" | "work" | "chat";
+  /** Why the engine chose this — surfaced in the audit event. */
+  reason?: string;
 }
 
 export interface IntentEngine {
