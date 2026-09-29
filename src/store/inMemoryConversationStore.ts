@@ -140,4 +140,19 @@ export class InMemoryConversationStore implements ConversationStore {
     }
     return messages;
   }
+
+  async deleteMessagesBefore(
+    before: string,
+    options: { dryRun?: boolean } = {},
+  ): Promise<number> {
+    let removed = 0;
+    for (const [conversationId, messages] of this.messages) {
+      const keep = messages.filter((message) => message.createdAt >= before);
+      removed += messages.length - keep.length;
+      if (!options.dryRun) {
+        this.messages.set(conversationId, keep);
+      }
+    }
+    return removed;
+  }
 }

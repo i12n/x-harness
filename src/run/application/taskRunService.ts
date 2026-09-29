@@ -21,12 +21,20 @@ export interface TaskRunServiceDeps {
   repositories?: RepositoryStore;
   /** Optional: adds the dependency/runnable view to task descriptions. */
   dependencies?: TaskDependencyReadSource;
+  /**
+   * "execute" (default) runs the Task in-process — the CLI behavior.
+   * "enqueue" only creates the QUEUED Run and returns immediately; a Loop
+   * (Scheduler/Worker daemon) executes it. Chat deployments use "enqueue" so a
+   * conversation is never blocked for the whole run.
+   */
+  runMode?: "execute" | "enqueue";
 }
 
 export interface TaskRunOutcome {
   runId: string;
   run: Run;
-  outcome: ExecuteRunOutcome;
+  /** Absent in "enqueue" mode: the Run is still QUEUED. */
+  outcome?: ExecuteRunOutcome;
 }
 
 export interface TaskDescription {
@@ -121,6 +129,9 @@ export class TaskRunService {
       agent: "codex",
       engine: "codex",
     });
+    if (this.deps.runMode === "enqueue") {
+      return { runId: run.id, run };
+    }
     const outcome = await this.deps.worker.executeRun(run.id);
     return { runId: run.id, run: outcome.run, outcome };
   }

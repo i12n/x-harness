@@ -55,4 +55,13 @@ export interface ConversationStore {
     conversationId: string,
     options?: MessageListOptions,
   ): Promise<ConversationMessage[]>;
+
+  /**
+   * Retention: delete messages created strictly before `before`.
+   *
+   * Explicit and never automatic — the transcript is the only record of who
+   * asked for what, so deleting it is an operator decision. `dryRun` returns
+   * the count that *would* be deleted without touching anything.
+   */
+  deleteMessagesBefore(before: string, options?: { dryRun?: boolean }): Promise<number>;
 }

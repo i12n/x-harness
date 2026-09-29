@@ -7,6 +7,16 @@ export interface CodexEngineOptions {
   executable?: string;
   /** Sandbox mode; defaults to $AI_CODEX_SANDBOX or `workspace-write`. */
   sandbox?: string;
+  /**
+   * Codex config overrides passed as `-c key=value`, e.g.
+   * `{"model_providers.deepseek.base_url": "https://api.deepseek.com"}`.
+   *
+   * Needed inside an execution container: the image is generic and never
+   * carries a provider config or credentials, so the deployment supplies the
+   * provider wiring per Run (the key itself travels as a SecretStore secret).
+   * Defaults to $AI_CODEX_CONFIG.
+   */
+  configOverrides?: Record<string, string>;
   /** Override how spawn args are built (used by tests with fake engines). */
   spawnArgs?: (context: AgentContext) => string[];
   /** Extra environment variables merged over process.env. */
@@ -16,6 +26,62 @@ export interface CodexEngineOptions {
 const FORCE_KILL_DELAY_MS = 3_000;
 
 /**
+ * Parses `AI_CODEX_CONFIG` — a JSON object of Codex config overrides, or a
+ * comma-separated `key=value` list for simple cases.
+ */
+export function parseCodexConfig(value: string | undefined): Record<string, string> {
+  const raw = value?.trim();
+  if (!raw) {
+    return {};
+  }
+  if (raw.startsWith("{") || raw.startsWith("[")) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch (error) {
+      throw new AgentExecutionError(
+        `AI_CODEX_CONFIG is not valid JSON: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      throw new AgentExecutionError("AI_CODEX_CONFIG must be an object of key → value");
+    }
+    const result: Record<string, string> = {};
+    for (const [key, entry] of Object.entries(parsed as Record<string, unknown>)) {
+      if (typeof entry === "string" || typeof entry === "number" || typeof entry === "boolean") {
+        result[key.trim()] = String(entry);
+      }
+    }
+    return result;
+  }
+  const result: Record<string, string> = {};
+  for (const entry of raw.split(",")) {
+    const separator = entry.indexOf("=");
+    if (separator <= 0) {
+      throw new AgentExecutionError(
+        `invalid AI_CODEX_CONFIG entry '${entry.trim()}' (expected key=value)`,
+      );
+    }
+    result[entry.slice(0, separator).trim()] = entry.slice(separator + 1).trim();
+  }
+  return result;
+}
+
+/** `key=value` pairs as Codex `-c` arguments (TOML-quoted strings). */
+export function codexConfigArgs(overrides: Record<string, string>): string[] {
+  const args: string[] = [];
+  for (const [key, value] of Object.entries(overrides)) {
+    if (!key) {
+      continue;
+    }
+    args.push("-c", `${key}=${JSON.stringify(value)}`);
+  }
+  return args;
+}
+
+/**
  * Codex Engine (plan section 十五/十六): spawns `codex exec` inside the
  * run workspace. Process exit only means "agent execution finished" — it does
  * NOT mean the task completed (verification decides that, Phase 5+).
@@ -23,6 +89,7 @@ const FORCE_KILL_DELAY_MS = 3_000;
 export class CodexEngine implements AgentEngine {
   private readonly executable: string;
   private readonly sandbox: string;
+  private readonly configArgs: string[];
   private readonly spawnArgs: (context: AgentContext) => string[];
   private readonly env: Record<string, string>;
   private readonly active = new Map<string, ActiveChild>();
@@ -32,10 +99,14 @@ export class CodexEngine implements AgentEngine {
     this.executable =
       options.executable ?? process.env.AI_CODEX_BIN ?? "codex";
     this.sandbox = options.sandbox ?? process.env.AI_CODEX_SANDBOX ?? "workspace-write";
+    this.configArgs = codexConfigArgs(
+      options.configOverrides ?? parseCodexConfig(process.env.AI_CODEX_CONFIG),
+    );
     this.spawnArgs =
       options.spawnArgs ??
       ((_context: AgentContext) => [
         "exec",
+        ...this.configArgs,
         "--sandbox",
         this.sandbox,
         "--json",

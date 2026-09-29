@@ -53,11 +53,21 @@ export function parseFeishuEvent(
     return { kind: "ignored", reason: "malformed message event", eventType };
   }
 
-  const text = extractText(message.content);
+  const mentions = extractMentions(message.mentions);
+  // Feishu puts a placeholder (`@_user_1`) in the text for each mention; the
+  // command parser should see what the human actually typed.
+  const text = stripMentionPlaceholders(extractText(message.content), mentions);
   const senderId =
     firstString(senderIds?.open_id, senderIds?.union_id, senderIds?.user_id) ?? "";
-  const threadId =
-    firstString(message.thread_id, message.root_id, message.parent_id) ?? undefined;
+  // Only `thread_id` starts a new conversation.
+  //
+  // Feishu sets `parent_id` when a message *quotes* another one and `root_id`
+  // when it replies inside a topic. Treating those as threads split one chat
+  // into several conversations — which fragments the history and drops the
+  // conversation's subject binding (observed in production: a quoted "确认一下"
+  // landed in a fresh conversation with no context, so the bot could not answer).
+  // A chat console wants one conversation per chat, plus real topic threads.
+  const threadId = firstString(message.thread_id) ?? undefined;
   const createTime = firstString(message.create_time, header?.create_time);
 
   return {
@@ -75,12 +85,53 @@ export function parseFeishuEvent(
         chatId,
         chatType: typeof message.chat_type === "string" ? message.chat_type : undefined,
         threadId,
+        mentions,
         messageType,
         eventType,
         eventId: typeof header?.event_id === "string" ? header.event_id : undefined,
       },
     },
   };
+}
+
+export interface FeishuMention {
+  /** Placeholder used inside the message text, e.g. `@_user_1`. */
+  key?: string;
+  openId?: string;
+  name?: string;
+}
+
+function extractMentions(raw: unknown): FeishuMention[] {
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+  const mentions: FeishuMention[] = [];
+  for (const entry of raw) {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+      continue;
+    }
+    const record = entry as Record<string, unknown>;
+    const id = record.id;
+    mentions.push({
+      key: typeof record.key === "string" ? record.key : undefined,
+      openId:
+        id && typeof id === "object" && !Array.isArray(id)
+          ? firstString((id as Record<string, unknown>).open_id)
+          : undefined,
+      name: typeof record.name === "string" ? record.name : undefined,
+    });
+  }
+  return mentions;
+}
+
+function stripMentionPlaceholders(text: string, mentions: FeishuMention[]): string {
+  let result = text;
+  for (const mention of mentions) {
+    if (mention.key) {
+      result = result.split(mention.key).join(" ");
+    }
+  }
+  return result.replace(/\s+/g, " ").trim();
 }
 
 function extractText(content: unknown): string {

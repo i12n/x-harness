@@ -71,7 +71,8 @@ export class ProblemAnalyzer implements ProblemAnalyzerLike {
   }
 }
 
-function normalizeAnalysis(raw: unknown, fallbackSummary: string): ProblemAnalysisResult {
+/** Exported so non-Codex analyzers reuse the exact same normalization rules. */
+export function normalizeAnalysis(raw: unknown, fallbackSummary: string): ProblemAnalysisResult {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
     throw new HarnessError("problem analyzer JSON is not an object");
   }
@@ -132,7 +133,8 @@ function normalizeAnalysis(raw: unknown, fallbackSummary: string): ProblemAnalys
   return { summary, needsInput, uncertainties, clarifications };
 }
 
-function composeAnalyzerPrompt(
+/** Exported so non-Codex analyzers reuse the exact same prompt contract. */
+export function composeAnalyzerPrompt(
   problem: Problem,
   repository: Repository | undefined,
   history: Clarification[],
@@ -174,6 +176,9 @@ function composeAnalyzerPrompt(
       "constraints). Never ask for information the agent can discover itself.",
       "Prefer multiple-choice options over free text; at most 3 clarifications;",
       "one decision per clarification.",
+      "Write the summary, every question and every option label in the SAME",
+      "LANGUAGE as the problem statement (a Chinese problem gets Chinese",
+      "questions) — the user reads them in a chat client.",
       "",
       "Return ONLY a JSON object (no prose, no markdown fences) with shape:",
       '{"summary": string, "needsInput": boolean, "uncertainties": string[],',

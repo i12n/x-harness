@@ -1,0 +1,29 @@
+[Unit]
+Description=AI Coding Harness (reconcile loop + Feishu bot)
+Documentation=file:///srv/ai-harness/docs/deployment-feishu.md
+After=network-online.target docker.service
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=simple
+WorkingDirectory=/srv/ai-harness
+EnvironmentFile=/srv/ai-harness/deploy/ai-harness.env
+ExecStart=/usr/bin/node /srv/ai-harness/dist/cli/index.js serve
+# The harness only ever fails fast on configuration; every runtime error is
+# handled inside the loop, so a restart is the right recovery for a crash.
+Restart=always
+RestartSec=5
+TimeoutStopSec=30
+KillSignal=SIGTERM
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=ai-harness
+
+# The harness must reach the Docker socket (it creates per-Run containers) and
+# write run worktrees under the workspace root, so it keeps those privileges.
+NoNewPrivileges=false
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

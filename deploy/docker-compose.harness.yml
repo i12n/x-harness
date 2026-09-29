@@ -1,0 +1,27 @@
+# Dedicated PostgreSQL for the harness control plane.
+#
+# It is deliberately separate from any other stack on the box (the xmusic
+# database is a different container/volume) and binds to localhost only.
+#
+#   docker compose -f deploy/docker-compose.harness.yml up -d
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: ai-harness-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ai
+      POSTGRES_PASSWORD: ai
+      POSTGRES_DB: ai_harness
+    ports:
+      - "127.0.0.1:55432:5432"
+    volumes:
+      - ai_harness_pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ai -d ai_harness"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  ai_harness_pg:

@@ -66,8 +66,10 @@ export function createTaskRunCommandHandlers(
         return {
           runId: outcome.runId,
           run: outcome.run,
-          targets: outcome.outcome.targets,
-          workspaces: outcome.outcome.workspaces,
+          // "enqueue" mode returns no outcome: the Run is still QUEUED and a
+          // Loop/Worker reports the result later.
+          targets: outcome.outcome?.targets ?? [],
+          workspaces: outcome.outcome?.workspaces ?? [],
         };
       } catch (error) {
         if (error instanceof DuplicateActiveRunError) {

@@ -251,6 +251,24 @@ export class PostgresConversationStore implements ConversationStore {
     return rows.map(rowToMessage);
   }
 
+  async deleteMessagesBefore(
+    before: string,
+    options: { dryRun?: boolean } = {},
+  ): Promise<number> {
+    if (options.dryRun) {
+      const { rows } = await this.pool.query<{ count: string }>(
+        "SELECT count(*)::text AS count FROM conversation_messages WHERE created_at < $1",
+        [before],
+      );
+      return Number(rows[0]?.count ?? 0);
+    }
+    const { rowCount } = await this.pool.query(
+      "DELETE FROM conversation_messages WHERE created_at < $1",
+      [before],
+    );
+    return rowCount ?? 0;
+  }
+
   private async touchConversation(id: string, updatedAt: string): Promise<void> {
     await this.pool.query(
       "UPDATE conversations SET updated_at = $1 WHERE id = $2",
