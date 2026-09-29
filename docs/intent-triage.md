@@ -93,6 +93,7 @@
 | 23 | 这个改一下（无对象、无上下文） | 低置信 | 确认话术 §4.3 |
 | 24 | 你好 / 你是谁 | C | 能力说明 + "要开工请说" |
 | 25 | 把 App Secret 设成 xxx（散文式） | A（拦截） | 格式提示，不进模型 |
+| 26 | 拉取 git@github.com:i12n/x-music.git 仓库 | A | `repository.create`（admin；确定性路由，消息自带 URL） |
 
 ### 4.3 低置信度确认话术
 
@@ -152,6 +153,7 @@ IncomingMessage
 | 缺口 | 现状 | 处理 |
 | --- | --- | --- |
 | 仓库 / 任务列表 | 已补 `repository.list`、`task.list` | 已完成 |
+| 注册仓库（拉代码） | 原先只有 CLI，群里说「拉取 <url> 仓库」被当成闲聊 | 新增 `repository.create`（admin；克隆 + 登记，见 deployment-feishu §5） |
 | 失败原因 | `run.show` 只渲染状态与 check 输出 | 把 `latestFailure` 事实接进渲染（数据已有） |
 | 最近发生了什么 | 无 | 新增 `run.list {limit?}` |
 | 当前有哪些问题 | 无 | 新增 `problem.list {status?}` |

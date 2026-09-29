@@ -55,6 +55,13 @@ const QUERY_COMMANDS = new Set<CommandType>([
  */
 const RULES: { pattern: RegExp; build: (match: RegExpExecArray) => unknown }[] = [
   {
+    // Registering a repository is a single, unambiguous action: the message
+    // carries the clone URL itself, so no model call (and no guessing) needed.
+    pattern:
+      /^\s*(?:拉取|克隆|添加|接入|注册|clone|add)\s+([A-Za-z][A-Za-z0-9+.-]*:\/\/\S+|[A-Za-z0-9._-]+@[A-Za-z0-9.-]+:\S+)\s*(?:仓库|项目|代码库|repo(?:sitory)?)?\s*$/i,
+    build: (match) => ({ type: "repository.create", payload: { url: match[1] } }),
+  },
+  {
     pattern: /^\s*(?:运行|跑|执行|开始|run|start)\s+(task-[A-Za-z0-9_-]+)\s*$/i,
     build: (match) => ({ type: "task.run", payload: { taskId: match[1] } }),
   },

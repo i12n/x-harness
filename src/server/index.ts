@@ -18,6 +18,10 @@ import { createHistoryCommandHandlers } from "../command/handlers/history.js";
 import { createChatHistoryPort } from "./deployment/chatHistoryPort.js";
 import { createRepositoryCommandHandlers } from "../command/handlers/repository.js";
 import { createRepositoryQueryPort } from "./deployment/repositoryPort.js";
+import {
+  inferReposDir,
+  RepositoryRegistrationService,
+} from "../repository/application/register.js";
 import { createTaskListCommandHandlers } from "../command/handlers/taskList.js";
 import { createTaskQueryPort } from "./deployment/taskQueryPort.js";
 import { createQueryCommandHandlers } from "../command/handlers/queries.js";
@@ -203,11 +207,12 @@ export class HarnessRuntime {
       runs: stores.runs,
       events: stores.events,
     });
+    const git = new GitService();
     const gitPublish = new GitPublishService({
       tasks: stores.tasks,
       runs: stores.runs,
       repositories: stores.repositories,
-      git: new GitService(),
+      git,
       events: stores.events,
     });
     const runs = new RunService({ runs: stores.runs, tasks: stores.tasks, events: stores.events });
@@ -244,6 +249,18 @@ export class HarnessRuntime {
       runMode: "enqueue",
     });
 
+    // Chat registration clones onto the host, next to the repositories that
+    // are already registered unless AI_REPOS_DIR says otherwise.
+    const reposDir =
+      config.reposDir ??
+      inferReposDir(await stores.repositories.listRepositories()) ??
+      resolve(homedir(), "ai-repos");
+    const registration = new RepositoryRegistrationService({
+      repositories: stores.repositories,
+      git,
+      reposDir,
+    });
+
     const dispatcher = new CommandDispatcher({
       handlers: {
         ...createProblemCommandHandlers({ problems, conversations }),
@@ -268,6 +285,7 @@ export class HarnessRuntime {
         }),
         ...createRepositoryCommandHandlers({
           repositories: createRepositoryQueryPort({ repositories: stores.repositories }),
+          registration,
         }),
         ...createTaskListCommandHandlers({
           tasks: createTaskQueryPort({

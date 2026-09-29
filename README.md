@@ -211,6 +211,7 @@ journalctl -u ai-harness -f
 把最大并发改成 1                   任意非密钥项
 设置 FEISHU_APP_SECRET hydU…      密钥：确定性格式，不经过模型、不入库
 授权 ou_xxx 为 developer          白名单
+拉取 git@github.com:i12n/x-music.git 仓库   注册并克隆仓库（admin）
 重启服务                          使改动生效
 ```
 
@@ -221,7 +222,9 @@ journalctl -u ai-harness -f
 配置**只在聊天里改**（没有 Web 控制台）：`查看配置`、`把最大并发改成 1`、
 `授权 ou_xxx 为 developer`、`设置 FEISHU_APP_SECRET …`、`重启服务`。
 密钥走确定性路径，不经过模型、不写入会话记录。查询类还有 `当前有哪些仓库` /
-`现在有几个任务` / `最近跑了什么` / `有哪些问题` / `聊天记录`。判定规则
+`现在有几个任务` / `最近跑了什么` / `有哪些问题` / `聊天记录`；注册新仓库
+（admin）直接说 `拉取 <git-url> 仓库`，会克隆到 `AI_REPOS_DIR` 并登记执行档案。
+判定规则
 （什么该建开发任务、什么只是查询，以及拿不准时先确认）见
 [docs/intent-triage.md](docs/intent-triage.md)。
 

@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -293,5 +293,57 @@ describe("GitPublishService", () => {
     const outcomes = await service.publishTask(task.id);
     expect(outcomes[0]!.skipped).toBe("no_workspace");
     expect(outcomes[0]!.pushed).toBe(false);
+  });
+});
+
+describe("GitService.cloneRepository", () => {
+  it("clones a fresh checkout from the remote", async () => {
+    const dest = join(dir, "checkouts", "x-music");
+
+    const outcome = await new GitService().cloneRepository({
+      url: `file://${origin}`,
+      path: dest,
+    });
+
+    expect(outcome.cloned).toBe(true);
+    expect(outcome.path).toBe(dest);
+    expect(outcome.branch).toBe("main");
+    expect(outcome.head).toMatch(/^[0-9a-f]{40}$/);
+    expect(existsSync(join(dest, "app.txt"))).toBe(true);
+    expect(git(["remote", "get-url", "origin"], dest).trim()).toBe(`file://${origin}`);
+  });
+
+  it("is idempotent: an existing checkout of the same origin is kept", async () => {
+    const dest = join(dir, "again");
+    const service = new GitService();
+    await service.cloneRepository({ url: `file://${origin}`, path: dest });
+    const head = git(["rev-parse", "HEAD"], dest).trim();
+
+    const outcome = await service.cloneRepository({ url: `file://${origin}`, path: dest });
+
+    expect(outcome.cloned).toBe(false);
+    expect(outcome.head).toBe(head);
+  });
+
+  it("refuses a path that already holds a different origin", async () => {
+    const other = join(dir, "other.git");
+    execFileSync("git", ["init", "--bare", "-b", "main", other]);
+    const dest = join(dir, "taken");
+    await new GitService().cloneRepository({ url: `file://${origin}`, path: dest });
+
+    await expect(
+      new GitService().cloneRepository({ url: `file://${other}`, path: dest }),
+    ).rejects.toThrow(/origin/);
+  });
+
+  it("refuses to clone into a non-empty non-repository directory", async () => {
+    const dest = join(dir, "dirty");
+    mkdirSync(dest, { recursive: true });
+    writeFileSync(join(dest, "keep.txt"), "mine\n");
+
+    await expect(
+      new GitService().cloneRepository({ url: `file://${origin}`, path: dest }),
+    ).rejects.toThrow(/拒绝覆盖/);
+    expect(existsSync(join(dest, "keep.txt"))).toBe(true);
   });
 });

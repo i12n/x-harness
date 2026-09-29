@@ -76,6 +76,7 @@ const MATRIX: { text: string; kind: IntentKind; engine?: IntentResult }[] = [
   },
   { text: "重启服务", kind: "act", engine: cmd("config.apply", {}, "act", 0.9) },
   { text: "推送 task-3", kind: "act" },
+  { text: "拉取 git@github.com:i12n/x-music.git 仓库", kind: "act" },
   // New work.
   {
     text: "首页在没有数据时没有任何提示",
@@ -135,6 +136,26 @@ describe("deterministic rules", () => {
     expect(decision.stage).toBe("rule");
     expect(decision.kind).toBe("act");
     expect(decision.command).toMatchObject({ type: "task.run", payload: { taskId: "task-abc123" } });
+    expect(engine.calls).toBe(0);
+  });
+
+  it("routes 「拉取 <url> 仓库」 to repository.create without the model", async () => {
+    const engine = new StubEngine({ command: undefined });
+    const triage = createIntentTriage({ engine });
+
+    const scp = await triage.classify(input("拉取 git@github.com:i12n/x-music.git 仓库"));
+    expect(scp.stage).toBe("rule");
+    expect(scp.kind).toBe("act");
+    expect(scp.command).toMatchObject({
+      type: "repository.create",
+      payload: { url: "git@github.com:i12n/x-music.git" },
+    });
+
+    const https = await triage.classify(input("注册 https://github.com/i12n/x-login.git"));
+    expect(https.command).toMatchObject({
+      type: "repository.create",
+      payload: { url: "https://github.com/i12n/x-login.git" },
+    });
     expect(engine.calls).toBe(0);
   });
 

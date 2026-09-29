@@ -141,6 +141,29 @@ export const COMMAND_SCHEMAS: Record<CommandType, CommandSchema> = {
     fields: { limit: { type: "number" } },
     roles: ADMIN_ONLY,
   },
+  // Registering a repository clones code onto the host and fixes the
+  // execution profile (image, network, secrets) later runs inherit, so it
+  // sits with the other ops actions: admin only, never guests/developers.
+  "repository.create": {
+    fields: {
+      url: { type: "string", required: true },
+      id: { type: "string" },
+      name: { type: "string" },
+      defaultBranch: { type: "string" },
+      /** Verification commands, one per line. */
+      verify: { type: "string" },
+      execImage: { type: "string" },
+      /** "none" | "restricted"; restricted implies an egress allow-list. */
+      network: { type: "string" },
+      /** Allowed egress hosts, one per line (used when network=restricted). */
+      allow: { type: "string" },
+      /** Secret *names* injected per run, one per line (values stay on host). */
+      secret: { type: "string" },
+      /** "allow" | "deny" (default deny): may approval push this repo? */
+      gitPush: { type: "string" },
+    },
+    roles: ADMIN_ONLY,
+  },
   // Read-only repository metadata; the same "ask what exists" class as
   // task.show / spec.show, so guests may look too.
   "repository.list": {

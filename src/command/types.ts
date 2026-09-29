@@ -23,6 +23,7 @@ export const COMMAND_TYPES = [
   "access.revoke",
   "git.publish",
   "conversation.show",
+  "repository.create",
   "repository.list",
   "repository.show",
   "task.list",

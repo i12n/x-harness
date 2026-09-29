@@ -98,6 +98,8 @@ describe("LlmIntentEngine", () => {
       "review.approve",
       "spec.plan",
       "delivery.release",
+      "repository.create",
+      "repository.list",
     ]) {
       expect(prompt).toContain(type);
     }

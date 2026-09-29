@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
-import { resolve } from "node:path";
+import { mkdir, readdir, stat } from "node:fs/promises";
+import { dirname, resolve } from "node:path";
 import { promisify } from "node:util";
 import type { Repository } from "../domain/repository.js";
 import { HarnessError } from "../errors.js";
@@ -35,6 +36,16 @@ export interface SyncOutcome {
   updated: boolean;
   /** Set when the sync was intentionally not performed. */
   skipped?: "dirty_worktree" | "not_on_default_branch" | "no_remote";
+  message: string;
+}
+
+export interface CloneOutcome {
+  url: string;
+  path: string;
+  branch: string;
+  head: string;
+  /** true when this call created the checkout; false when it already existed. */
+  cloned: boolean;
   message: string;
 }
 
@@ -81,6 +92,64 @@ export class GitService {
       options.authorEmail ?? process.env.AI_GIT_AUTHOR_EMAIL ?? "ai-harness@localhost";
     this.pushPrefix = options.pushPrefix ?? process.env.AI_GIT_PUSH_PREFIX ?? "ai/";
     this.timeoutMs = options.timeoutMs ?? 120_000;
+  }
+
+  /**
+   * Create the base checkout a repository's worktrees are cut from.
+   *
+   * Idempotent by design: a path that already holds the *same* origin is
+   * accepted as-is (the ops person may have cloned it), and a path holding
+   * anything else is refused instead of overwritten.
+   */
+  async cloneRepository(input: {
+    url: string;
+    path: string;
+    defaultBranch?: string;
+  }): Promise<CloneOutcome> {
+    const url = input.url.trim();
+    const path = input.path.trim();
+
+    const existingRemote = await this.tryRun(["remote", "get-url", "origin"], path);
+    if (existingRemote !== undefined) {
+      const remote = existingRemote.trim();
+      if (remote !== url) {
+        throw new GitError(
+          "remote_mismatch",
+          `${path} 已存在，但 origin 是 ${remote}，不是 ${url}`,
+        );
+      }
+      const branch = (await this.run(["rev-parse", "--abbrev-ref", "HEAD"], path)).trim();
+      const head = (await this.run(["rev-parse", "HEAD"], path)).trim();
+      return {
+        url,
+        path,
+        branch,
+        head,
+        cloned: false,
+        message: `${path} 已是 ${url} 的检出，未重复克隆`,
+      };
+    }
+
+    if (await pathHasEntries(path)) {
+      throw new GitError("path_not_empty", `${path} 已存在且不是 ${url} 的检出，拒绝覆盖`);
+    }
+
+    await mkdir(dirname(path), { recursive: true });
+    const args = input.defaultBranch?.trim()
+      ? ["clone", "--branch", input.defaultBranch.trim(), "--", url, path]
+      : ["clone", "--", url, path];
+    await this.run(args, dirname(path));
+
+    const branch = (await this.run(["rev-parse", "--abbrev-ref", "HEAD"], path)).trim();
+    const head = (await this.run(["rev-parse", "HEAD"], path)).trim();
+    return {
+      url,
+      path,
+      branch,
+      head,
+      cloned: true,
+      message: `已克隆 ${url} → ${path} (${branch} ${head.slice(0, 8)})`,
+    };
   }
 
   /**
@@ -329,6 +398,20 @@ export class GitService {
     } catch {
       return undefined;
     }
+  }
+}
+
+/** Whether a path exists and already holds anything (an empty dir is fine). */
+async function pathHasEntries(path: string): Promise<boolean> {
+  try {
+    if (!(await stat(path)).isDirectory()) {
+      return true;
+    }
+    return (await readdir(path)).length > 0;
+  } catch {
+    // Missing path (or unreadable): treated as "nothing there" so clone can
+    // create it; a real permission problem surfaces from git clone instead.
+    return false;
   }
 }
 

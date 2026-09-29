@@ -98,6 +98,7 @@ deploy/install.sh                # 建库 + 迁移 + 安装并启动 systemd 单
 | --- | --- | --- |
 | `查看配置` / `谁有权限` | `config.show` | 列出已设置项；密钥只显示「已设置」 |
 | `有哪些仓库` / `看看 repo-demo 的配置` | `repository.list` / `repository.show` | 仓库与执行档案 |
+| `拉取 git@github.com:i12n/x-music.git 仓库` | `repository.create` | 克隆并注册仓库，**admin only**（见 §5） |
 | `现在有几个任务` / `有哪些在做的任务` | `task.list` | 按状态分组的任务 |
 | `最近跑了什么` / `为什么失败了` | `run.list` | 最近运行与失败摘要 |
 | `有哪些问题` | `problem.list` | 问题与待回答数 |
@@ -254,6 +255,14 @@ open_id 回给聊天**：
 ## 5. 注册要被开发的项目
 
 Harness 只对“已注册仓库”开工：本地 git 检出 + 验证命令 + 执行镜像。
+
+**方式 A：聊天里注册（admin）。** 说 `拉取 <git-url> 仓库` 即可；机器人会
+`git clone` 到 `AI_REPOS_DIR`（默认取已注册仓库所在目录），然后登记执行档案。
+可选的补充信息直接跟在后面：`用 node22 镜像，验证 npm test，允许
+registry.npmjs.org`。同一地址重复说不会重复克隆；只允许
+`https/ssh/git/file` 或 `user@host:path` 这些传输。
+
+**方式 B：在真机上用 CLI。** 想控制镜像、网络、资源、密钥、推送开关时用这条：
 
 ```bash
 cd /srv/ai-harness

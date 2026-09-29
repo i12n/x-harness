@@ -48,6 +48,11 @@ export interface ServerConfig {
   access: AccessConfig;
   /** Repository used when the user does not name one. */
   defaultRepositoryId?: string;
+  /**
+   * Host directory chat registrations clone into. Unset falls back to the
+   * parent of the repositories already registered (see `inferReposDir`).
+   */
+  reposDir?: string;
   loopIntervalMs: number;
   maxConcurrency: number;
   executionDriver: "local" | "docker";
@@ -97,6 +102,7 @@ export function loadServerConfig(env: EnvLike = process.env): ServerConfig {
       defaultRole: parseRole(env.FEISHU_DEFAULT_ROLE, "developer"),
     },
     defaultRepositoryId: optional(env, "AI_DEFAULT_REPOSITORY_ID"),
+    reposDir: optional(env, "AI_REPOS_DIR"),
     loopIntervalMs: positiveInt(
       env.AI_LOOP_INTERVAL_MS,
       DEFAULT_LOOP_INTERVAL_MS,
