@@ -44,9 +44,11 @@ set -a; . deploy/ai-harness.env; set +a
 node scripts/migrate.mjs
 if [ -z "\${FEISHU_APP_ID:-}" ]; then
   echo "FEISHU_APP_ID is empty — credentials not configured yet, skipping restart"
-# `systemctl cat` instead of `list-unit-files | grep -q`: under `set -o pipefail`
-# an early-exiting grep sends SIGPIPE to systemctl, so an installed unit was
-# flakily reported as missing and the restart got skipped.
+# systemctl cat instead of piping list-unit-files into grep: under
+# set -o pipefail an early-exiting grep sends SIGPIPE to systemctl, so an
+# installed unit was flakily reported as missing and the restart got skipped.
+# (No backticks here — this heredoc is unquoted, so they would be command
+# substitution on the deploying machine.)
 elif systemctl cat ai-harness.service >/dev/null 2>&1; then
   systemctl restart ai-harness
   sleep 2
