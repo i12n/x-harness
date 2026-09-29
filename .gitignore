@@ -12,6 +12,9 @@
 !.env.example
 deploy/ai-harness.env
 
+# Local deployment facts (real host, addresses, account ids) — never committed.
+docs/private/
+
 # Node / TypeScript
 node_modules/
 dist/

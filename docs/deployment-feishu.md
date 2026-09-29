@@ -33,6 +33,11 @@
 | 代理 | `/root/.codex/config.toml`（provider=deepseek，`env_key=DEEPSEEK_API_KEY`） |
 | 服务单元 | `/etc/systemd/system/ai-harness.service` |
 
+> **关于占位符**：本文只写 `<部署主机>` / `<验收主机>` 这类占位符。真实主机地址、
+> 账号 open_id、App ID 等集中记录在 **`docs/private/deployment-local.md`**——
+> 那个目录被 `.gitignore` 忽略，不会进版本库。判断标准：能唯一指向一台真实
+> 机器或一个真实账号的值放本地文档，协议、路径形状、配置项名字放这里。
+
 **不影响同一台机器上的其它服务**：不新增对外端口、不改 Caddy、不共用
 xmusic 的数据库与 volume。飞书事件走 WebSocket 长连接，出站即可。
 

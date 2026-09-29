@@ -216,6 +216,7 @@ journalctl -u ai-harness -f
 
 完整步骤、配置项清单、授权白名单、注册被开发仓库与验收记录见
 [docs/deployment-feishu.md](docs/deployment-feishu.md)。
+真实部署主机与账号标识**不在仓库里**，见本地未提交文档 `docs/private/deployment-local.md`。
 
 配置**只在聊天里改**（没有 Web 控制台）：`查看配置`、`把最大并发改成 1`、
 `授权 ou_xxx 为 developer`、`设置 FEISHU_APP_SECRET …`、`重启服务`。
