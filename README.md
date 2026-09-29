@@ -191,6 +191,43 @@ run workspace. Override the binary with `AI_CODEX_BIN`, the sandbox with
 `DATABASE_URL` overrides `config/config.yaml`; `AI_STORAGE=memory` bypasses the
 database entirely.
 
+## 部署 / 飞书机器人
+
+`ai serve` 常驻进程 = 控制面（飞书长连接 → Conversation → Intent → Command）
++ 执行面（Scheduler / Worker / per-Run 容器 / Codex / 验证）。
+
+```bash
+cp deploy/ai-harness.env.example deploy/ai-harness.env   # 填凭证
+deploy/deploy.sh          # 本机：typecheck + test + build + rsync + migrate
+deploy/install.sh         # 真机：独立 PostgreSQL + 迁移 + systemd 单元
+journalctl -u ai-harness -f
+```
+
+飞书侧走**长连接**（无需公网回调/域名/端口）；执行侧 Docker 驱动下容器即隔离
+边界。**没有 Web 控制台**：所有配置都在聊天里完成——
+
+```text
+查看配置                          列出已设置项（密钥只显示「已设置」）
+把最大并发改成 1                   任意非密钥项
+设置 FEISHU_APP_SECRET hydU…      密钥：确定性格式，不经过模型、不入库
+授权 ou_xxx 为 developer          白名单
+重启服务                          使改动生效
+```
+
+完整步骤、配置项清单、授权白名单、注册被开发仓库与验收记录见
+[docs/deployment-feishu.md](docs/deployment-feishu.md)。
+
+配置**只在聊天里改**（没有 Web 控制台）：`查看配置`、`把最大并发改成 1`、
+`授权 ou_xxx 为 developer`、`设置 FEISHU_APP_SECRET …`、`重启服务`。
+密钥走确定性路径，不经过模型、不写入会话记录。查询类还有 `当前有哪些仓库` /
+`现在有几个任务` / `最近跑了什么` / `有哪些问题` / `聊天记录`。判定规则
+（什么该建开发任务、什么只是查询，以及拿不准时先确认）见
+[docs/intent-triage.md](docs/intent-triage.md)。
+
+GitHub 仓库：`ai repository sync <id>` 取代码；开源推送用
+`--git-push allow` 显式开启，之后**审批即推送**（只推 `ai/` 前缀分支，agent
+容器不持有仓库凭证）。
+
 ## Layout
 
 ```text
@@ -216,12 +253,18 @@ src/
   verification/ # per-command verification runner
   worker/       # run executor with leases and heartbeats
   workspace/    # git-worktree workspace isolation (one run = one worktree)
+  llm/          # OpenAI-compatible chat client for the control plane
+  server/       # deployment composition: daemon, Feishu long connection,
+                # chat session, notifications, specification bootstrap,
+                # deployment/ (env file, config schema, query ports)
 config/         # config/config.yaml
+deploy/         # systemd unit, env template, PostgreSQL compose, deploy scripts
 migrations/     # SQL schema (001 core ... 012 deliveries and releases)
 scripts/        # db:migrate runner
 tests/          # vitest unit tests
 docs/           # v0.1 plan, v0.2 roadmap, phase 9 isolation/acceptance,
                 # phase 10 multi-repository design, phase 11 conversational
-                # interface design, phase 12 delivery loop, discussion notes
+                # interface design, phase 12 delivery loop, deployment runbook,
+                # discussion notes
 docker/         # execution image contract + Dockerfile + allow-list proxy
 ```
