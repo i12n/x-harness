@@ -30,9 +30,10 @@
     "demo:review": "node scripts/demo-review.mjs",
     "demo:codex": "node scripts/demo-real-codex.mjs",
     "start": "node dist/cli/index.js",
-    "db:migrate": "node scripts/migrate.mjs"
+    "db:migrate": "npm run build && node scripts/migrate.mjs"
   },
   "dependencies": {
+    "@larksuiteoapi/node-sdk": "^1.74.0",
     "commander": "^12.1.0",
     "pg": "^8.13.1",
     "yaml": "^2.5.1"
