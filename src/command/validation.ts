@@ -1,6 +1,6 @@
 import { HarnessError } from "../errors.js";
 import { makeId } from "../util/id.js";
-import { COMMAND_SCHEMAS } from "./schema.js";
+import { COMMAND_SCHEMAS, type FieldSpec } from "./schema.js";
 import {
   COMMAND_TYPES,
   COMMAND_VERSION,
@@ -107,19 +107,7 @@ function validatePayload(type: CommandType, raw: unknown): Record<string, unknow
       }
       continue;
     }
-    if (typeof value !== spec.type) {
-      throw new CommandValidationError(
-        "invalid_field_type",
-        `command ${type} payload.${field} must be ${spec.type}`,
-      );
-    }
-    if (spec.type === "string" && !(value as string).trim()) {
-      throw new CommandValidationError(
-        "invalid_field_type",
-        `command ${type} payload.${field} must be a non-empty string`,
-      );
-    }
-    validated[field] = value;
+    validated[field] = validateField(type, field, spec, value);
   }
 
   const allowed = new Set(Object.keys(schema.fields));
@@ -132,6 +120,44 @@ function validatePayload(type: CommandType, raw: unknown): Record<string, unknow
     }
   }
   return validated;
+}
+
+function validateField(
+  type: CommandType,
+  field: string,
+  spec: FieldSpec,
+  value: unknown,
+): unknown {
+  if (spec.type === "string[]") {
+    if (!Array.isArray(value)) {
+      throw new CommandValidationError(
+        "invalid_field_type",
+        `command ${type} payload.${field} must be an array of non-empty strings`,
+      );
+    }
+    return value.map((item) => {
+      if (typeof item !== "string" || !item.trim()) {
+        throw new CommandValidationError(
+          "invalid_field_type",
+          `command ${type} payload.${field} must be an array of non-empty strings`,
+        );
+      }
+      return item.trim();
+    });
+  }
+  if (typeof value !== spec.type) {
+    throw new CommandValidationError(
+      "invalid_field_type",
+      `command ${type} payload.${field} must be ${spec.type}`,
+    );
+  }
+  if (spec.type === "string" && !(value as string).trim()) {
+    throw new CommandValidationError(
+      "invalid_field_type",
+      `command ${type} payload.${field} must be a non-empty string`,
+    );
+  }
+  return value;
 }
 
 function asRecord(value: unknown, message: string): Record<string, unknown> {

@@ -11,7 +11,9 @@ import {
 import { createSpecificationCommandHandlers } from "../src/command/handlers/specification.js";
 import { PlanningService } from "../src/specification/application/planning.js";
 import { DeterministicTaskPlanner } from "../src/specification/application/planner.js";
+import { SpecificationService } from "../src/specification/application/service.js";
 import { InMemoryEventStore } from "../src/store/inMemoryEventStore.js";
+import { InMemoryProblemStore } from "../src/store/inMemoryProblemStore.js";
 import { InMemorySpecificationPlanStore } from "../src/store/inMemorySpecificationPlanStore.js";
 import { InMemorySpecificationStore } from "../src/store/inMemorySpecificationStore.js";
 import { InMemoryTaskStore } from "../src/store/inMemoryTaskStore.js";
@@ -20,6 +22,8 @@ interface TestHarness {
   specifications: InMemorySpecificationStore;
   plans: InMemorySpecificationPlanStore;
   tasks: InMemoryTaskStore;
+  problems: InMemoryProblemStore;
+  events: InMemoryEventStore;
   dispatcher: CommandDispatcher;
   dispatch(
     type: string,
@@ -33,6 +37,12 @@ async function harness(): Promise<TestHarness> {
   const plans = new InMemorySpecificationPlanStore();
   const tasks = new InMemoryTaskStore();
   const events = new InMemoryEventStore();
+  const problems = new InMemoryProblemStore();
+  const specificationService = new SpecificationService({
+    specifications,
+    problems,
+    events,
+  });
   const planning = new PlanningService({
     specifications,
     plans,
@@ -41,8 +51,31 @@ async function harness(): Promise<TestHarness> {
     events,
   });
   const dispatcher = new CommandDispatcher({
-    handlers: createSpecificationCommandHandlers({ planning }),
+    handlers: createSpecificationCommandHandlers({
+      planning,
+      specification: specificationService,
+    }),
     idempotency: new InMemoryIdempotencyStore(),
+  });
+
+  await problems.createProblem({
+    id: "prob-confirmed",
+    title: "专辑页面",
+    statement: "用户希望有一个专辑页面。",
+    repositoryId: "repo-a",
+    status: "CONFIRMED",
+  });
+  await problems.setProblemSpec("prob-confirmed", {
+    problem: "专辑页面不存在",
+    expected: "可以浏览专辑曲目",
+    scope: "所有用户",
+  });
+  await problems.createProblem({
+    id: "prob-open",
+    title: "还没想清楚",
+    statement: "用户希望有一个专辑页面。",
+    repositoryId: "repo-a",
+    status: "NEEDS_INPUT",
   });
 
   await specifications.createSpecification({
@@ -89,7 +122,7 @@ async function harness(): Promise<TestHarness> {
     );
   };
 
-  return { specifications, plans, tasks, dispatcher, dispatch };
+  return { specifications, plans, tasks, problems, events, dispatcher, dispatch };
 }
 
 describe("spec.show / spec.plan commands (TASK-1202)", () => {
@@ -181,5 +214,245 @@ describe("spec.show / spec.plan commands (TASK-1202)", () => {
     expect(newMessage.status).toBe("succeeded");
     expect((newMessage.data as { replayed: boolean }).replayed).toBe(true);
     expect(await h.tasks.listTasks()).toHaveLength(2);
+  });
+});
+
+interface CreatedSpecification {
+  specification: {
+    id: string;
+    problemId: string;
+    status: string;
+    title: string;
+    summary: string;
+    requirements: string[];
+    acceptance: string[];
+    targets: { repositoryId: string; role: string; position: number }[];
+  };
+  message: unknown;
+}
+
+describe("spec.create / spec.update / spec.ready commands (TASK-1210)", () => {
+  it("creates a DRAFT from a CONFIRMED problem, deriving the confirmed facts", async () => {
+    const h = await harness();
+
+    const result = await h.dispatch("spec.create", { problemId: "prob-confirmed" });
+
+    expect(result.status).toBe("succeeded");
+    const data = result.data as CreatedSpecification;
+    expect(data.specification).toMatchObject({
+      problemId: "prob-confirmed",
+      status: "DRAFT",
+      title: "专辑页面",
+      summary: "可以浏览专辑曲目",
+      requirements: ["专辑页面不存在"],
+      acceptance: [],
+    });
+    expect(data.specification.targets).toEqual([
+      { repositoryId: "repo-a", role: "primary", position: 0, baseRef: undefined },
+    ]);
+    await expect(
+      h.specifications.findSpecification(data.specification.id),
+    ).resolves.toMatchObject({ id: data.specification.id, status: "DRAFT" });
+  });
+
+  it("accepts caller-supplied acceptance criteria and target repositories", async () => {
+    const h = await harness();
+
+    const result = await h.dispatch("spec.create", {
+      problemId: "prob-confirmed",
+      title: "专辑页面 v2",
+      acceptance: ["可以打开专辑页", "可以播放曲目"],
+      repositories: ["repo-a", "repo-b"],
+    });
+
+    expect(result.status).toBe("succeeded");
+    const data = result.data as CreatedSpecification;
+    expect(data.specification).toMatchObject({
+      title: "专辑页面 v2",
+      acceptance: ["可以打开专辑页", "可以播放曲目"],
+    });
+    expect(
+      data.specification.targets.map((target) => [target.repositoryId, target.role]),
+    ).toEqual([
+      ["repo-a", "primary"],
+      ["repo-b", "supporting"],
+    ]);
+  });
+
+  it("rejects unknown problems, unconfirmed problems, guests and missing fields", async () => {
+    const h = await harness();
+
+    await expect(
+      h.dispatch("spec.create", { problemId: "prob-open" }, { messageId: "msg-open" }),
+    ).resolves.toMatchObject({
+      status: "rejected",
+      error: { code: "problem_not_confirmed" },
+    });
+    await expect(
+      h.dispatch("spec.create", { problemId: "prob-missing" }, { messageId: "msg-missing" }),
+    ).resolves.toMatchObject({
+      status: "rejected",
+      error: { code: "problem_not_found" },
+    });
+    await expect(
+      h.dispatch(
+        "spec.create",
+        { problemId: "prob-confirmed" },
+        { messageId: "msg-guest", roles: ["guest"] },
+      ),
+    ).resolves.toMatchObject({ status: "rejected", error: { code: "unauthorized" } });
+    await expect(
+      h.dispatch("spec.create", {}, { messageId: "msg-no-problem" }),
+    ).resolves.toMatchObject({ status: "rejected", error: { code: "missing_field" } });
+
+    // Nothing was created: the two seeded specifications are still all there is.
+    await expect(h.specifications.listSpecifications()).resolves.toHaveLength(2);
+  });
+
+  it("rejects malformed list fields before reaching the application", async () => {
+    const h = await harness();
+
+    await expect(
+      h.dispatch(
+        "spec.create",
+        { problemId: "prob-confirmed", acceptance: "不是数组" },
+        { messageId: "msg-1" },
+      ),
+    ).resolves.toMatchObject({ status: "rejected", error: { code: "invalid_field_type" } });
+    await expect(
+      h.dispatch(
+        "spec.create",
+        { problemId: "prob-confirmed", acceptance: ["可以打开专辑页", "  "] },
+        { messageId: "msg-2" },
+      ),
+    ).resolves.toMatchObject({ status: "rejected", error: { code: "invalid_field_type" } });
+    await expect(
+      h.dispatch(
+        "spec.create",
+        { problemId: "prob-confirmed", repositories: "repo-a" },
+        { messageId: "msg-3" },
+      ),
+    ).resolves.toMatchObject({ status: "rejected", error: { code: "invalid_field_type" } });
+    await expect(
+      h.dispatch(
+        "spec.create",
+        { problemId: "prob-confirmed", repositories: 7 },
+        { messageId: "msg-4" },
+      ),
+    ).resolves.toMatchObject({ status: "rejected", error: { code: "invalid_field_type" } });
+  });
+
+  it("updates only DRAFT specifications and rejects repeated targets", async () => {
+    const h = await harness();
+    const created = await h.dispatch("spec.create", {
+      problemId: "prob-confirmed",
+      acceptance: ["可以打开专辑页"],
+    });
+    const specificationId = (created.data as CreatedSpecification).specification.id;
+
+    const updated = await h.dispatch(
+      "spec.update",
+      {
+        specificationId,
+        summary: "新的描述",
+        acceptance: ["可以打开专辑页", "可以播放曲目"],
+      },
+      { messageId: "msg-update" },
+    );
+    expect(updated.status).toBe("succeeded");
+    expect((updated.data as CreatedSpecification).specification).toMatchObject({
+      summary: "新的描述",
+      acceptance: ["可以打开专辑页", "可以播放曲目"],
+    });
+
+    await expect(
+      h.dispatch(
+        "spec.update",
+        { specificationId, repositories: ["repo-a", "repo-a"] },
+        { messageId: "msg-duplicate-target" },
+      ),
+    ).resolves.toMatchObject({
+      status: "rejected",
+      error: { code: "invalid_specification_input" },
+    });
+
+    await h.dispatch("spec.ready", { specificationId }, { messageId: "msg-ready" });
+    await expect(
+      h.dispatch(
+        "spec.update",
+        { specificationId, title: "READY 之后不可编辑" },
+        { messageId: "msg-frozen" },
+      ),
+    ).resolves.toMatchObject({
+      status: "rejected",
+      error: { code: "specification_not_editable" },
+    });
+  });
+
+  it("closes the main chain: create → update → ready → plan → Tasks", async () => {
+    const h = await harness();
+
+    const created = await h.dispatch("spec.create", { problemId: "prob-confirmed" });
+    const specificationId = (created.data as CreatedSpecification).specification.id;
+
+    // An incomplete DRAFT (no acceptance criteria) cannot become READY.
+    await expect(
+      h.dispatch(
+        "spec.ready",
+        { specificationId },
+        { messageId: "msg-too-early" },
+      ),
+    ).resolves.toMatchObject({
+      status: "rejected",
+      error: { code: "specification_incomplete" },
+    });
+
+    const updated = await h.dispatch(
+      "spec.update",
+      { specificationId, acceptance: ["可以打开专辑页"], repositories: ["repo-a"] },
+      { messageId: "msg-complete" },
+    );
+    expect(updated.status).toBe("succeeded");
+
+    const ready = await h.dispatch(
+      "spec.ready",
+      { specificationId },
+      { messageId: "msg-ready" },
+    );
+    expect(ready.status).toBe("succeeded");
+    expect((ready.data as CreatedSpecification).specification.status).toBe("READY");
+
+    const planned = await h.dispatch(
+      "spec.plan",
+      { specificationId },
+      { messageId: "msg-plan" },
+    );
+    expect(planned.status).toBe("succeeded");
+    expect(
+      (planned.data as { specification: { status: string } }).specification.status,
+    ).toBe("PLANNED");
+    await expect(h.tasks.listTasks()).resolves.toHaveLength(1);
+    await expect(
+      h.events.listEvents({ type: "specification.created" }),
+    ).resolves.toHaveLength(1);
+  });
+
+  it("replays a duplicate create message instead of creating a second specification", async () => {
+    const h = await harness();
+
+    const first = await h.dispatch(
+      "spec.create",
+      { problemId: "prob-confirmed" },
+      { messageId: "msg-dup-create" },
+    );
+    const replay = await h.dispatch(
+      "spec.create",
+      { problemId: "prob-confirmed" },
+      { messageId: "msg-dup-create" },
+    );
+
+    expect(first.status).toBe("succeeded");
+    expect(replay.replayed).toBe(true);
+    await expect(h.specifications.listSpecifications()).resolves.toHaveLength(3);
   });
 });

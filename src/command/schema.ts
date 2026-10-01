@@ -1,6 +1,11 @@
 import type { CommandType, Role } from "./types.js";
 
-export type FieldType = "string" | "number" | "boolean";
+/**
+ * `string[]` is a list of non-empty strings. It exists because specification
+ * commands carry repeated values (acceptance criteria, target repositories)
+ * that have no sensible scalar encoding.
+ */
+export type FieldType = "string" | "string[]" | "number" | "boolean";
 
 export interface FieldSpec {
   type: FieldType;
@@ -73,6 +78,34 @@ export const COMMAND_SCHEMAS: Record<CommandType, CommandSchema> = {
       feedback: { type: "string" },
     },
     roles: REVIEWERS,
+  },
+  "spec.create": {
+    fields: {
+      /** CONFIRMED problem the specification is derived from. */
+      problemId: { type: "string", required: true },
+      title: { type: "string" },
+      summary: { type: "string" },
+      /** Acceptance criteria; without them the DRAFT cannot become READY. */
+      acceptance: { type: "string[]" },
+      /** Overrides the targets derived from the problem (first is primary). */
+      repositories: { type: "string[]" },
+    },
+    roles: OPERATORS,
+  },
+  "spec.update": {
+    fields: {
+      specificationId: { type: "string", required: true },
+      title: { type: "string" },
+      summary: { type: "string" },
+      requirements: { type: "string[]" },
+      acceptance: { type: "string[]" },
+      repositories: { type: "string[]" },
+    },
+    roles: OPERATORS,
+  },
+  "spec.ready": {
+    fields: { specificationId: { type: "string", required: true } },
+    roles: OPERATORS,
   },
   "spec.show": {
     fields: { specificationId: { type: "string", required: true } },

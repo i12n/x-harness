@@ -150,7 +150,8 @@ src/store/inMemorySpecificationPlanStore.ts         # 测试/内存模式
 src/store/postgresSpecificationPlanStore.ts         # PostgreSQL（迁移 009）
 src/command/handlers/specification.ts               # spec.show / spec.plan
 src/channel/rendering/specification.ts              # Specification → OutgoingMessage
-src/cli/specificationOutput.ts + `ai spec show|plan` # CLI 经 Command 进入 Application
+src/cli/specificationOutput.ts + `ai spec create|update|ready|show|plan`
+                                                    # CLI 经 Command 进入 Application（TASK-1210 补齐入口）
 migrations/009_specification_plans.sql              # specification_plans
 ```
 

@@ -105,7 +105,10 @@ export async function createPhase12Harness() {
   const dispatcher = new CommandDispatcher({
     handlers: {
       ...createProblemCommandHandlers({ problems: problemService, conversations }),
-      ...createSpecificationCommandHandlers({ planning }),
+      ...createSpecificationCommandHandlers({
+        planning,
+        specification: specificationService,
+      }),
       ...createDeliveryCommandHandlers({ deliveries: deliveryService }),
     },
     idempotency: new InMemoryIdempotencyStore(),

@@ -80,6 +80,7 @@ import { createDeliveryCommandHandlers } from "../command/handlers/delivery.js";
 import type { SpecificationPlanView } from "./specificationOutput.js";
 import { PlanningService } from "../specification/application/planning.js";
 import { DeterministicTaskPlanner } from "../specification/application/planner.js";
+import { SpecificationService } from "../specification/application/service.js";
 import { DeliveryService } from "../delivery/application/service.js";
 import { DeliveryReconciler } from "../delivery/application/reconciler.js";
 import { formatDeliveryView, type DeliveryViewLike } from "./deliveryOutput.js";
@@ -97,6 +98,14 @@ program
 
 function collect(value: string, previous: string[]): string[] {
   return previous.concat([value]);
+}
+
+/**
+ * Repeated CLI flags default to `[]`, but an empty list means "not supplied":
+ * forwarding `[]` would clear fields instead of leaving them untouched.
+ */
+function optionalList(values: string[] | undefined): string[] | undefined {
+  return values && values.length > 0 ? values : undefined;
 }
 
 function parsePositiveInt(value: string): number {
@@ -561,10 +570,18 @@ problemGroup
 
 problemGroup
   .command("task <id>")
-  .description("convert a CONFIRMED problem into an executable Task")
+  .description(
+    "[deprecated] escape hatch: convert a CONFIRMED problem into a Task, bypassing Specification/Planning",
+  )
   .requiredOption("--repo <id>", "repository the task targets")
   .action(async (id: string, options: { repo: string }) => {
     await withStores(async ({ problems, tasks, repositories, events }) => {
+      // TASK-1210: the main chain is Problem → Specification → Planning → Task.
+      // This command predates it and stays only as a documented escape hatch.
+      console.warn(
+        "warning: `ai problem task` bypasses Specification/Planning; " +
+          "prefer `ai spec create --problem <id>` → `ai spec ready <id>` → `ai spec plan <id>`.",
+      );
       const outcome = await convertProblemToTaskCommand({
         problems,
         tasks,
@@ -583,12 +600,111 @@ const specGroup = program
   .description("specification & task planning (Phase 12)");
 
 specGroup
+  .command("create")
+  .description("create a DRAFT specification from a CONFIRMED problem")
+  .requiredOption("--problem <id>", "confirmed problem the specification derives from")
+  .option("--title <title>", "override the problem title")
+  .option("--summary <text>", "override the derived summary")
+  .option("--accept <text>", "acceptance criterion (repeatable)", collect, [])
+  .option("--repo <id>", "target repository (repeatable; first is primary)", collect, [])
+  .option("--role <role>", "authorization role (default: developer)")
+  .action(async (options: {
+    problem: string;
+    title?: string;
+    summary?: string;
+    accept: string[];
+    repo: string[];
+    role?: string;
+  }) => {
+    await withStores(async (handle) => {
+      const view = await dispatchSpecificationCommand(
+        handle,
+        "spec.create",
+        {
+          problemId: options.problem,
+          title: options.title,
+          summary: options.summary,
+          acceptance: optionalList(options.accept),
+          repositories: optionalList(options.repo),
+        },
+        options.role,
+      );
+      await cliChannel.send({
+        conversationId: view.specification.id,
+        text: formatSpecificationPlan(view).join("\n"),
+      });
+    });
+  });
+
+specGroup
+  .command("update <id>")
+  .description("edit a DRAFT specification (READY/PLANNED are frozen)")
+  .option("--title <title>", "new title")
+  .option("--summary <text>", "new summary")
+  .option("--requirement <text>", "replace requirements with this value (repeatable)", collect, [])
+  .option("--accept <text>", "replace acceptance criteria with this value (repeatable)", collect, [])
+  .option("--repo <id>", "replace targets with this repository (repeatable; first is primary)", collect, [])
+  .option("--role <role>", "authorization role (default: developer)")
+  .action(async (id: string, options: {
+    title?: string;
+    summary?: string;
+    requirement: string[];
+    accept: string[];
+    repo: string[];
+    role?: string;
+  }) => {
+    await withStores(async (handle) => {
+      const view = await dispatchSpecificationCommand(
+        handle,
+        "spec.update",
+        {
+          specificationId: id,
+          title: options.title,
+          summary: options.summary,
+          requirements: optionalList(options.requirement),
+          acceptance: optionalList(options.accept),
+          repositories: optionalList(options.repo),
+        },
+        options.role,
+      );
+      await cliChannel.send({
+        conversationId: view.specification.id,
+        text: formatSpecificationPlan(view).join("\n"),
+      });
+    });
+  });
+
+specGroup
+  .command("ready <id>")
+  .description("DRAFT → READY so the specification can be planned (requires acceptance + targets)")
+  .option("--role <role>", "authorization role (default: developer)")
+  .action(async (id: string, options: { role?: string }) => {
+    await withStores(async (handle) => {
+      const view = await dispatchSpecificationCommand(
+        handle,
+        "spec.ready",
+        { specificationId: id },
+        options.role,
+      );
+      await cliChannel.send({
+        conversationId: view.specification.id,
+        text: formatSpecificationPlan(view).join("\n"),
+      });
+    });
+  });
+
+specGroup
   .command("show <id>")
   .description("show a specification, its targets and its plan")
   .option("--role <role>", "authorization role (default: developer)")
   .action(async (id: string, options: { role?: string }) => {
     await withStores(async (handle) => {
-      const view = await dispatchSpecificationCommand(handle, "spec.show", id, options.role);
+      const view = await dispatchSpecificationCommand(
+        handle,
+        "spec.show",
+        { specificationId: id },
+        options.role,
+      );
       await cliChannel.send({
         conversationId: id,
         text: formatSpecificationPlan(view).join("\n"),
@@ -602,7 +718,12 @@ specGroup
   .option("--role <role>", "authorization role (default: developer)")
   .action(async (id: string, options: { role?: string }) => {
     await withStores(async (handle) => {
-      const view = await dispatchSpecificationCommand(handle, "spec.plan", id, options.role);
+      const view = await dispatchSpecificationCommand(
+        handle,
+        "spec.plan",
+        { specificationId: id },
+        options.role,
+      );
       await cliChannel.send({
         conversationId: id,
         text: formatSpecificationPlan(view).join("\n"),
@@ -1048,21 +1169,33 @@ function confirmationLoop(handle: StoreHandle): ConfirmationLoop {
   });
 }
 
+/** Every specification command routed through the command layer. */
+type SpecificationCommandType = Extract<
+  CommandType,
+  "spec.create" | "spec.update" | "spec.ready" | "spec.show" | "spec.plan"
+>;
+
 /**
- * Phase 12 / TASK-1202: specification commands go through the command layer
- * (validation → authorization → idempotency → handler). The CLI never calls
- * PlanningService directly, so chat and CLI share one entry point.
+ * Phase 12 / TASK-1202, extended by TASK-1210: specification commands go
+ * through the command layer (validation → authorization → idempotency →
+ * handler). The CLI never calls SpecificationService/PlanningService directly,
+ * so chat and CLI share one entry point — and the main chain finally has one.
  */
 function dispatchSpecificationCommand(
   handle: StoreHandle,
-  type: Extract<CommandType, "spec.show" | "spec.plan">,
-  specificationId: string,
+  type: SpecificationCommandType,
+  payload: Record<string, unknown>,
   roleOption?: string,
 ): Promise<SpecificationPlanView> {
   const role = roleOption?.trim() || "developer";
   if (!isRole(role)) {
     throw new Error(`invalid role '${role}' (use guest|developer|reviewer|admin)`);
   }
+  const specification = new SpecificationService({
+    specifications: handle.specifications,
+    problems: handle.problems,
+    events: handle.events,
+  });
   const planning = new PlanningService({
     specifications: handle.specifications,
     plans: handle.specificationPlans,
@@ -1073,7 +1206,7 @@ function dispatchSpecificationCommand(
     deliveries: deliveryService(handle),
   });
   const dispatcher = new CommandDispatcher({
-    handlers: createSpecificationCommandHandlers({ planning }),
+    handlers: createSpecificationCommandHandlers({ planning, specification }),
     idempotency: new InMemoryIdempotencyStore(),
   });
   return dispatcher
@@ -1083,7 +1216,7 @@ function dispatchSpecificationCommand(
         type,
         version: COMMAND_VERSION,
         actor: { channel: "cli", userId: "cli-user" },
-        payload: { specificationId },
+        payload,
         idempotencyKey: `cli:${makeId("msg")}:${type}`,
         createdAt: new Date().toISOString(),
       },
@@ -1094,7 +1227,15 @@ function dispatchSpecificationCommand(
         const code = result.error?.code ?? "unknown";
         throw new Error(`${type} ${result.status}: ${code} ${result.error?.message ?? ""}`.trim());
       }
-      return result.data as SpecificationPlanView;
+      const data = result.data as Partial<SpecificationPlanView> & {
+        specification: SpecificationPlanView["specification"];
+      };
+      return {
+        specification: data.specification,
+        planItems: data.planItems ?? [],
+        tasks: data.tasks ?? [],
+        replayed: data.replayed,
+      };
     });
 }
 

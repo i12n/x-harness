@@ -90,6 +90,14 @@ Implemented in TypeScript (Node >= 18, ESM). The full plan lives in
   Phase 12 的 Release Gate（TASK-1208）设计已定稿，见
   [docs/phase12-acceptance.md](docs/phase12-acceptance.md)
   （Acceptance Matrix / 6 Gates / 测试隔离 / 资源核对 / FROZEN 条件）。
+- Phase 13 (main-chain entry & hardening, in progress): Phase 13 的 backlog
+  见 [docs/v0.2-milestone-review.md](docs/v0.2-milestone-review.md) §4/§7。
+  TASK-1210 Main-chain Entry Point 已完成：主链重新有生产入口 ——
+  `spec.create`（CONFIRMED Problem → DRAFT）、`spec.update`（仅 DRAFT 可编辑）、
+  `spec.ready`（DRAFT → READY）三个 Command 加入既有 `spec.show` / `spec.plan`
+  目录，CLI 暴露为 `ai spec create|update|ready|show|plan`；命令层新增
+  `string[]` 字段类型。旧路径 `ai problem task` 保留为**标记为 deprecated 的
+  逃生口**（执行前打印警告），不再是未命名的第二入口。
 
 ## Requirements
 
@@ -165,8 +173,16 @@ ai problem analyze <problem-id>          # creates structured clarifications
 ai problem answer <problem-id> <clarification-id> --option <option-id>
 ai problem answer <problem-id> <clarification-id> --text "其他说明"
 ai problem confirm <problem-id> [--problem ... --expected ... --scope ...]
-ai problem task <problem-id> --repo <id> # CONFIRMED -> executable Task
+ai problem task <problem-id> --repo <id> # [deprecated] escape hatch: CONFIRMED -> Task
 ai problem list [--status NEEDS_INPUT] / ai problem show <problem-id>
+
+# Phase 13 / TASK-1210: main chain Problem -> Specification -> Planning -> Task
+ai spec create --problem <problem-id> \
+  --accept "验收标准" --accept "又一条" \
+  --repo <primary-repo-id> --repo <supporting-repo-id> [--title ...] [--summary ...]
+ai spec update <spec-id> --accept "..." --repo <id>  # DRAFT only; READY/PLANNED are frozen
+ai spec ready <spec-id>                              # DRAFT -> READY (needs acceptance + targets)
+ai spec show <spec-id> / ai spec plan <spec-id>
 
 # v0.2: review a succeeded run, then approve or reject the task
 ai review <run-id>

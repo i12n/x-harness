@@ -86,7 +86,35 @@ describe("Command catalog and validation (TASK-1106)", () => {
         { ...command(), payload: { taskId: "TASK-001", store: "repositories" } },
         context(["admin"]),
       ),
-    ).resolves.toMatchObject({ status: "rejected", error: { code: "unknown_field" } });
+      ).resolves.toMatchObject({ status: "rejected", error: { code: "unknown_field" } });
+  });
+
+  it("accepts string[] fields only as trimmed non-empty lists (TASK-1210)", () => {
+    const parsed = validateCommand({
+      ...command(),
+      type: "spec.create",
+      payload: {
+        problemId: "prob-001",
+        acceptance: ["  可以打开专辑页  ", "可以播放曲目"],
+      },
+      idempotencyKey: "feishu:message-001:spec.create",
+    });
+    expect(parsed.payload).toEqual({
+      problemId: "prob-001",
+      acceptance: ["可以打开专辑页", "可以播放曲目"],
+    });
+
+    const badValues: unknown[] = ["字符串", 7, null, [["嵌套"]], ["可以打开专辑页", "   "]];
+    for (const bad of badValues) {
+      expect(() =>
+        validateCommand({
+          ...command(),
+          type: "spec.create",
+          payload: { problemId: "prob-001", acceptance: bad },
+          idempotencyKey: "feishu:message-001:spec.create",
+        }),
+      ).toThrow(CommandValidationError);
+    }
   });
 
   it("normalizes a valid command and keeps only schema fields", () => {
