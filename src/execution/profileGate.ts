@@ -149,16 +149,32 @@ function parseProviderConfig(env: Record<string, string | undefined>): {
   const codexConfig = env.AI_CODEX_CONFIG;
   if (codexConfig) {
     try {
-      const parsed = JSON.parse(codexConfig) as {
-        model_providers?: Record<string, { base_url?: unknown; env_key?: unknown }>;
-      };
-      for (const provider of Object.values(parsed.model_providers ?? {})) {
-        const host = hostOf(provider?.base_url);
-        if (host) {
-          hosts.push(host);
+      const parsed = JSON.parse(codexConfig) as Record<string, unknown>;
+      // Nested form:
+      //   {"model_providers": {"deepseek": {"base_url": ..., "env_key": ...}}}
+      const nested = parsed.model_providers;
+      if (nested && typeof nested === "object" && !Array.isArray(nested)) {
+        for (const provider of Object.values(nested as Record<string, unknown>)) {
+          const record =
+            provider && typeof provider === "object" && !Array.isArray(provider)
+              ? (provider as Record<string, unknown>)
+              : undefined;
+          pushHost(record?.base_url, hosts);
+          pushEnvKey(record?.env_key, envKeys);
         }
-        if (typeof provider?.env_key === "string" && provider.env_key.trim()) {
-          envKeys.push(provider.env_key.trim());
+      }
+      // Flat form, which is what `codex -c` overrides look like and what
+      // deploy/ai-harness.env.example actually ships:
+      //   {"model_providers.deepseek.env_key": "DEEPSEEK_API_KEY", ...}
+      for (const [key, value] of Object.entries(parsed)) {
+        const match = /^model_providers\.[^.]+\.(base_url|env_key)$/.exec(key);
+        if (!match) {
+          continue;
+        }
+        if (match[1] === "base_url") {
+          pushHost(value, hosts);
+        } else {
+          pushEnvKey(value, envKeys);
         }
       }
     } catch {
@@ -170,6 +186,19 @@ function parseProviderConfig(env: Record<string, string | undefined>): {
     hosts.push(fallback);
   }
   return { hosts, envKeys };
+}
+
+function pushHost(value: unknown, hosts: string[]): void {
+  const host = hostOf(value);
+  if (host && !hosts.includes(host)) {
+    hosts.push(host);
+  }
+}
+
+function pushEnvKey(value: unknown, envKeys: string[]): void {
+  if (typeof value === "string" && value.trim() && !envKeys.includes(value.trim())) {
+    envKeys.push(value.trim());
+  }
 }
 
 export function isHostAllowed(host: string, allow: string[]): boolean {

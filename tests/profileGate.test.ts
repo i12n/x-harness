@@ -28,6 +28,19 @@ const SERVICE_ENV = {
   }),
 };
 
+/**
+ * The shape deploy/ai-harness.env.example actually ships: `codex -c` overrides
+ * flattened into dotted keys, not a nested object.
+ */
+const FLAT_SERVICE_ENV = {
+  DEEPSEEK_API_KEY: "sk-test",
+  AI_CODEX_CONFIG: JSON.stringify({
+    model_provider: "deepseek",
+    "model_providers.deepseek.base_url": "https://api.deepseek.com",
+    "model_providers.deepseek.env_key": "DEEPSEEK_API_KEY",
+  }),
+};
+
 function gateInput(overrides: {
   profile?: ExecutionProfile;
   verificationCommands?: string[];
@@ -161,5 +174,16 @@ describe("provider host detection", () => {
   it("matches subdomains but not suffix lookalikes", () => {
     expect(isHostAllowed("api.deepseek.com", ["deepseek.com"])).toBe(true);
     expect(isHostAllowed("evildeepseek.com", ["deepseek.com"])).toBe(false);
+  });
+
+  it("understands the flattened -c form used by the deploy env", async () => {
+    expect(providerHostFromEnv(FLAT_SERVICE_ENV)).toBe("api.deepseek.com");
+    const issues = await codes(
+      gateInput({
+        profile: profile({ network: { mode: "none" }, secrets: [] }),
+        env: FLAT_SERVICE_ENV,
+      }),
+    );
+    expect(issues).toContain("provider_key_not_injected");
   });
 });
