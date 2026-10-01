@@ -1,6 +1,7 @@
 import type { Channel, IncomingHandler } from "../channel.js";
 import type { IncomingMessage, OutgoingMessage } from "../message.js";
 import type { FeishuClient } from "./client.js";
+import type { SendMessageResult } from "./client.js";
 import { buildFeishuPayload, type FeishuReceiveIdType } from "./messages.js";
 
 export interface FeishuAdapterOptions {
@@ -36,6 +37,14 @@ export class FeishuAdapter implements Channel {
   }
 
   async send(message: OutgoingMessage): Promise<void> {
+    await this.sendWithResult(message);
+  }
+
+  /**
+   * Same as {@link send}, but reports the Feishu message id. Interactive cards
+   * are registered under that id so a later button click can find them.
+   */
+  async sendWithResult(message: OutgoingMessage): Promise<SendMessageResult | undefined> {
     const receiveId =
       (typeof message.metadata?.receiveId === "string"
         ? message.metadata.receiveId
@@ -55,13 +64,12 @@ export class FeishuAdapter implements Channel {
       // Answering the triggering message keeps a busy group readable, and
       // `reply_in_thread` puts the whole exchange into a topic.
       try {
-        await this.client.replyMessage({
+        return await this.client.replyMessage({
           messageId: replyToMessageId,
           msgType: payload.msgType === "interactive" ? "interactive" : "text",
           content: payload.content,
           replyInThread,
         });
-        return;
       } catch (error) {
         // Threading is a presentation nicety: never lose the answer because a
         // chat type rejects it. Degrade to a normal send and report.
@@ -69,14 +77,13 @@ export class FeishuAdapter implements Channel {
       }
     }
     if (payload.msgType === "interactive") {
-      await this.client.sendCard({
+      return await this.client.sendCard({
         receiveId: payload.receiveId,
         receiveIdType: payload.receiveIdType,
         card: JSON.parse(payload.content) as Record<string, unknown>,
       });
-      return;
     }
-    await this.client.sendMessage({
+    return await this.client.sendMessage({
       receiveId: payload.receiveId,
       receiveIdType: payload.receiveIdType,
       msgType: "text",

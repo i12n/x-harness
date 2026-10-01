@@ -140,7 +140,8 @@ describe("Problem confirmation via commands (TASK-1107)", () => {
     expect(conversation.subjectType).toBe("problem");
     expect(conversation.subjectId).toBe(data.problem.id);
 
-    // Structured clarifications render as options + actions.
+    // Structured clarifications render as a multi-select choice group whose
+    // submit carries every ticked option at once (TASK-1216).
     const problem = await problems.findProblem(data.problem.id);
     const rendered = renderProblemMessage(problem, {
       needsInput: true,
@@ -148,12 +149,50 @@ describe("Problem confirmation via commands (TASK-1107)", () => {
     });
     const text = JSON.stringify(rendered.blocks);
     expect(text).toContain("所有用户");
-    const actions = (rendered.blocks ?? []).filter(
-      (block) => block.type === "actions",
+    const choices = (rendered.blocks ?? []).filter(
+      (block) => block.type === "choice",
     );
-    expect(actions).toHaveLength(1);
-    expect(JSON.stringify(actions)).toContain(PROBLEM_ANSWER_ACTION);
-    expect(JSON.stringify(actions)).toContain("all_users");
+    expect(choices).toHaveLength(1);
+    expect(JSON.stringify(choices)).toContain(PROBLEM_ANSWER_ACTION);
+    expect(JSON.stringify(choices)).toContain("all_users");
+  });
+
+  it("answers one clarification with several ticked options at once (TASK-1216)", async () => {
+    const { problemService } = await setup([needsInput(), SUFFICIENT]);
+    const created = await problemService.create({ title: "首页加载很慢", statement: "慢。" });
+    const clarification = created.clarifications[0]!;
+
+    await problemService.answer(created.problem.id, clarification.id, {
+      optionIds: ["all_users", "some_users"],
+    });
+
+    const [answered] = await problemService.listClarifications(created.problem.id);
+    expect(answered?.status).toBe("ANSWERED");
+    expect(answered?.answer?.text).toBe("所有用户、部分用户");
+    expect(answered?.answer?.optionId).toBeUndefined();
+  });
+
+  it("keeps the single-option path exact when only one option is ticked", async () => {
+    const { problemService } = await setup([needsInput(), SUFFICIENT]);
+    const created = await problemService.create({ title: "首页加载很慢", statement: "慢。" });
+    const clarification = created.clarifications[0]!;
+
+    await problemService.answer(created.problem.id, clarification.id, {
+      optionIds: ["all_users"],
+    });
+
+    const [answered] = await problemService.listClarifications(created.problem.id);
+    expect(answered?.answer?.optionId).toBe("all_users");
+  });
+
+  it("rejects an option that was never offered", async () => {
+    const { problemService } = await setup([needsInput(), SUFFICIENT]);
+    const created = await problemService.create({ title: "首页加载很慢", statement: "慢。" });
+    const clarification = created.clarifications[0]!;
+
+    await expect(
+      problemService.answer(created.problem.id, clarification.id, { optionIds: ["nope"] }),
+    ).rejects.toThrow(/no option 'nope'/);
   });
 
   it("creates exactly one problem for a duplicated command", async () => {

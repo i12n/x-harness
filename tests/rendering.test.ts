@@ -261,6 +261,13 @@ describe("Business rendering (TASK-1105)", () => {
       REVIEW_ACTIONS.requestChanges,
     ]);
     expect(actions?.actions[0]).toMatchObject({ label: "Approve", style: "primary" });
+    // TASK-1216: the button must carry a taskId — review.approve rejects a run id.
+    expect(JSON.parse(actions?.actions[0]?.value ?? "{}")).toEqual({
+      taskId: reviewable.taskId,
+    });
+    expect(JSON.parse(actions?.actions[1]?.value ?? "{}")).toEqual({
+      taskId: reviewable.taskId,
+    });
   });
 
   it("renders failed review targets and failed-check counts", () => {

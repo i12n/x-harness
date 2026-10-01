@@ -28,13 +28,7 @@ export function renderProblemMessage(
     blocks.push(
       markdownBlock(
         `**还需要确认**\n${clarifications
-          .map(
-            (clarification, index) =>
-              `${index + 1}. ${clarification.question}\n` +
-              clarification.options
-                .map((option) => `   - ${option.label} (${option.id})`)
-                .join("\n"),
-          )
+          .map((clarification, index) => `${index + 1}. ${clarification.question}`)
           .join("\n")}`,
       ),
     );
@@ -42,17 +36,21 @@ export function renderProblemMessage(
       if (clarification.options.length === 0) {
         continue;
       }
+      // TASK-1216: one selectable group per question. Several options can be
+      // ticked and submitted together instead of one click per answer.
       blocks.push({
-        type: "actions",
-        actions: clarification.options.map((option) => ({
-          id: PROBLEM_ANSWER_ACTION,
+        type: "choice",
+        id: clarification.id,
+        options: clarification.options.map((option) => ({
+          id: option.id,
           label: option.label,
-          value: JSON.stringify({
-            problemId: problem.id,
-            clarificationId: clarification.id,
-            optionId: option.id,
-          }),
         })),
+        multi: true,
+        submit: {
+          action: PROBLEM_ANSWER_ACTION,
+          label: "提交选择",
+          payload: { problemId: problem.id, clarificationId: clarification.id },
+        },
       });
     }
   } else if (problem.status === "CONFIRMED") {

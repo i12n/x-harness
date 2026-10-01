@@ -70,12 +70,19 @@ export function renderReviewMessage(
   blocks.push({
     type: "actions",
     actions: [
-      { id: REVIEW_ACTIONS.approve, label: "Approve", style: "primary", value: run.id },
+      // The command wants a taskId, not the run id (TASK-1216 fixes the
+      // mismatch that made both buttons unroutable).
+      {
+        id: REVIEW_ACTIONS.approve,
+        label: "Approve",
+        style: "primary",
+        value: JSON.stringify({ taskId: run.taskId }),
+      },
       {
         id: REVIEW_ACTIONS.requestChanges,
         label: "Request Changes",
         style: "danger",
-        value: run.id,
+        value: JSON.stringify({ taskId: run.taskId }),
       },
     ],
   });

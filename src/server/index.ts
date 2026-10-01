@@ -2,7 +2,8 @@ import { homedir } from "node:os";
 import { resolve } from "node:path";
 import { spawn } from "node:child_process";
 import { CodexEngine } from "../agent/codexEngine.js";
-import { renderFeishuText } from "../channel/feishu/cards.js";
+import { renderFeishuCard, renderFeishuText } from "../channel/feishu/cards.js";
+import { parseCardAction } from "../channel/feishu/cardActions.js";
 import { FeishuAdapter } from "../channel/feishu/adapter.js";
 import { HttpFeishuClient } from "../channel/feishu/client.js";
 import type { OutgoingMessage } from "../channel/message.js";
@@ -66,6 +67,7 @@ import { WorkspaceManager } from "../workspace/manager.js";
 import { loadServerConfig, type ServerConfig } from "./config.js";
 import { LoopDaemon } from "./daemon.js";
 import { FeishuLongConnection } from "./feishuLongConnection.js";
+import { CardRegistry } from "./cardRegistry.js";
 import { RunChatNotifier, type ChatTarget } from "./notifications.js";
 import { ChatSession } from "./session.js";
 import { createIntentTriage } from "./intentTriage.js";
@@ -146,6 +148,9 @@ export class HarnessRuntime {
       onThreadFallback: (error) =>
         this.log(`threaded reply failed, sent to the chat instead: ${describe(error)}`),
     });
+    // Interactive cards are remembered by the id Feishu assigns them, so a
+    // later button click can re-render the card and route the submit.
+    const cards = new CardRegistry();
 
     // The bot's own open_id decides whether a group message addressed it.
     // Configured value wins; otherwise ask Feishu once at startup.
@@ -176,7 +181,10 @@ export class HarnessRuntime {
           receiveIdType: target.receiveIdType ?? "chat_id",
         },
       };
-      await feishuAdapter.send(outgoing);
+      const sent = await feishuAdapter.sendWithResult(outgoing);
+      if (sent?.messageId) {
+        cards.register(sent.messageId, target, outgoing);
+      }
       try {
         await conversations.recordOutgoing(target.conversationId, {
           text: renderFeishuText(outgoing),
@@ -328,6 +336,7 @@ export class HarnessRuntime {
       botOpenId,
       threadReplies: config.feishu.threadReplies,
       send: sendToTarget,
+      cards,
       notifier,
       specificationBootstrap: config.autoBootstrapSpecification
         ? new SpecificationBootstrap({
@@ -412,6 +421,26 @@ export class HarnessRuntime {
       appId: config.feishu.appId,
       appSecret: config.feishu.appSecret,
       onEvent: (envelope) => session.handleEvent(envelope),
+      onCardAction: async (body) => {
+        const action = parseCardAction(body);
+        if (!action) {
+          // Cannot be routed, but it still must be answered with a card so the
+          // client does not surface the callback error.
+          return renderFeishuCard({
+            conversationId: "card",
+            text: "⚠️ 无法识别这次卡片操作，请重新发送指令。",
+          });
+        }
+        const outcome = await session.handleCardAction(action);
+        if (outcome.deferred) {
+          // Ack first: the callback must answer inside Feishu's ~3s budget, and
+          // the follow-up work can call a model.
+          void outcome.deferred().catch((error: unknown) => {
+            this.log(`card action follow-up failed: ${describe(error)}`);
+          });
+        }
+        return renderFeishuCard(outcome.immediate);
+      },
       log: (message) => this.log(message),
       errorLog: (message) => this.log(message),
     });

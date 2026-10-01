@@ -1,4 +1,8 @@
-import type { OutgoingMessage } from "../channel/message.js";
+import {
+  CARD_CHOICE_TOGGLE,
+  type MessageChoice,
+  type OutgoingMessage,
+} from "../channel/message.js";
 import { parseFeishuEvent } from "../channel/feishu/events.js";
 import { prepareCommand } from "../command/engine.js";
 import type { CommandDispatcher } from "../command/dispatcher.js";
@@ -8,6 +12,7 @@ import type { Problem } from "../domain/problem.js";
 import { HarnessError } from "../errors.js";
 import { resolveRoles, type AccessConfig } from "./config.js";
 import type { ChatTarget, RunChatNotifier } from "./notifications.js";
+import type { CardRegistry } from "./cardRegistry.js";
 import { renderCommandResult, renderNotAllowedMessage } from "./reply.js";
 import type { SpecificationBootstrap } from "./specificationBootstrap.js";
 import { decideFromIntentResult, type IntentTriage, type TriageDecision } from "./intentTriage.js";
@@ -37,12 +42,34 @@ export interface ChatSessionDeps {
   /** Where replies land: a topic thread on the trigger message, or the chat. */
   threadReplies?: "always" | "group" | "never";
   notifier?: RunChatNotifier;
+  /** Interactive-card state for multi-select toggles (TASK-1216). */
+  cards?: CardRegistry;
   specificationBootstrap?: SpecificationBootstrap;
   /** Injected: restarts the process so saved configuration takes effect. */
   restartService?: () => Promise<void>;
   log?: (message: string) => void;
   /** Audit hook: every classification is recorded (docs/intent-triage.md §5.5). */
   recordEvent?: (type: string, payload: unknown) => Promise<void>;
+}
+
+/** A normalised `card.action.trigger` click (TASK-1216). */
+export interface CardActionInput {
+  messageId: string;
+  chatId: string;
+  operatorOpenId: string;
+  actionId: string;
+  value?: string;
+}
+
+/**
+ * What a click produces. `immediate` is returned to Feishu as the callback
+ * response (it must be a valid card, otherwise the client shows an error);
+ * `deferred` is work that must not delay that response past Feishu's ~3s
+ * callback budget — the answer triggers a model call, so it always runs after.
+ */
+export interface CardActionOutcome {
+  immediate: OutgoingMessage;
+  deferred?: () => Promise<void>;
 }
 
 /**
@@ -278,6 +305,125 @@ export class ChatSession {
     }
   }
 
+  /**
+   * Handles a card click (TASK-1216). A toggle is answered synchronously —
+   * it only re-renders the card, so it fits inside Feishu's callback budget.
+   * A submit is acknowledged immediately and executed in the background,
+   * because the work behind it (answering a clarification) calls a model.
+   */
+  async handleCardAction(action: CardActionInput): Promise<CardActionOutcome> {
+    const target = await this.cardTarget(action.chatId);
+    const roles = resolveRoles(this.deps.access, action.operatorOpenId);
+    if (roles.length === 0) {
+      return {
+        immediate: renderNotAllowedMessage(target.conversationId, action.operatorOpenId),
+      };
+    }
+    if (action.actionId === CARD_CHOICE_TOGGLE) {
+      return { immediate: this.toggleChoice(action, target) };
+    }
+    return this.submitCardCommand(action, target, roles);
+  }
+
+  private async cardTarget(chatId: string): Promise<ChatTarget> {
+    let conversationId = chatId;
+    try {
+      const conversation = await this.deps.conversations.findByExternal({
+        channel: "feishu",
+        externalChatId: chatId,
+      });
+      if (conversation) {
+        conversationId = conversation.id;
+      }
+    } catch (error) {
+      this.log(`could not resolve the conversation for a card action: ${describeError(error)}`);
+    }
+    return { conversationId, receiveId: chatId, receiveIdType: "chat_id" };
+  }
+
+  /** Toggle one option and re-render the card so the selection stays visible. */
+  private toggleChoice(action: CardActionInput, target: ChatTarget): OutgoingMessage {
+    const cards = this.deps.cards;
+    const value = parseJsonRecord(action.value);
+    const groupId = asString(value?.groupId);
+    const optionId = asString(value?.optionId);
+    const current = cards?.selectedMessage(action.messageId);
+    if (!cards || !groupId || !optionId || !current) {
+      return expiredCard(target.conversationId);
+    }
+    const choice = findChoice(current, groupId);
+    if (!choice) {
+      return expiredCard(target.conversationId);
+    }
+    cards.toggle(action.messageId, groupId, optionId, choice.multi);
+    return cards.selectedMessage(action.messageId) ?? current;
+  }
+
+  /**
+   * A submit carries the whole selection in one callback; we acknowledge it and
+   * run the command afterwards so the response is never late.
+   */
+  private submitCardCommand(
+    action: CardActionInput,
+    target: ChatTarget,
+    roles: Role[],
+  ): CardActionOutcome {
+    const cards = this.deps.cards;
+    const payload: Record<string, unknown> = { ...(parseJsonRecord(action.value) ?? {}) };
+    const groupId = asString(payload.groupId);
+    delete payload.groupId;
+
+    let labels: string[] = [];
+    if (groupId) {
+      const choice = cards?.selectedMessage(action.messageId);
+      const block = choice ? findChoice(choice, groupId) : undefined;
+      const selected = cards?.selection(action.messageId, groupId) ?? [];
+      if (!block) {
+        return { immediate: expiredCard(target.conversationId) };
+      }
+      if (selected.length === 0) {
+        return {
+          immediate: {
+            conversationId: target.conversationId,
+            text: "⚠️ 请先勾选至少一个选项，再点提交。",
+          },
+        };
+      }
+      payload.optionIds = selected;
+      labels = selected.map(
+        (id) => block.options.find((option) => option.id === id)?.label ?? id,
+      );
+    }
+
+    const input: IntentInput = {
+      channel: "feishu",
+      conversationId: target.conversationId,
+      messageId: action.messageId,
+      senderId: action.operatorOpenId,
+      text: "",
+    };
+    const command = { type: action.actionId, payload };
+    return {
+      immediate: {
+        conversationId: target.conversationId,
+        text:
+          labels.length > 0
+            ? `⏳ 已提交：${labels.join("、")}（正在处理…）`
+            : "⏳ 已收到，正在处理…",
+      },
+      deferred: async () => {
+        const result = await this.deps.dispatcher.dispatch(
+          prepareCommand(input, command),
+          { channel: "feishu", userId: action.operatorOpenId, roles },
+        );
+        await this.reply(target, renderCommandResult(result, target.conversationId));
+        if (result.status === "succeeded") {
+          await this.afterSuccess(target, result.type, result.data);
+        }
+      },
+    };
+  }
+
   /** One structured command → dispatcher (validation, authz, audit, replay). */
   private async dispatch(
     input: IntentInput,
@@ -503,6 +649,39 @@ function commandTypeName(command: unknown): string | undefined {
   }
   const type = (command as { type?: unknown }).type;
   return typeof type === "string" ? type : undefined;
+}
+
+function asString(value: unknown): string | undefined {
+  return typeof value === "string" && value ? value : undefined;
+}
+
+function parseJsonRecord(value: string | undefined): Record<string, unknown> | undefined {
+  if (!value) {
+    return undefined;
+  }
+  try {
+    return asRecord(JSON.parse(value));
+  } catch {
+    return undefined;
+  }
+}
+
+function findChoice(message: OutgoingMessage, groupId: string): MessageChoice | undefined {
+  return (message.blocks ?? []).find(
+    (block): block is MessageChoice => block.type === "choice" && block.id === groupId,
+  );
+}
+
+/**
+ * Shown when a card click arrives for a card we no longer know about (process
+ * restarted, or the card predates this deploy). Returning a real card keeps
+ * the client from showing the opaque 200672 callback error.
+ */
+function expiredCard(conversationId: string): OutgoingMessage {
+  return {
+    conversationId,
+    text: "⚠️ 这张卡片已失效，请重新发送指令，或重新打开对应的问题/评审。",
+  };
 }
 
 function isBotSender(envelope: Record<string, unknown>): boolean {

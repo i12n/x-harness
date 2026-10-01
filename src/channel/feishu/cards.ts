@@ -1,4 +1,4 @@
-import type { OutgoingMessage } from "../message.js";
+import { CARD_CHOICE_TOGGLE, type OutgoingMessage } from "../message.js";
 
 /** Transport-only rendering: no Problem/Task/Run semantics live here. */
 export function renderFeishuText(message: OutgoingMessage): string {
@@ -25,6 +25,17 @@ export function renderFeishuText(message: OutgoingMessage): string {
         break;
       case "actions":
         parts.push(block.actions.map((action) => `[${action.label}]`).join(" "));
+        break;
+      case "choice":
+        parts.push(
+          [
+            ...block.options.map(
+              (option) =>
+                `[${block.selected?.includes(option.id) ? "✅" : "⬜"} ${option.label}]`,
+            ),
+            `[${block.submit.label}]`,
+          ].join(" "),
+        );
         break;
     }
   }
@@ -72,6 +83,43 @@ export function renderFeishuCard(message: OutgoingMessage): FeishuCard {
             type: action.style ?? "default",
             value: { action: action.id, value: action.value },
           })),
+        });
+        break;
+      case "choice":
+        if (block.title) {
+          markdown(block.title);
+        }
+        elements.push({
+          tag: "action",
+          actions: [
+            ...block.options.map((option) => {
+              const selected = block.selected?.includes(option.id) ?? false;
+              return {
+                tag: "button",
+                text: {
+                  tag: "plain_text",
+                  content: `${selected ? "✅" : "⬜"} ${option.label}`,
+                },
+                type: selected ? "primary" : "default",
+                value: {
+                  action: CARD_CHOICE_TOGGLE,
+                  value: JSON.stringify({ groupId: block.id, optionId: option.id }),
+                },
+              };
+            }),
+            {
+              tag: "button",
+              text: { tag: "plain_text", content: block.submit.label },
+              type: "primary",
+              value: {
+                action: block.submit.action,
+                value: JSON.stringify({
+                  ...(block.submit.payload ?? {}),
+                  groupId: block.id,
+                }),
+              },
+            },
+          ],
         });
         break;
     }

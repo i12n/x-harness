@@ -42,6 +42,8 @@ export const COMMAND_SCHEMAS: Record<CommandType, CommandSchema> = {
       problemId: { type: "string", required: true },
       clarificationId: { type: "string", required: true },
       optionId: { type: "string" },
+      /** Several options ticked on one card and submitted together. */
+      optionIds: { type: "string[]" },
       text: { type: "string" },
       /** Free-form answer shortcut, e.g. "all_users" or "不确定". */
       answer: { type: "string" },

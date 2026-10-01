@@ -72,7 +72,7 @@ export class ProblemService {
   async answer(
     problemId: string,
     clarificationId: string,
-    input: { optionId?: string; text?: string; answer?: string },
+    input: { optionId?: string; optionIds?: string[]; text?: string; answer?: string },
   ): Promise<AnalyzeOutcome> {
     const clarification = await this.problems.findClarification(clarificationId);
     if (clarification.problemId !== problemId) {
@@ -80,6 +80,29 @@ export class ProblemService {
         "invalid_clarification",
         `clarification ${clarificationId} does not belong to problem ${problemId}`,
       );
+    }
+
+    // A multi-select card submits every ticked option at once. One option keeps
+    // the exact single-answer path; several become one combined text answer
+    // (still built from the offered labels, never invented here).
+    const optionIds = (input.optionIds ?? []).map((id) => id.trim()).filter(Boolean);
+    if (optionIds.length > 0) {
+      const labels = optionIds.map((id) => {
+        const option = clarification.options.find((entry) => entry.id === id);
+        if (!option) {
+          throw new ProblemConfirmationError(
+            "invalid_answer",
+            `clarification ${clarificationId} has no option '${id}'`,
+          );
+        }
+        return option.label;
+      });
+      if (optionIds.length === 1) {
+        return this.loop.answer(problemId, clarificationId, { optionId: optionIds[0] });
+      }
+      return this.loop.answer(problemId, clarificationId, {
+        text: labels.join("、"),
+      });
     }
 
     let optionId = input.optionId?.trim() || undefined;

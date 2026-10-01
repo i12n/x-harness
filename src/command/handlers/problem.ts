@@ -72,6 +72,9 @@ export function createProblemCommandHandlers(
           String(payload.clarificationId),
           {
             optionId: asString(payload.optionId),
+            optionIds: Array.isArray(payload.optionIds)
+              ? payload.optionIds.filter((id): id is string => typeof id === "string")
+              : undefined,
             text: asString(payload.text),
             answer: asString(payload.answer),
           },

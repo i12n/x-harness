@@ -67,5 +67,15 @@ function renderBlock(block: MessageBlock): string[] {
       return block.title ? [block.title, block.text] : [block.text];
     case "actions":
       return [block.actions.map((action) => `[${action.label}]`).join(" ")];
+    case "choice":
+      return [
+        [
+          ...block.options.map(
+            (option) =>
+              `[${block.selected?.includes(option.id) ? "✅" : "⬜"} ${option.label}]`,
+          ),
+          `[${block.submit.label}]`,
+        ].join(" "),
+      ];
   }
 }

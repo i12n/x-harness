@@ -1,10 +1,19 @@
 import { FEISHU_MESSAGE_EVENT } from "../channel/feishu/events.js";
 
+/** Feishu event/callback type for an interactive-card click. */
+export const FEISHU_CARD_ACTION_EVENT = "card.action.trigger";
+
 export interface FeishuLongConnectionOptions {
   appId: string;
   appSecret: string;
   /** Receives an `im.message.receive_v1` envelope, already JSON-shaped. */
   onEvent: (envelope: Record<string, unknown>) => Promise<void> | void;
+  /**
+   * Receives a `card.action.trigger` event body. The returned value is what
+   * Feishu gets back as the card-callback response — it must be a valid card
+   * (or toast) payload, otherwise the client shows the 200672 error.
+   */
+  onCardAction?: (body: unknown) => Promise<unknown> | unknown;
   log?: (message: string) => void;
   errorLog?: (message: string) => void;
 }
@@ -52,6 +61,25 @@ export class FeishuLongConnection {
           );
         }
       },
+      // Returning nothing here used to make the SDK answer with the string
+      // "no card.action.trigger event handle", which Feishu rejects as an
+      // invalid callback body — the 200672 the operator saw. Every branch now
+      // returns a real card payload.
+      [FEISHU_CARD_ACTION_EVENT]: async (data: unknown) => {
+        if (this.stopping) {
+          return undefined;
+        }
+        try {
+          return await this.options.onCardAction?.(data);
+        } catch (error) {
+          this.options.errorLog?.(
+            `card action handler failed: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          );
+          return undefined;
+        }
+      },
     });
     const client = new lark.WSClient({
       appId: this.options.appId,
@@ -83,7 +111,9 @@ interface LarkModuleLike {
     loggerLevel?: unknown;
   }) => unknown;
   EventDispatcher: new (options: Record<string, unknown>) => {
-    register(handlers: Record<string, (data: unknown) => Promise<void> | void>): unknown;
+    // Handlers may return a value: that value becomes the callback response
+    // Feishu receives (card updates, toasts). Message handlers return nothing.
+    register(handlers: Record<string, (data: unknown) => Promise<unknown> | unknown>): unknown;
   };
   LoggerLevel?: { info?: unknown };
 }
