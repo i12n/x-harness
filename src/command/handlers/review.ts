@@ -1,13 +1,20 @@
-import { renderReviewMessage } from "../../channel/rendering/review.js";
+import {
+  renderReviewBatchMessage,
+  renderReviewBatchResultMessage,
+  renderReviewMessage,
+} from "../../channel/rendering/review.js";
 import type { PublishView } from "../../channel/rendering/review.js";
 import { HarnessError } from "../../errors.js";
 import type { ReviewService } from "../../review/application/reviewService.js";
 import { CommandRejectionError } from "../errors.js";
+import type { TaskQueryPort } from "./taskList.js";
 import type { GitPublishPort } from "./git.js";
 import type { CommandHandler, CommandType } from "../types.js";
 
 export interface ReviewHandlerDeps {
   reviews: ReviewService;
+  /** Optional: powers `review.list`, the batch review card. */
+  tasks?: TaskQueryPort;
   /**
    * Optional: approval is the human boundary, so the remote push happens here.
    * Absent in CLI-only/offline wiring, where the harness never publishes.
@@ -32,6 +39,62 @@ export function createReviewCommandHandlers(
       return {
         ...outcome,
         message: outcome.latestRun ? renderReviewMessage(outcome.latestRun) : undefined,
+      };
+    },
+
+    /** Everything waiting for review, as one multi-select card. */
+    "review.list": async () => {
+      const entries = deps.tasks ? await deps.tasks.list({ status: "REVIEW" }) : [];
+      if (entries.length === 0) {
+        return { tasks: [], message: { conversationId: "review", text: "当前没有待评审的任务。" } };
+      }
+      return {
+        tasks: entries,
+        message: renderReviewBatchMessage(
+          entries.map((entry) => ({
+            id: entry.id,
+            title: entry.title,
+            repositoryName: entry.repositoryName,
+          })),
+        ),
+      };
+    },
+
+    /**
+     * Approve every ticked task. Best-effort per task: one task that is no
+     * longer in REVIEW must not stop the rest, and the caller still gets a
+     * per-task outcome.
+     */
+    "review.approve_batch": async (payload, command) => {
+      const taskIds = Array.isArray(payload.taskIds)
+        ? payload.taskIds
+            .filter((id): id is string => typeof id === "string" && !!id.trim())
+            .map((id) => id.trim())
+        : [];
+      if (taskIds.length === 0) {
+        throw new CommandRejectionError("missing_task_ids", "没有勾选要评审的任务");
+      }
+      const approved: string[] = [];
+      const failed: { taskId: string; reason: string }[] = [];
+      for (const taskId of taskIds) {
+        try {
+          const task = await deps.reviews.approve(taskId, {
+            channel: command.actor.channel,
+            userId: command.actor.userId,
+          });
+          await publishSafely(deps.publish, task.id);
+          approved.push(taskId);
+        } catch (error) {
+          failed.push({
+            taskId,
+            reason: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }
+      return {
+        approved,
+        failed,
+        message: renderReviewBatchResultMessage({ approved, failed }),
       };
     },
 

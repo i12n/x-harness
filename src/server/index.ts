@@ -252,12 +252,18 @@ export class HarnessRuntime {
       runMode: "enqueue",
     });
 
+    const taskQueries = createTaskQueryPort({
+      tasks: stores.tasks,
+      repositories: stores.repositories,
+    });
+
     const dispatcher = new CommandDispatcher({
       handlers: {
         ...createProblemCommandHandlers({ problems, conversations }),
         ...createTaskRunCommandHandlers({ taskRun, runs }),
         ...createReviewCommandHandlers({
           reviews,
+          tasks: taskQueries,
           publish: (taskId) => gitPublish.publishTask(taskId),
         }),
         ...createGitCommandHandlers({
@@ -278,10 +284,7 @@ export class HarnessRuntime {
           repositories: createRepositoryQueryPort({ repositories: stores.repositories }),
         }),
         ...createTaskListCommandHandlers({
-          tasks: createTaskQueryPort({
-            tasks: stores.tasks,
-            repositories: stores.repositories,
-          }),
+          tasks: taskQueries,
         }),
         ...createQueryCommandHandlers({
           runs: createRunQueryPort({ runs: stores.runs, tasks: stores.tasks }),

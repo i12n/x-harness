@@ -389,7 +389,7 @@ export class ChatSession {
           },
         };
       }
-      payload.optionIds = selected;
+      payload[block.submit.selectionField ?? "optionIds"] = selected;
       labels = selected.map(
         (id) => block.options.find((option) => option.id === id)?.label ?? id,
       );

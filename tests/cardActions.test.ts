@@ -221,4 +221,54 @@ describe("ChatSession card actions", () => {
     expect(outcome.deferred).toBeUndefined();
     expect(calls).toHaveLength(0);
   });
+
+  it("writes the selection into the field the card declares (batch review → taskIds)", async () => {
+    const calls: Record<string, unknown>[] = [];
+    const dispatcher = new CommandDispatcher({
+      handlers: {
+        "review.approve_batch": async (payload) => {
+          calls.push(payload);
+          return {};
+        },
+      },
+      idempotency: new InMemoryIdempotencyStore(),
+    });
+    const cards = new CardRegistry();
+    const session = new ChatSession({
+      conversations: new ConversationService(new InMemoryConversationStore()),
+      intent: { parse: async () => ({ command: undefined }) },
+      dispatcher,
+      access: { allowedUserIds: ["ou_dev"], roleMap: {}, defaultRole: "reviewer" },
+      send: async () => {},
+      cards,
+    });
+    cards.register("om-9", { conversationId: "conv-1", receiveId: "oc-1" }, {
+      conversationId: "conv-1",
+      blocks: [
+        {
+          type: "choice",
+          id: "review-batch",
+          options: [{ id: "task-1", label: "task-1" }],
+          multi: true,
+          submit: {
+            action: "review.approve_batch",
+            label: "通过所选",
+            payload: {},
+            selectionField: "taskIds",
+          },
+        },
+      ],
+    });
+    cards.toggle("om-9", "review-batch", "task-1", true);
+
+    const outcome = await session.handleCardAction({
+      messageId: "om-9",
+      chatId: "oc-1",
+      operatorOpenId: "ou_dev",
+      actionId: "review.approve_batch",
+      value: JSON.stringify({ groupId: "review-batch" }),
+    });
+    await outcome.deferred!();
+    expect(calls[0]).toEqual({ taskIds: ["task-1"] });
+  });
 });

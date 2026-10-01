@@ -36,6 +36,7 @@ const QUERY_COMMANDS = new Set<CommandType>([
   "run.show",
   "run.list",
   "review.show",
+  "review.list",
   "spec.show",
   "delivery.show",
   "delivery.list",
@@ -65,6 +66,11 @@ const RULES: { pattern: RegExp; build: (match: RegExpExecArray) => unknown }[] =
   {
     pattern: /^\s*(?:通过|批准|approve)\s+(task-[A-Za-z0-9_-]+)\s*$/i,
     build: (match) => ({ type: "review.approve", payload: { taskId: match[1] } }),
+  },
+  {
+    pattern:
+      /^\s*(?:待评审|等评审|待审批|批量评审|有哪些待评审|review\s*list|pending\s*review)\s*$/i,
+    build: () => ({ type: "review.list", payload: {} }),
   },
   {
     pattern: /^\s*(?:推送|push)\s+(task-[A-Za-z0-9_-]+)\s*$/i,

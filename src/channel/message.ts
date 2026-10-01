@@ -47,6 +47,11 @@ export interface MessageChoice {
     label: string;
     /** Extra command payload fields merged with the selected option ids. */
     payload?: Record<string, unknown>;
+    /**
+     * Payload field the selected option ids are written to. Defaults to
+     * `optionIds`; a batch action that wants `taskIds` sets it explicitly.
+     */
+    selectionField?: string;
   };
 }
 

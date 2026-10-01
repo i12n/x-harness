@@ -70,8 +70,16 @@ export const COMMAND_SCHEMAS: Record<CommandType, CommandSchema> = {
     fields: { taskId: { type: "string", required: true } },
     roles: ALL_ROLES,
   },
+  "review.list": {
+    fields: {},
+    roles: ALL_ROLES,
+  },
   "review.approve": {
     fields: { taskId: { type: "string", required: true } },
+    roles: REVIEWERS,
+  },
+  "review.approve_batch": {
+    fields: { taskIds: { type: "string[]", required: true } },
     roles: REVIEWERS,
   },
   "review.request_changes": {
