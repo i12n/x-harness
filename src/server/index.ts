@@ -255,7 +255,7 @@ export class HarnessRuntime {
         ...createGitCommandHandlers({
           publish: (taskId) => gitPublish.publishTask(taskId),
         }),
-        ...createSpecificationCommandHandlers({ planning }),
+        ...createSpecificationCommandHandlers({ planning, specification: specifications }),
         ...createDeliveryCommandHandlers({ deliveries }),
         ...createConfigCommandHandlers({
           config: createConfigAdminPort({

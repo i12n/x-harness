@@ -96,6 +96,9 @@ describe("LlmIntentEngine", () => {
       "task.run",
       "run.cancel",
       "review.approve",
+      "spec.create",
+      "spec.update",
+      "spec.ready",
       "spec.plan",
       "delivery.release",
     ]) {
