@@ -70,7 +70,8 @@ export function renderRepositoryMessage(
     markdownBlock(
       repository.verificationCommands.length > 0
         ? `**验证命令**\n${repository.verificationCommands.map((command) => `- \`${command}\``).join("\n")}`
-        : "**验证命令**\n(未配置 —— 没有验证的 Run 不会被当作成功)",
+        : "**验证命令**\n(未配置 —— 没有验证的 Run 不会被当作成功)\n" +
+          "补：`ai repository update <id> --verify \"<命令>\"`",
     ),
   );
   blocks.push(

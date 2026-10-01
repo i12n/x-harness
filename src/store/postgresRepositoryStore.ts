@@ -1,6 +1,10 @@
 import { Pool } from "pg";
-import { buildRepository } from "../domain/repository.js";
-import type { CreateRepositoryInput, Repository } from "../domain/repository.js";
+import { applyRepositoryUpdate, buildRepository } from "../domain/repository.js";
+import type {
+  CreateRepositoryInput,
+  Repository,
+  UpdateRepositoryInput,
+} from "../domain/repository.js";
 import {
   buildExecutionProfile,
   defaultExecutionProfile,
@@ -71,6 +75,36 @@ export class PostgresRepositoryStore implements RepositoryStore {
     const { rows } = await this.pool.query<RepositoryRow>(
       "SELECT * FROM repositories WHERE id = $1",
       [id],
+    );
+    const row = rows[0];
+    if (!row) {
+      throw new RepositoryNotFoundError(id);
+    }
+    return rowToRepository(row);
+  }
+
+  async updateRepository(id: string, patch: UpdateRepositoryInput): Promise<Repository> {
+    const current = await this.findRepository(id);
+    const updated = applyRepositoryUpdate(current, patch);
+    const config = JSON.stringify({
+      verification: { commands: updated.verificationCommands },
+      executionProfile: updated.executionProfile,
+    });
+    const { rows } = await this.pool.query<RepositoryRow>(
+      `UPDATE repositories
+          SET name = $2, url = $3, default_branch = $4, local_path = $5,
+              config = $6, updated_at = $7
+        WHERE id = $1
+      RETURNING *`,
+      [
+        id,
+        updated.name,
+        updated.url,
+        updated.defaultBranch,
+        updated.localPath,
+        config,
+        updated.updatedAt,
+      ],
     );
     const row = rows[0];
     if (!row) {

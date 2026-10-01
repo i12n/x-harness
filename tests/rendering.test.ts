@@ -219,6 +219,19 @@ describe("Business rendering (TASK-1105)", () => {
     expect(rendered).toContain("(no target details recorded)");
   });
 
+  it("surfaces a failed agent before the verification consequence (TASK-1218)", () => {
+    const rendered = textOf(
+      renderRunMessage(run({ status: "FAILED", exitCode: 1, result: undefined })).blocks,
+    );
+    expect(rendered).toContain("退出码 1");
+    expect(rendered).toContain("agent 自身先失败");
+  });
+
+  it("says nothing about the agent when it exited cleanly", () => {
+    expect(textOf(renderRunMessage(run({ exitCode: 0 })).blocks)).not.toContain("退出码");
+    expect(textOf(renderRunMessage(run({})).blocks)).not.toContain("退出码");
+  });
+
   it("renders a review card with counts and structured actions", () => {
     const reviewable = run({
       status: "SUCCEEDED",

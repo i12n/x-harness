@@ -83,9 +83,23 @@ deploy/install.sh                # 建库 + 迁移 + 构建执行镜像 + 安装
 `harness/execution-proxy:latest`，已存在则跳过；并把默认回退名
 `harness/execution:base` 指向构建出来的镜像。职责固定为
 **部署构建 → 注册校验 → Run 启动**：`ai repository create` 会在注册前用
-`docker image inspect` 校验镜像，缺了直接拒绝（`--skip-image-check` 可跳过）；
+`docker image inspect` 校验镜像，缺了直接拒绝（`--skip-profile-check` 可跳过）；
 `ai serve` 启动时也会逐仓库点名缺失的镜像。其它运行时（如 Java）用
 `--exec-image harness/execution:<runtime>` 指定，并自行构建对应镜像。
+
+**档案修复**（TASK-1218）：注册时漏掉的执行参数可以直接补，不用重新注册：
+
+```bash
+ai repository update repo-x-music \
+  --verify "node scripts/check-docs.mjs" \
+  --network restricted --allow api.deepseek.com \
+  --secret DEEPSEEK_API_KEY
+```
+
+`update` 只改传进来的字段，其余保持原值。注册与更新都会先过一遍档案门禁
+（镜像必须存在、验证命令不能为空）；`ai serve` 启动时还会带上服务环境再检查一遍
+「声明的 secret 能不能解析、网络能不能够到 provider」，逐仓库在日志里点名。
+确认无误时可用 `--skip-profile-check` 跳过。
 
 ### 必备环境变量
 

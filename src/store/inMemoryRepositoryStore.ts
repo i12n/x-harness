@@ -1,5 +1,9 @@
-import { buildRepository } from "../domain/repository.js";
-import type { CreateRepositoryInput, Repository } from "../domain/repository.js";
+import { applyRepositoryUpdate, buildRepository } from "../domain/repository.js";
+import type {
+  CreateRepositoryInput,
+  Repository,
+  UpdateRepositoryInput,
+} from "../domain/repository.js";
 import { DuplicateRepositoryError, RepositoryNotFoundError } from "../errors.js";
 import type { RepositoryStore } from "./repositoryStore.js";
 
@@ -23,6 +27,13 @@ export class InMemoryRepositoryStore implements RepositoryStore {
       }
       return a.id.localeCompare(b.id);
     });
+  }
+
+  async updateRepository(id: string, patch: UpdateRepositoryInput): Promise<Repository> {
+    const current = await this.findRepository(id);
+    const updated = applyRepositoryUpdate(current, patch);
+    this.repositories.set(id, updated);
+    return updated;
   }
 
   async findRepository(id: string): Promise<Repository> {

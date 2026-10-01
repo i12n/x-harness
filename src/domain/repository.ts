@@ -29,6 +29,15 @@ export interface CreateRepositoryInput {
   executionProfile?: ExecutionProfile;
 }
 
+export interface UpdateRepositoryInput {
+  name?: string;
+  url?: string;
+  defaultBranch?: string;
+  localPath?: string;
+  verificationCommands?: string[];
+  executionProfile?: ExecutionProfile;
+}
+
 const SCP_LIKE_URL = /^[A-Za-z0-9._-]+@[A-Za-z0-9.-]+:.+$/;
 const URI_URL = /^[A-Za-z][A-Za-z0-9+.-]*:\/\/\S+$/;
 
@@ -64,5 +73,34 @@ export function buildRepository(input: CreateRepositoryInput): Repository {
     executionProfile: input.executionProfile ?? defaultExecutionProfile(),
     createdAt: now,
     updatedAt: now,
+  };
+}
+
+/**
+ * TASK-1218: patch an existing Repository. Absent fields keep their current
+ * value — an update can only state what changes, so a partial edit can never
+ * silently wipe the execution profile or the verification commands. (That
+ * mattered in production: `repo-x-music` was registered with every default,
+ * and there was no way to fix the profile short of re-registering.)
+ */
+export function applyRepositoryUpdate(
+  repository: Repository,
+  patch: UpdateRepositoryInput,
+): Repository {
+  const name = patch.name?.trim() || repository.name;
+  const url = patch.url?.trim() || repository.url;
+  assertValidRepositoryUrl(url);
+  return {
+    ...repository,
+    name,
+    url,
+    defaultBranch: patch.defaultBranch?.trim() || repository.defaultBranch,
+    localPath: patch.localPath?.trim() || repository.localPath,
+    verificationCommands:
+      patch.verificationCommands !== undefined
+        ? dedupeNonEmpty(patch.verificationCommands)
+        : repository.verificationCommands,
+    executionProfile: patch.executionProfile ?? repository.executionProfile,
+    updatedAt: new Date().toISOString(),
   };
 }

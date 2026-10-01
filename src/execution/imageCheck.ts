@@ -1,6 +1,5 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { HarnessError } from "../errors.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -55,20 +54,6 @@ export async function checkLocalExecutionImage(
 }
 
 export type ImageChecker = (image: string) => Promise<ImageCheckResult>;
-
-/**
- * Hard gate for callers that refuse to proceed (repository registration).
- * The checker is injectable so the gate itself is testable without Docker.
- */
-export async function assertExecutionImageAvailable(
-  image: string,
-  check: ImageChecker = checkLocalExecutionImage,
-): Promise<void> {
-  const result = await check(image);
-  if (!result.ok) {
-    throw new HarnessError(result.message);
-  }
-}
 
 export function missingImageMessage(image: string, error?: unknown): string {
   const detail =

@@ -23,6 +23,18 @@ export function renderRunMessage(
   const maxOutput = options.maxOutputChars ?? MAX_OUTPUT_CHARS;
   const blocks = [sectionBlock(run.id, `Status: ${run.status}`)];
 
+  // TASK-1218: the agent's own exit code decides nothing (verification does),
+  // but hiding it made a failed agent look like a failed verification — the
+  // first cause was invisible on the card.
+  if (typeof run.exitCode === "number" && run.exitCode !== 0) {
+    blocks.push(
+      markdownBlock(
+        `**Agent**\n\`${run.agent}\` 以退出码 ${run.exitCode} 结束 —— agent 自身先失败，` +
+          "下面的验证结果通常只是后果，不是原因。",
+      ),
+    );
+  }
+
   const result = asRecord(run.result);
   const workspaces = Array.isArray(result?.workspaces) ? result.workspaces : [];
   if (workspaces.length > 0) {

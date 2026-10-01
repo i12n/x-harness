@@ -9,9 +9,12 @@ import type { AnalyzeOutcome } from "../problem/confirmationLoop.js";
 import { Scheduler } from "../scheduler/scheduler.js";
 import type { Problem, ProblemStatus } from "../domain/problem.js";
 import { PROBLEM_STATUSES } from "../domain/problem.js";
-import { DEFAULT_EXECUTION_IMAGE, buildExecutionProfile } from "../domain/executionProfile.js";
+import {
+  buildExecutionProfile,
+  defaultExecutionProfile,
+} from "../domain/executionProfile.js";
 import type { ExecutionProfile } from "../domain/executionProfile.js";
-import { assertExecutionImageAvailable } from "../execution/imageCheck.js";
+import { gateRepositoryProfile } from "../execution/profileGate.js";
 import type { Repository } from "../domain/repository.js";
 import type { ProblemDetail } from "./commands/problemCommands.js";
 import {
@@ -41,6 +44,7 @@ import {
   createRepositoryCommand,
   listRepositoriesCommand,
   showRepositoryCommand,
+  updateRepositoryCommand,
 } from "./commands/repositoryCommands.js";
 import {
   exportConversationCommand,
@@ -49,6 +53,7 @@ import {
   showConversationCommand,
 } from "./commands/conversationCommands.js";
 import type { RepositoryCreateOptions } from "./commands/repositoryCommands.js";
+import type { RepositoryUpdateOptions } from "./commands/repositoryCommands.js";
 import {
   createTaskCommand,
   listTasksCommand,
@@ -196,24 +201,64 @@ repository
   .option("--memory-mb <n>", "container memory limit in MB", parsePositiveInt)
   .option("--pids-limit <n>", "container pids limit", parsePositiveInt)
   .option(
-    "--skip-image-check",
-    "register even when the execution image is missing locally (not recommended)",
+    "--skip-profile-check",
+    "register even when the execution profile would break every Run (not recommended)",
   )
   .action(async (options: RepositoryCreateCliOptions) => {
     await withStores(async ({ repositories }) => {
       const executionProfile = buildExecutionProfileFromCliOptions(options);
-      // TASK-1217: fail at registration, not mid-Run. The store applies the
-      // default profile, so check the *effective* image, not just the flag.
-      if (!options.skipImageCheck) {
-        await assertExecutionImageAvailable(
-          executionProfile?.image ?? DEFAULT_EXECUTION_IMAGE,
-        );
+      // TASK-1217/1218: fail at registration, not mid-Run. The store applies
+      // the default profile, so gate the *effective* one, not just the flags.
+      if (!options.skipProfileCheck) {
+        await gateRepositoryProfile({
+          repositoryId: options.id?.trim() || options.name,
+          verificationCommands: options.verify ?? [],
+          profile: executionProfile ?? defaultExecutionProfile(),
+        });
       }
       const repo = await createRepositoryCommand(repositories, {
         ...options,
         executionProfile,
       });
       console.log(`Created ${repo.id} (${repo.name})`);
+      printRepository(repo);
+    });
+  });
+
+repository
+  .command("update <id>")
+  .description("fix a registered repository's execution profile / verification commands")
+  .option("--verify <command>", "verification command (repeatable; replaces the list)", collect, [])
+  .option("--exec-image <image>", "container image for the execution profile")
+  .option("--exec-profile <name>", "execution profile name")
+  .option("--network <mode>", "container network mode: none | restricted")
+  .option("--allow <host>", "allowed egress host in restricted mode (repeatable)", collect, [])
+  .option("--secret <name>", "secret NAME injected per run (repeatable)", collect, [])
+  .option("--git-push <mode>", "allow the harness to push ai/ branches (deny|allow)")
+  .option("--cpus <n>", "container CPU limit (e.g. 2 or 0.5)", parsePositiveNumber)
+  .option("--memory-mb <n>", "container memory limit in MB", parsePositiveInt)
+  .option("--pids-limit <n>", "container pids limit", parsePositiveInt)
+  .option("--skip-profile-check", "update even when the profile would break every Run")
+  .action(async (id: string, options: RepositoryUpdateCliOptions) => {
+    await withStores(async ({ repositories }) => {
+      const current = await showRepositoryCommand(repositories, id);
+      const executionProfile = mergeExecutionProfile(current.executionProfile, options);
+      const verificationCommands =
+        options.verify && options.verify.length > 0
+          ? options.verify
+          : current.verificationCommands;
+      if (!options.skipProfileCheck) {
+        await gateRepositoryProfile({
+          repositoryId: id,
+          verificationCommands,
+          profile: executionProfile,
+        });
+      }
+      const repo = await updateRepositoryCommand(repositories, id, {
+        verificationCommands,
+        executionProfile,
+      });
+      console.log(`Updated ${repo.id} (${repo.name})`);
       printRepository(repo);
     });
   });
@@ -1304,7 +1349,8 @@ async function dispatchDeliveryCommand(
   return result.data as DeliveryViewLike;
 }
 
-type RepositoryCreateCliOptions = RepositoryCreateOptions & {
+/** Execution-profile flags shared by `repository create` and `update`. */
+type RepositoryProfileCliOptions = {
   execImage?: string;
   execProfile?: string;
   network?: string;
@@ -1314,8 +1360,51 @@ type RepositoryCreateCliOptions = RepositoryCreateOptions & {
   cpus?: number;
   memoryMb?: number;
   pidsLimit?: number;
-  skipImageCheck?: boolean;
+  skipProfileCheck?: boolean;
 };
+
+type RepositoryCreateCliOptions = RepositoryCreateOptions & RepositoryProfileCliOptions;
+
+type RepositoryUpdateCliOptions = RepositoryProfileCliOptions & {
+  verify?: string[];
+};
+
+/**
+ * TASK-1218: `repository update` patches the profile instead of rebuilding it.
+ * Only the flags actually given win; everything else keeps its current value,
+ * so fixing one field cannot silently reset the others to the defaults.
+ */
+function mergeExecutionProfile(
+  current: ExecutionProfile,
+  options: RepositoryUpdateCliOptions,
+): ExecutionProfile {
+  const allow = options.allow ?? [];
+  const network =
+    options.network || allow.length > 0
+      ? {
+          mode:
+            (options.network as "none" | "restricted" | undefined) ??
+            (allow.length > 0 ? "restricted" : current.network.mode),
+          allow: allow.length > 0 ? allow : current.network.allow,
+        }
+      : current.network;
+  return buildExecutionProfile({
+    name: options.execProfile?.trim() || current.name,
+    image: options.execImage?.trim() || current.image,
+    workspace: current.workspace,
+    commands: current.commands,
+    network,
+    resources: {
+      cpus: options.cpus ?? current.resources.cpus,
+      memoryMb: options.memoryMb ?? current.resources.memoryMb,
+      pidsLimit: options.pidsLimit ?? current.resources.pidsLimit,
+    },
+    policy: options.gitPush
+      ? { ...current.policy, gitPush: parseGitPush(options.gitPush) }
+      : current.policy,
+    secrets: (options.secret?.length ?? 0) > 0 ? options.secret : current.secrets,
+  });
+}
 
 /**
  * TASK-902: repository -> execution profile binding. Only build a custom

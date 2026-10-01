@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import {
-  assertExecutionImageAvailable,
   inspectExecutionImage,
   missingImageMessage,
 } from "../src/execution/imageCheck.js";
@@ -40,25 +39,5 @@ describe("execution image check (TASK-1217)", () => {
 
   it("keeps the docker detail in the message", () => {
     expect(missingImageMessage("x:1", new Error("boom\nsecond line"))).toContain("boom");
-  });
-});
-
-describe("registration gate (TASK-1217)", () => {
-  it("refuses to register a repository whose image is missing", async () => {
-    await expect(
-      assertExecutionImageAvailable("harness/execution:base", async () => ({
-        ok: false,
-        message: "missing image",
-      })),
-    ).rejects.toThrow("missing image");
-  });
-
-  it("lets a present image through", async () => {
-    await expect(
-      assertExecutionImageAvailable("harness/execution:node22", async () => ({
-        ok: true,
-        message: "present",
-      })),
-    ).resolves.toBeUndefined();
   });
 });

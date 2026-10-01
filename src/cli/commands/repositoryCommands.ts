@@ -40,3 +40,29 @@ export async function showRepositoryCommand(
 ): Promise<Repository> {
   return store.findRepository(id);
 }
+
+export interface RepositoryUpdateOptions {
+  /**
+   * Replaces the verification commands. Omitted means "leave unchanged" —
+   * TASK-1218 keeps partial updates partial so a flag typo cannot wipe a
+   * profile that was already working.
+   */
+  verificationCommands?: string[];
+  executionProfile?: ExecutionProfile;
+}
+
+/** TASK-1218: fix a registered repository without re-registering it. */
+export async function updateRepositoryCommand(
+  store: RepositoryStore,
+  id: string,
+  options: RepositoryUpdateOptions,
+): Promise<Repository> {
+  return store.updateRepository(id, {
+    ...(options.verificationCommands !== undefined
+      ? { verificationCommands: options.verificationCommands }
+      : {}),
+    ...(options.executionProfile !== undefined
+      ? { executionProfile: options.executionProfile }
+      : {}),
+  });
+}

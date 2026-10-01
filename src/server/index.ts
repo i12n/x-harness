@@ -68,7 +68,8 @@ import { loadServerConfig, type ServerConfig } from "./config.js";
 import { LoopDaemon } from "./daemon.js";
 import { FeishuLongConnection } from "./feishuLongConnection.js";
 import { CardRegistry } from "./cardRegistry.js";
-import { checkLocalExecutionImage } from "../execution/imageCheck.js";
+import { checkLocalExecutionImage, type ImageChecker } from "../execution/imageCheck.js";
+import { collectProfileIssues } from "../execution/profileGate.js";
 import { RunChatNotifier, type ChatTarget } from "./notifications.js";
 import { ChatSession } from "./session.js";
 import { createIntentTriage } from "./intentTriage.js";
@@ -122,7 +123,7 @@ export class HarnessRuntime {
     const driverMode = parseExecutionDriverMode(config.executionDriver);
     const sandbox = codexSandboxFor(driverMode, process.env);
     if (driverMode === "docker") {
-      await this.preflightExecutionImages(stores);
+      await this.preflightRepositories(stores);
     }
     const worker = new Worker({
       runStore: stores.runs,
@@ -470,11 +471,12 @@ export class HarnessRuntime {
   }
 
   /**
-   * TASK-1217: name every repository whose execution image is missing, at
-   * startup. A missing image used to surface only when a Run tried to start
-   * its container — after the attempt had been spent and the task blocked.
+   * TASK-1217/1218: report every registered repository whose profile would make
+   * its Runs fail — missing image, no verification commands, unresolvable
+   * secret, no network for the agent. All of these used to surface only when a
+   * Run was already failing. Warning only: the service still starts.
    */
-  private async preflightExecutionImages(stores: StoreHandle): Promise<void> {
+  private async preflightRepositories(stores: StoreHandle): Promise<void> {
     let repositories;
     try {
       repositories = await stores.repositories.listRepositories();
@@ -482,19 +484,26 @@ export class HarnessRuntime {
       this.log(`preflight: could not list repositories: ${describe(error)}`);
       return;
     }
-    const seen = new Map<string, boolean>();
-    for (const repository of repositories) {
-      const image = repository.executionProfile.image;
-      let ok = seen.get(image);
-      if (ok === undefined) {
-        ok = (await checkLocalExecutionImage(image)).ok;
-        seen.set(image, ok);
+    const images = new Map<string, Awaited<ReturnType<ImageChecker>>>();
+    const checkImage: ImageChecker = async (image) => {
+      const cached = images.get(image);
+      if (cached) {
+        return cached;
       }
-      if (!ok) {
-        this.log(
-          `preflight: repository ${repository.id} declares ${image}, which is not present ` +
-            "locally — its Runs will fail at container start (see deploy/install.sh)",
-        );
+      const result = await checkLocalExecutionImage(image);
+      images.set(image, result);
+      return result;
+    };
+    for (const repository of repositories) {
+      const issues = await collectProfileIssues({
+        repositoryId: repository.id,
+        verificationCommands: repository.verificationCommands,
+        profile: repository.executionProfile,
+        env: process.env,
+        checkImage,
+      });
+      for (const issue of issues) {
+        this.log(`preflight: repository ${repository.id}: ${issue.message} [${issue.code}]`);
       }
     }
   }
