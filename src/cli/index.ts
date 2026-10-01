@@ -9,8 +9,9 @@ import type { AnalyzeOutcome } from "../problem/confirmationLoop.js";
 import { Scheduler } from "../scheduler/scheduler.js";
 import type { Problem, ProblemStatus } from "../domain/problem.js";
 import { PROBLEM_STATUSES } from "../domain/problem.js";
-import { buildExecutionProfile } from "../domain/executionProfile.js";
+import { DEFAULT_EXECUTION_IMAGE, buildExecutionProfile } from "../domain/executionProfile.js";
 import type { ExecutionProfile } from "../domain/executionProfile.js";
+import { assertExecutionImageAvailable } from "../execution/imageCheck.js";
 import type { Repository } from "../domain/repository.js";
 import type { ProblemDetail } from "./commands/problemCommands.js";
 import {
@@ -194,9 +195,20 @@ repository
   .option("--cpus <n>", "container CPU limit (e.g. 2 or 0.5)", parsePositiveNumber)
   .option("--memory-mb <n>", "container memory limit in MB", parsePositiveInt)
   .option("--pids-limit <n>", "container pids limit", parsePositiveInt)
-  .action(async (options: RepositoryCreateOptions) => {
+  .option(
+    "--skip-image-check",
+    "register even when the execution image is missing locally (not recommended)",
+  )
+  .action(async (options: RepositoryCreateCliOptions) => {
     await withStores(async ({ repositories }) => {
       const executionProfile = buildExecutionProfileFromCliOptions(options);
+      // TASK-1217: fail at registration, not mid-Run. The store applies the
+      // default profile, so check the *effective* image, not just the flag.
+      if (!options.skipImageCheck) {
+        await assertExecutionImageAvailable(
+          executionProfile?.image ?? DEFAULT_EXECUTION_IMAGE,
+        );
+      }
       const repo = await createRepositoryCommand(repositories, {
         ...options,
         executionProfile,
@@ -1302,6 +1314,7 @@ type RepositoryCreateCliOptions = RepositoryCreateOptions & {
   cpus?: number;
   memoryMb?: number;
   pidsLimit?: number;
+  skipImageCheck?: boolean;
 };
 
 /**

@@ -68,6 +68,7 @@ import { loadServerConfig, type ServerConfig } from "./config.js";
 import { LoopDaemon } from "./daemon.js";
 import { FeishuLongConnection } from "./feishuLongConnection.js";
 import { CardRegistry } from "./cardRegistry.js";
+import { checkLocalExecutionImage } from "../execution/imageCheck.js";
 import { RunChatNotifier, type ChatTarget } from "./notifications.js";
 import { ChatSession } from "./session.js";
 import { createIntentTriage } from "./intentTriage.js";
@@ -120,6 +121,9 @@ export class HarnessRuntime {
 
     const driverMode = parseExecutionDriverMode(config.executionDriver);
     const sandbox = codexSandboxFor(driverMode, process.env);
+    if (driverMode === "docker") {
+      await this.preflightExecutionImages(stores);
+    }
     const worker = new Worker({
       runStore: stores.runs,
       taskStore: stores.tasks,
@@ -463,6 +467,36 @@ export class HarnessRuntime {
       `service started (driver=${config.executionDriver}, loop=${config.loopIntervalMs}ms, ` +
         `agent-sandbox=${sandbox}, workspaces=${workspaceRoot})`,
     );
+  }
+
+  /**
+   * TASK-1217: name every repository whose execution image is missing, at
+   * startup. A missing image used to surface only when a Run tried to start
+   * its container — after the attempt had been spent and the task blocked.
+   */
+  private async preflightExecutionImages(stores: StoreHandle): Promise<void> {
+    let repositories;
+    try {
+      repositories = await stores.repositories.listRepositories();
+    } catch (error) {
+      this.log(`preflight: could not list repositories: ${describe(error)}`);
+      return;
+    }
+    const seen = new Map<string, boolean>();
+    for (const repository of repositories) {
+      const image = repository.executionProfile.image;
+      let ok = seen.get(image);
+      if (ok === undefined) {
+        ok = (await checkLocalExecutionImage(image)).ok;
+        seen.set(image, ok);
+      }
+      if (!ok) {
+        this.log(
+          `preflight: repository ${repository.id} declares ${image}, which is not present ` +
+            "locally — its Runs will fail at container start (see deploy/install.sh)",
+        );
+      }
+    }
   }
 
   async stop(): Promise<void> {

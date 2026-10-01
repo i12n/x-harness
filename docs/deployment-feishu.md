@@ -73,10 +73,19 @@ ssh root@<部署主机>
 cd /srv/ai-harness
 cp deploy/ai-harness.env.example deploy/ai-harness.env
 vi deploy/ai-harness.env         # 填 FEISHU_APP_ID/SECRET、AI_LLM_API_KEY、DEEPSEEK_API_KEY
-deploy/install.sh                # 建库 + 迁移 + 安装并启动 systemd 单元
+deploy/install.sh                # 建库 + 迁移 + 构建执行镜像 + 安装并启动 systemd 单元
 ```
 
 `deploy.sh` 之后每次发布都会自动重启服务；`install.sh` 是幂等的，可重复执行。
+
+**执行镜像**（TASK-1217）：`install.sh` 会构建 `harness/execution:node22`
+（可用 `AI_EXECUTION_RUNTIME` / `AI_EXECUTION_BASE_IMAGE` 覆盖）和
+`harness/execution-proxy:latest`，已存在则跳过；并把默认回退名
+`harness/execution:base` 指向构建出来的镜像。职责固定为
+**部署构建 → 注册校验 → Run 启动**：`ai repository create` 会在注册前用
+`docker image inspect` 校验镜像，缺了直接拒绝（`--skip-image-check` 可跳过）；
+`ai serve` 启动时也会逐仓库点名缺失的镜像。其它运行时（如 Java）用
+`--exec-image harness/execution:<runtime>` 指定，并自行构建对应镜像。
 
 ### 必备环境变量
 
