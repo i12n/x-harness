@@ -427,6 +427,7 @@ export class HarnessRuntime {
       onCardAction: async (body) => {
         const action = parseCardAction(body);
         if (!action) {
+          this.log("card action: could not parse the callback body");
           // Cannot be routed, but it still must be answered with a card so the
           // client does not surface the callback error.
           return renderFeishuCard({
@@ -434,6 +435,9 @@ export class HarnessRuntime {
             text: "⚠️ 无法识别这次卡片操作，请重新发送指令。",
           });
         }
+        this.log(
+          `card action received: ${action.actionId} by ${action.operatorOpenId} on ${action.messageId}`,
+        );
         const outcome = await session.handleCardAction(action);
         if (outcome.deferred) {
           // Ack first: the callback must answer inside Feishu's ~3s budget, and
@@ -442,7 +446,13 @@ export class HarnessRuntime {
             this.log(`card action follow-up failed: ${describe(error)}`);
           });
         }
-        return renderFeishuCard(outcome.immediate);
+        const response = renderFeishuCard(outcome.immediate);
+        this.log(
+          `card action answered: ${action.actionId} (${
+            outcome.deferred ? "deferred" : "sync"
+          }, ${JSON.stringify(response).length} bytes)`,
+        );
+        return response;
       },
       log: (message) => this.log(message),
       errorLog: (message) => this.log(message),
