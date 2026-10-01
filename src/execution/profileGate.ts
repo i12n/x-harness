@@ -70,6 +70,21 @@ export async function collectProfileIssues(
     });
   }
 
+  // A declared secret can still be the wrong secret: the provider config names
+  // the env var codex will read, and if that name is not in the profile the
+  // container simply will not have it.
+  const requiredKeys = providerEnvKeysFromEnv(env).filter(
+    (key) => !profile.secrets.includes(key),
+  );
+  if (requiredKeys.length > 0) {
+    issues.push({
+      code: "provider_key_not_injected",
+      message:
+        `服务环境用 ${requiredKeys.join(", ")} 调模型，但执行档案没有声明它` +
+        `——Run 时容器里不会有这个变量。用 --secret ${requiredKeys[0]} 补上。`,
+    });
+  }
+
   const providerHost = providerHostFromEnv(env);
   if (profile.network.mode === "none") {
     issues.push({
@@ -115,23 +130,46 @@ export async function gateRepositoryProfile(
 export function providerHostFromEnv(
   env: Record<string, string | undefined>,
 ): string | undefined {
+  return parseProviderConfig(env).hosts[0];
+}
+
+/** `env_key` names the provider config tells codex to read. */
+export function providerEnvKeysFromEnv(
+  env: Record<string, string | undefined>,
+): string[] {
+  return parseProviderConfig(env).envKeys;
+}
+
+function parseProviderConfig(env: Record<string, string | undefined>): {
+  hosts: string[];
+  envKeys: string[];
+} {
+  const hosts: string[] = [];
+  const envKeys: string[] = [];
   const codexConfig = env.AI_CODEX_CONFIG;
   if (codexConfig) {
     try {
       const parsed = JSON.parse(codexConfig) as {
-        model_providers?: Record<string, { base_url?: unknown }>;
+        model_providers?: Record<string, { base_url?: unknown; env_key?: unknown }>;
       };
       for (const provider of Object.values(parsed.model_providers ?? {})) {
         const host = hostOf(provider?.base_url);
         if (host) {
-          return host;
+          hosts.push(host);
+        }
+        if (typeof provider?.env_key === "string" && provider.env_key.trim()) {
+          envKeys.push(provider.env_key.trim());
         }
       }
     } catch {
       // Fall through to the intent-model URL.
     }
   }
-  return hostOf(env.AI_LLM_BASE_URL);
+  const fallback = hostOf(env.AI_LLM_BASE_URL);
+  if (fallback) {
+    hosts.push(fallback);
+  }
+  return { hosts, envKeys };
 }
 
 export function isHostAllowed(host: string, allow: string[]): boolean {

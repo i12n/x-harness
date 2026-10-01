@@ -22,7 +22,9 @@ function profile(overrides: Partial<Parameters<typeof buildExecutionProfile>[0]>
 const SERVICE_ENV = {
   DEEPSEEK_API_KEY: "sk-test",
   AI_CODEX_CONFIG: JSON.stringify({
-    model_providers: { deepseek: { base_url: "https://api.deepseek.com" } },
+    model_providers: {
+      deepseek: { base_url: "https://api.deepseek.com", env_key: "DEEPSEEK_API_KEY" },
+    },
   }),
 };
 
@@ -79,7 +81,23 @@ describe("repository profile gate (TASK-1218)", () => {
       }),
     );
     expect(issues).toContain("agent_has_no_network");
+    // No secrets declared at all is its own problem: the provider config says
+    // codex reads DEEPSEEK_API_KEY, and the container would never get it.
+    expect(issues).toContain("provider_key_not_injected");
     expect(issues).not.toContain("unresolvable_secret");
+  });
+
+  it("accepts a declared provider key that the environment can resolve", async () => {
+    const issues = await codes(
+      gateInput({
+        profile: profile({
+          network: { mode: "restricted", allow: ["api.deepseek.com"] },
+          secrets: ["DEEPSEEK_API_KEY"],
+        }),
+        env: SERVICE_ENV,
+      }),
+    );
+    expect(issues).not.toContain("provider_key_not_injected");
   });
 
   it("flags a declared secret the service environment cannot resolve", async () => {
