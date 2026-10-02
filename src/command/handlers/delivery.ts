@@ -1,11 +1,15 @@
 import { renderDeliveryMessage } from "../../channel/rendering/delivery.js";
+import { buildDeliveryAcceptance } from "../../delivery/application/acceptance.js";
 import { DeliveryError, type DeliveryService } from "../../delivery/application/service.js";
 import { DeliveryNotFoundError } from "../../errors.js";
+import type { Run } from "../../domain/run.js";
 import { CommandRejectionError } from "../errors.js";
 import type { CommandHandler, CommandType } from "../types.js";
 
 export interface DeliveryHandlerDeps {
   deliveries: DeliveryService;
+  /** TASK-1223: needed to aggregate each task's latest Run evidence. */
+  runs?: { listRuns(filter: { taskId: string }): Promise<Run[]> };
 }
 
 function rejectDomainError(error: unknown): never {
@@ -29,14 +33,21 @@ export function createDeliveryCommandHandlers(
     "delivery.show": async (payload) => {
       try {
         const view = await deps.deliveries.show(String(payload.deliveryId));
+        const acceptance = await buildDeliveryAcceptance({
+          delivery: view.delivery,
+          tasks: view.tasks,
+          runs: deps.runs,
+        });
         return {
           ...view,
+          acceptance,
           message: renderDeliveryMessage({
             delivery: view.delivery,
             tasks: view.tasks,
             blocking: view.blocking,
             blockingFacts: view.blockingFacts,
             release: view.release,
+            acceptance,
           }),
         };
       } catch (error) {

@@ -2,6 +2,7 @@ import type { Delivery, Release } from "../../domain/delivery.js";
 import type { DeliveryBlockingFact } from "../../domain/delivery.js";
 import type { Task } from "../../domain/task.js";
 import type { OutgoingMessage } from "../message.js";
+import type { DeliveryAcceptanceView } from "../../delivery/application/acceptance.js";
 import { markdownBlock, sectionBlock } from "./common.js";
 import { formatFailure } from "./task.js";
 
@@ -16,6 +17,8 @@ export interface DeliveryRenderFacts {
   /** TASK-1207: structured blocking reasons (chain + failure evidence). */
   blockingFacts?: DeliveryBlockingFact[];
   release?: Release;
+  /** TASK-1223: what the delivery proved, and whether a human must accept it. */
+  acceptance?: DeliveryAcceptanceView;
 }
 
 /**
@@ -112,6 +115,39 @@ export function renderDeliveryMessage(
         : "**Release**\n(not released)",
     ),
   );
+
+  // TASK-1223: the delivery-level acceptance view — what the whole change set
+  // proved, and the single confirmation a human still owes.
+  const acceptance = facts.acceptance;
+  if (acceptance) {
+    const lines = acceptance.tasks.map((task) => {
+      const marks = [
+        task.status === "DONE" ? "✓" : `(${task.status})`,
+        task.review ? `评审 ${task.review.verdict}` : undefined,
+        task.acceptance?.requiresHumanAcceptance ? "有不可验证标准" : undefined,
+      ].filter(Boolean);
+      return `- ${task.taskId} ${task.title} · ${marks.join(" · ")}`;
+    });
+    blocks.push(markdownBlock(`**验收**\n${lines.join("\n") || "(no tasks)"}`));
+    if (acceptance.requiresHumanAcceptance) {
+      blocks.push(
+        markdownBlock(`⚠️ 需要人验收：${acceptance.reasons.slice(0, 5).join("；")}`),
+      );
+    }
+    if (acceptance.ready) {
+      blocks.push({
+        type: "actions",
+        actions: [
+          {
+            id: "delivery.release",
+            label: "确认验收并发布",
+            style: "primary",
+            value: JSON.stringify({ deliveryId: delivery.id }),
+          },
+        ],
+      });
+    }
+  }
 
   return {
     conversationId: options.conversationId ?? delivery.id,
