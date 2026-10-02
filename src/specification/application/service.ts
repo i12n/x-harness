@@ -2,10 +2,12 @@ import type { Problem } from "../../domain/problem.js";
 import {
   assessSpecification,
   isSpecificationEditable,
+  withWorkItems,
 } from "../../domain/specification.js";
 import type {
   CreateSpecificationTargetInput,
   Specification,
+  SpecificationWorkItem,
   UpdateSpecificationInput,
 } from "../../domain/specification.js";
 import { HarnessError } from "../../errors.js";
@@ -35,6 +37,8 @@ export interface CreateSpecificationFromProblemInput {
   summary?: string;
   requirements?: string[];
   acceptance?: string[];
+  /** TASK-1224: repaired decomposition, stored under constraints.workItems. */
+  workItems?: SpecificationWorkItem[];
   constraints?: Record<string, unknown>;
   targets?: CreateSpecificationTargetInput[];
 }
@@ -78,7 +82,10 @@ export class SpecificationService {
       summary: input.summary?.trim() || spec?.expected?.trim() || problem.statement,
       requirements: input.requirements ?? (spec?.problem ? [spec.problem] : []),
       acceptance: input.acceptance ?? [],
-      constraints: input.constraints ?? deriveConstraints(problem),
+      constraints:
+        input.workItems && input.workItems.length > 0
+          ? withWorkItems(input.constraints ?? deriveConstraints(problem), input.workItems)
+          : (input.constraints ?? deriveConstraints(problem)),
       targets: input.targets ?? defaultTargets(problem),
       status: "DRAFT",
     });

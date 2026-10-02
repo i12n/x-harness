@@ -1,7 +1,9 @@
 import type { Specification } from "../domain/specification.js";
+import type { SpecificationWorkItem } from "../domain/specification.js";
 import type { Task } from "../domain/task.js";
 import type { ChatClient } from "../llm/chatClient.js";
 import { parseJsonObject } from "../llm/text.js";
+import { repairWorkItems } from "../specification/application/workItems.js";
 import type { PlanningService } from "../specification/application/planning.js";
 import type { SpecificationService } from "../specification/application/service.js";
 import type { ProblemStore } from "../store/problemStore.js";
@@ -35,6 +37,7 @@ interface DerivedSpecification {
   summary?: string;
   requirements: string[];
   acceptance: string[];
+  workItems: SpecificationWorkItem[];
   targets: { repositoryId: string; role: "primary" | "supporting" }[];
   unknownTargets: string[];
 }
@@ -69,6 +72,7 @@ export class SpecificationBootstrap {
       summary: derived.summary,
       requirements: derived.requirements,
       ...(derived.acceptance.length > 0 ? { acceptance: derived.acceptance } : {}),
+      ...(derived.workItems.length > 0 ? { workItems: derived.workItems } : {}),
       ...(derived.targets.length > 0 ? { targets: derived.targets } : {}),
     });
     const outcome = await this.complete(created);
@@ -177,14 +181,22 @@ export function derivePrompt(
     "",
     "Return JSON only, no prose and no code fences:",
     '{"title": string, "summary": string, "requirements": string[],',
-    ' "acceptance": string[], "targets": [{"repositoryId": string, "role": "primary"|"supporting"}]}',
+    ' "acceptance": string[], "workItems": [{"title": string, "description": string,',
+    '   "acceptance": number[], "checks": string[]}],',
+    ' "targets": [{"repositoryId": string, "role": "primary"|"supporting"}]}',
     "",
     "Rules:",
     "- acceptance must hold 1..5 concrete, checkable criteria (a command to run or an observable outcome).",
     "- requirements state what must be true when the work is done, not how to do it.",
-    "- give 2..4 requirements, phrased at outcome level: one task is planned per",
-    "  requirement, so avoid splitting a single change into several near-duplicates.",
-    "- write title, summary and requirements in the SAME LANGUAGE as the problem statement.",
+    "- workItems are the changes to make; one task is planned per work item, so a work",
+    "  item must be an INDEPENDENTLY VERIFIABLE change, not one requirement rephrased.",
+    "  If two items cannot be reviewed separately, they are one item.",
+    "- every workItem lists the acceptance indices (0-based) it proves and at least one",
+    '  executable check (a command or an assertion). Constraints and acceptance',
+    "  criteria are NOT work items — fold them into the change they constrain.",
+    "- each acceptance criterion must be covered by exactly one workItem.",
+    "- 1..4 workItems; prefer fewer. A single coherent change is one workItem.",
+    "- write title, summary, requirements and workItems in the SAME LANGUAGE as the problem statement.",
     "- Exactly one target must be primary; use the repository the user chose, or the only registered one.",
   );
   return lines.join("\n");
@@ -230,9 +242,30 @@ export function normalizeDerived(
     summary: asString(record.summary),
     requirements: asStringArray(record.requirements),
     acceptance: asStringArray(record.acceptance),
+    // TASK-1224: the model proposes, the harness repairs — a decomposition
+    // mistake must not become extra tasks.
+    workItems: repairWorkItems(
+      parseWorkItems(record.workItems),
+      asStringArray(record.acceptance).length,
+    ),
     targets,
     unknownTargets,
   };
+}
+
+function parseWorkItems(raw: unknown): SpecificationWorkItem[] {
+  return asArray(raw)
+    .map((entry) => asRecord(entry))
+    .filter((entry): entry is Record<string, unknown> => entry !== undefined)
+    .map((entry) => ({
+      title: asString(entry.title) ?? "",
+      description: asString(entry.description) ?? "",
+      acceptance: asArray(entry.acceptance).filter(
+        (index): index is number => Number.isInteger(index) && (index as number) >= 0,
+      ),
+      checks: asStringArray(entry.checks),
+    }))
+    .filter((item) => item.title.length > 0);
 }
 
 function asArray(value: unknown): unknown[] {

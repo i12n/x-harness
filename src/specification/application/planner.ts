@@ -1,9 +1,15 @@
+import { readWorkItems } from "../../domain/specification.js";
 import type { Specification } from "../../domain/specification.js";
+import { repairWorkItems } from "./workItems.js";
 
 /** One planned work unit produced by a planner (no Task ids yet). */
 export interface PlannedItem {
   title: string;
   description: string;
+  /** TASK-1224: the criteria this item must prove; defaults to the whole spec. */
+  acceptance?: string[];
+  /** Executable checks the item claims; consumed by the verification work. */
+  checks?: string[];
 }
 
 export interface TaskPlan {
@@ -20,12 +26,35 @@ export interface TaskPlanner {
 }
 
 /**
- * Deterministic planner: one plan item per requirement (in order), or a
- * single plan item for the whole specification when there are no
- * requirements. No dependencies, no DAG — that is TASK-1203.
+ * Deterministic planner.
+ *
+ * TASK-1224: when the specification carries work items (the repaired
+ * decomposition), one item per work item — each with its own acceptance subset
+ * and checks. Otherwise it falls back to the pre-1224 behaviour: one plan item
+ * per requirement, or a single item for the whole specification.
+ *
+ * No dependencies, no DAG — that is TASK-1203.
  */
 export class DeterministicTaskPlanner implements TaskPlanner {
   async plan(specification: Specification): Promise<TaskPlan> {
+    // Repair at the point of use as well: a specification written by any other
+    // path must not turn a bad decomposition into extra tasks.
+    const workItems = repairWorkItems(
+      readWorkItems(specification),
+      specification.acceptance.length,
+    );
+    if (workItems.length > 0) {
+      return {
+        items: workItems.map((item) => ({
+          title: firstLine(item.title),
+          description: item.description,
+          acceptance: item.acceptance
+            .map((index) => specification.acceptance[index])
+            .filter((criterion): criterion is string => Boolean(criterion)),
+          checks: item.checks,
+        })),
+      };
+    }
     const requirements = specification.requirements
       .map((requirement) => requirement.trim())
       .filter((requirement) => requirement.length > 0);

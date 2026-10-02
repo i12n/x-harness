@@ -33,6 +33,70 @@ export interface Specification {
   updatedAt: string;
 }
 
+/**
+ * TASK-1224: a work item is the unit that becomes one Task. Unlike a
+ * requirement (which states what must be true), a work item must be an
+ * independently verifiable change: it carries its own acceptance subset and at
+ * least one executable check. Stored in `constraints.workItems` so no migration
+ * is needed.
+ */
+export interface SpecificationWorkItem {
+  title: string;
+  description: string;
+  /** Indices into {@link Specification.acceptance}. */
+  acceptance: number[];
+  /** Executable checks that prove this item (consumed by TASK-1220). */
+  checks: string[];
+}
+
+const WORK_ITEMS_KEY = "workItems";
+
+/** Reads work items defensively; malformed entries are dropped, never thrown. */
+export function readWorkItems(
+  specification: Pick<Specification, "constraints">,
+): SpecificationWorkItem[] {
+  const raw = specification.constraints?.[WORK_ITEMS_KEY];
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+  const items: SpecificationWorkItem[] = [];
+  for (const entry of raw) {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+      continue;
+    }
+    const record = entry as Record<string, unknown>;
+    const title = typeof record.title === "string" ? record.title.trim() : "";
+    if (!title) {
+      continue;
+    }
+    const acceptance = Array.isArray(record.acceptance)
+      ? record.acceptance.filter(
+          (index): index is number => Number.isInteger(index) && (index as number) >= 0,
+        )
+      : [];
+    const checks = Array.isArray(record.checks)
+      ? record.checks
+          .filter((check): check is string => typeof check === "string")
+          .map((check) => check.trim())
+          .filter(Boolean)
+      : [];
+    items.push({
+      title,
+      description: typeof record.description === "string" ? record.description.trim() : "",
+      acceptance,
+      checks,
+    });
+  }
+  return items;
+}
+
+export function withWorkItems(
+  constraints: Record<string, unknown>,
+  items: SpecificationWorkItem[],
+): Record<string, unknown> {
+  return { ...constraints, [WORK_ITEMS_KEY]: items };
+}
+
 export interface CreateSpecificationTargetInput {
   repositoryId: string;
   role?: TargetRole;

@@ -18,9 +18,11 @@ describe("chat prompts", () => {
     );
   });
 
-  it("asks the specification derivation to stay at outcome level", () => {
+  it("asks the specification derivation for independently verifiable work items", () => {
     const prompt = derivePrompt(problem, [{ id: "repo-x", name: "x" }]);
-    expect(prompt).toContain("2..4 requirements");
+    expect(prompt).toContain("INDEPENDENTLY VERIFIABLE change");
+    expect(prompt).toContain("1..4 workItems");
+    expect(prompt).toContain("NOT work items");
     expect(prompt).toContain("SAME LANGUAGE as the problem statement");
   });
 });

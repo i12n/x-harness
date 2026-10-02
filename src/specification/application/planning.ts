@@ -1,4 +1,4 @@
-import { assessSpecification } from "../../domain/specification.js";
+import { assessSpecification, readWorkItems } from "../../domain/specification.js";
 import type { Specification, SpecificationTarget } from "../../domain/specification.js";
 import {
   planItemId,
@@ -186,6 +186,10 @@ export class PlanningService {
     specification: Specification,
     items: SpecificationPlanItem[],
   ): Promise<{ tasks: Task[]; created: number; createdTaskIds: string[] }> {
+    // TASK-1224: plan items are produced 1:1 (in order) from the specification's
+    // work items, so the item's own acceptance subset and checks are looked up
+    // by position instead of widening the plan-item schema.
+    const workItems = readWorkItems(specification);
     const tasks: Task[] = [];
     const createdTaskIds: string[] = [];
     let created = 0;
@@ -195,6 +199,12 @@ export class PlanningService {
         continue;
       }
       const taskId = plannedTaskId(specification.id, item.position);
+      const workItem = workItems.length > 0 ? workItems[item.position] : undefined;
+      const acceptance = workItem
+        ? workItem.acceptance
+            .map((index) => specification.acceptance[index])
+            .filter((criterion): criterion is string => Boolean(criterion))
+        : specification.acceptance;
       let task: Task;
       try {
         task = await this.deps.tasks.createTask({
@@ -207,7 +217,10 @@ export class PlanningService {
             item.description,
           ),
           status: PLANNED_TASK_STATUS,
-          acceptance: specification.acceptance,
+          acceptance: acceptance.length > 0 ? acceptance : specification.acceptance,
+          ...(workItem && workItem.checks.length > 0
+            ? { constraints: { checks: workItem.checks } }
+            : {}),
         });
         created += 1;
         createdTaskIds.push(task.id);
