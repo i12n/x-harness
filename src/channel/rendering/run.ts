@@ -1,4 +1,5 @@
 import type { Run } from "../../domain/run.js";
+import { describeReviewerReport, parseReviewerReport } from "../../reviewer/domain/verdict.js";
 import type { OutgoingMessage } from "../message.js";
 import {
   MAX_OUTPUT_CHARS,
@@ -36,6 +37,11 @@ export function renderRunMessage(
   }
 
   const result = asRecord(run.result);
+  // TASK-1221: the reviewer's structured verdict, when one was produced.
+  const review = parseReviewerReport(result?.review);
+  if (review) {
+    blocks.push(markdownBlock(`**Reviewer**\n${describeReviewerReport(review)}`));
+  }
   // TASK-1220: what the run proved about the criteria it promised, kept
   // separate from "the repository still works".
   const acceptance = asRecord(result?.acceptance);

@@ -58,6 +58,11 @@ export interface ServerConfig {
    * picked up by the Scheduler without a human `运行 task-x` per task.
    */
   autoStart: boolean;
+  /**
+   * TASK-1221: `off` = human review only, `shadow` = record the reviewer's
+   * verdict without acting on it, `on` = approve automatically when safe.
+   */
+  reviewer: "off" | "shadow" | "on";
   /** Extra deployment knowledge appended to the intent prompt. */
   intentNotes?: string;
   /**
@@ -115,9 +120,18 @@ export function loadServerConfig(env: EnvLike = process.env): ServerConfig {
     executionDriver: parseDriver(env.AI_EXECUTION_DRIVER),
     autoBootstrapSpecification: envFlag(env.AI_AUTO_BOOTSTRAP_SPECIFICATION, true),
     autoStart: envFlag(env.AI_AUTO_START, true),
+    reviewer: parseReviewerMode(env.AI_REVIEWER),
     intentNotes: optional(env, "AI_INTENT_NOTES"),
     configFile: optional(env, "AI_ENV_FILE") ?? resolveEnvFileDefault(),
   };
+}
+
+function parseReviewerMode(value: string | undefined): "off" | "shadow" | "on" {
+  const mode = (value ?? "on").trim().toLowerCase();
+  if (mode === "off" || mode === "shadow" || mode === "on") {
+    return mode;
+  }
+  throw new Error(`invalid AI_REVIEWER '${value}' (use off|shadow|on)`);
 }
 
 /** Env booleans accept the usual spellings (`false`, `off`, `0`, `no`). */

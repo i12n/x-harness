@@ -4,13 +4,20 @@ import type { Repository } from "../domain/repository.js";
 import { defaultExecutionProfile } from "../domain/executionProfile.js";
 import type { TaskTarget } from "../domain/taskTarget.js";
 import type { Run } from "../domain/run.js";
-import type { Task } from "../domain/task.js";
+import type { Task, TaskStatus } from "../domain/task.js";
 import {
   ExecutionCancelledError,
   ExecutionTimeoutError,
   WorkerExecutionError,
 } from "../errors.js";
 import { acceptanceChecksOf, buildAcceptanceEvidence } from "../verification/acceptance.js";
+import type { AcceptanceEvidence } from "../verification/acceptance.js";
+import { collectGitDiff } from "../verification/diff.js";
+import type { CollectedDiff } from "../verification/diff.js";
+import type { ReviewerAgent } from "../reviewer/application/reviewerAgent.js";
+import type { ReviewerMode, ReviewerReport } from "../reviewer/domain/verdict.js";
+import { decideReviewAction, describeReviewerReport } from "../reviewer/domain/verdict.js";
+import type { ReviewService } from "../review/application/reviewService.js";
 
 /** TASK-1219: default Run cap; `AI_RUN_TIMEOUT_MS=0` disables it. */
 export const DEFAULT_EXECUTION_TIMEOUT_MS = 30 * 60 * 1000;
@@ -51,6 +58,14 @@ export interface WorkerOptions {
   heartbeatMs?: number;
   leaseSeconds?: number;
   executionTimeoutMs?: number;
+  /**
+   * TASK-1221: the reviewer agent and the review transitions it may trigger.
+   * Absent (or `reviewerMode: "off"`) keeps the pre-1221 behaviour: every
+   * passing Run waits for a human.
+   */
+  reviewer?: ReviewerAgent;
+  reviewerMode?: ReviewerMode;
+  reviews?: ReviewService;
 }
 
 export interface ExecuteRunOutcome {
@@ -83,6 +98,9 @@ export class Worker {
   private readonly heartbeatMs: number;
   private readonly leaseMs: number;
   private readonly executionTimeoutMs: number;
+  private readonly reviewer: ReviewerAgent | undefined;
+  private readonly reviewerMode: ReviewerMode;
+  private readonly reviews: ReviewService | undefined;
 
   constructor(options: WorkerOptions) {
     this.runStore = options.runStore;
@@ -104,6 +122,9 @@ export class Worker {
       // TASK-1219: auto-start multiplies the cost of a runaway Run, so the
       // default is a 30-minute cap instead of "no timeout". Set 0 to disable.
       Number(process.env.AI_RUN_TIMEOUT_MS ?? DEFAULT_EXECUTION_TIMEOUT_MS);
+    this.reviewer = options.reviewer;
+    this.reviewerMode = options.reviewerMode ?? "off";
+    this.reviews = options.reviews;
   }
 
   async executeRun(
@@ -296,6 +317,16 @@ export class Worker {
         task.acceptance,
         acceptanceChecksOf(task.constraints),
       );
+      // TASK-1221: review the change against the criteria, using evidence the
+      // harness collected itself.
+      const diff = await collectGitDiff(
+        exec,
+        execution.workdirs?.[primaryTarget.target.id] ?? execution.workdir,
+      );
+      const review = await this.runReviewer(
+        { task, acceptance, verification, diff },
+        runId,
+      );
       await this.emit(
         verification.passed ? "VerificationPassed" : "VerificationFailed",
         {
@@ -337,12 +368,13 @@ export class Worker {
             agentStderr: truncate(agentResult.stderr, 100_000),
             verification,
             acceptance,
+            diff,
+            review,
           },
           finishedAt,
         });
-        await this.taskStore.updateTaskStatus(task.id, "REVIEW");
         await this.emit("RunSucceeded", { taskId: task.id, runId });
-        await this.emit("TaskReview", { taskId: task.id, runId });
+        await this.settleAfterReview({ task, runId, attempt: claimed.attempt, review, acceptance });
       } else {
         await this.executionManager.finish(environment, "FAILED", "verification failed");
         await this.failRun(
@@ -412,6 +444,99 @@ export class Worker {
         }
       }
       clearInterval(heartbeat);
+    }
+  }
+
+  /**
+   * TASK-1221: a structured verdict from the reviewer agent. A failure here
+   * never fails the Run — the human path is still available.
+   */
+  private async runReviewer(input: {
+    task: Task;
+    acceptance: AcceptanceEvidence;
+    verification: VerificationResult;
+    diff: CollectedDiff;
+  }, runId: string): Promise<ReviewerReport | undefined> {
+    if (!this.reviewer || this.reviewerMode === "off") {
+      return undefined;
+    }
+    try {
+      return await this.reviewer.review({
+        task: {
+          id: input.task.id,
+          title: input.task.title,
+          description: input.task.description,
+          acceptance: input.task.acceptance,
+        },
+        acceptance: input.acceptance,
+        verification: {
+          passed: input.verification.passed,
+          checks: input.verification.checks.map((check) => ({
+            command: check.command,
+            status: check.status,
+          })),
+        },
+        diff: input.diff,
+      });
+    } catch (error) {
+      await this.emit("ReviewerFailed", {
+        taskId: input.task.id,
+        runId,
+        payload: { message: error instanceof Error ? error.message : String(error) },
+      });
+      return undefined;
+    }
+  }
+
+  /**
+   * TASK-1221: turn the verdict into a task status. Auto-approval happens only
+   * when the policy allows it; **publishing is deliberately not part of it** —
+   * pushing stays a human action (review.approve).
+   */
+  private async settleAfterReview(input: {
+    task: Task;
+    runId: string;
+    attempt: number;
+    review?: ReviewerReport;
+    acceptance: AcceptanceEvidence;
+  }): Promise<void> {
+    const { task, runId, review, acceptance } = input;
+    await this.taskStore.updateTaskStatus(task.id, "REVIEW");
+    const action = decideReviewAction(review, acceptance, this.reviewerMode);
+    if (review) {
+      try {
+        await this.taskStore.appendTaskReview(task.id, {
+          at: new Date().toISOString(),
+          runId,
+          text: describeReviewerReport(review),
+        });
+      } catch {
+        // History must never break the Run.
+      }
+    }
+    await this.emit("TaskReview", {
+      taskId: task.id,
+      runId,
+      payload: { action, verdict: review?.verdict ?? null },
+    });
+
+    if (action === "auto_approve" && this.reviews) {
+      await this.reviews.approve(
+        task.id,
+        { channel: "reviewer-agent", userId: "reviewer-agent" },
+        review?.notes,
+      );
+      await this.emit("ReviewAutoApproved", { taskId: task.id, runId });
+      return;
+    }
+    if (action === "retry") {
+      const next: TaskStatus = input.attempt >= task.maxAttempts ? "BLOCKED" : "READY";
+      await this.taskStore.updateTaskStatus(task.id, next);
+      await this.emit("ReviewRequestedChanges", {
+        taskId: task.id,
+        runId,
+        payload: { next, notes: review?.notes ?? "" },
+      });
     }
   }
 

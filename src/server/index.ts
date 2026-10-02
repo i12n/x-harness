@@ -62,6 +62,7 @@ import { SpecificationService } from "../specification/application/service.js";
 import { openStores, type StoreHandle } from "../store/index.js";
 import { TaskDependencyService } from "../task/application/dependencyService.js";
 import { TaskIntakeService } from "../task/application/intakeService.js";
+import { LlmReviewerAgent } from "../reviewer/application/reviewerAgent.js";
 import { Verifier } from "../verification/runner.js";
 import { Worker } from "../worker/worker.js";
 import { WorkspaceManager } from "../workspace/manager.js";
@@ -126,6 +127,14 @@ export class HarnessRuntime {
     if (driverMode === "docker") {
       await this.preflightRepositories(stores);
     }
+    // TASK-1221: the reviewer agent and the review transitions the Worker needs
+    // are built here, before the Worker itself.
+    const chat = new HttpChatClient(config.llm);
+    const reviews = new ReviewService({
+      tasks: stores.tasks,
+      runs: stores.runs,
+      events: stores.events,
+    });
     const worker = new Worker({
       runStore: stores.runs,
       taskStore: stores.tasks,
@@ -136,6 +145,9 @@ export class HarnessRuntime {
       executionManager,
       eventStore: stores.events,
       workerId: process.env.AI_WORKER_ID ?? "feishu-service",
+      reviewer: config.reviewer === "off" ? undefined : new LlmReviewerAgent(chat),
+      reviewerMode: config.reviewer,
+      reviews,
     });
 
     const dependencies = new TaskDependencyService({
@@ -202,7 +214,6 @@ export class HarnessRuntime {
     };
 
     // ---- application services ------------------------------------------
-    const chat = new HttpChatClient(config.llm);
     const problems = new ProblemService(
       stores.problems,
       new ConfirmationLoop({
@@ -212,11 +223,6 @@ export class HarnessRuntime {
         analyzer: new LlmProblemAnalyzer(chat),
       }),
     );
-    const reviews = new ReviewService({
-      tasks: stores.tasks,
-      runs: stores.runs,
-      events: stores.events,
-    });
     const gitPublish = new GitPublishService({
       tasks: stores.tasks,
       runs: stores.runs,

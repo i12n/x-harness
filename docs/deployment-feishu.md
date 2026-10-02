@@ -143,6 +143,12 @@ ai repository update repo-x-music \
 原因。用 `AI_AUTO_START=false` 可回到"人工 intake + 人工运行"。`task.run` 保留为
 重跑入口。Run 默认 30 分钟超时（`AI_RUN_TIMEOUT_MS`，设 0 关闭）。
 
+**TASK-1220/1221 之后**：Run 会跑「仓库验证命令 + 任务自带 checks」，
+并产出验收证据（每条标准 verified / unverifiable）。验证通过后**评审 agent** 给结构化
+结论：`approve` 且所有验收标准都有可执行证明 → 自动 DONE（**不推送**）；
+`request_changes` → 自动返工；`needs_human` / 有 unverifiable 标准 → 停在 REVIEW 交给人。
+`AI_REVIEWER=off|shadow|on`（默认 on）控制这个环节。
+
 ```text
 这是要我开工，还是只想了解情况？
   开工     → 按你原话建问题并开始澄清
