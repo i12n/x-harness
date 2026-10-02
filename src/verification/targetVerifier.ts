@@ -13,6 +13,12 @@ export interface TargetVerificationRequest {
   workdir: string;
   /** Commands come from THIS repository's config, never from the Task. */
   commands: string[];
+  /**
+   * TASK-1220: checks the Task itself brought (from its work item). They run
+   * after the repository commands and are recorded separately, because they
+   * prove this change rather than the repository's general health.
+   */
+  acceptanceChecks?: string[];
   exec?: ExecutionExec;
   timeoutMs?: number;
 }
@@ -24,6 +30,7 @@ export interface TargetVerificationResult {
   role: TargetRole;
   workdir: string;
   commands: string[];
+  acceptanceChecks: string[];
   checks: VerificationCheck[];
   passed: boolean;
   durationSeconds: number;
@@ -60,12 +67,17 @@ export class TargetVerifier {
     request: TargetVerificationRequest,
   ): Promise<TargetVerificationResult> {
     const startedAt = new Date().toISOString();
+    const acceptanceChecks = (request.acceptanceChecks ?? [])
+      .map((check) => check.trim())
+      .filter(Boolean);
     try {
       const result = await this.verifier.run({
         workspacePath: request.workdir,
         workdir: request.workdir,
         exec: request.exec,
-        commands: request.commands,
+        // Repository commands are the regression floor; the Task's own checks
+        // are the proof for this change (TASK-1220).
+        commands: [...request.commands, ...acceptanceChecks],
         timeoutMs: request.timeoutMs,
       });
       return {
@@ -75,6 +87,7 @@ export class TargetVerifier {
         role: request.role,
         workdir: request.workdir,
         commands: [...request.commands],
+        acceptanceChecks,
         checks: result.checks,
         passed: result.passed,
         durationSeconds: result.durationSeconds,
@@ -90,6 +103,7 @@ export class TargetVerifier {
         role: request.role,
         workdir: request.workdir,
         commands: [...request.commands],
+        acceptanceChecks,
         checks: [],
         passed: false,
         durationSeconds: Math.max(

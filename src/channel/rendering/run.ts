@@ -36,6 +36,31 @@ export function renderRunMessage(
   }
 
   const result = asRecord(run.result);
+  // TASK-1220: what the run proved about the criteria it promised, kept
+  // separate from "the repository still works".
+  const acceptance = asRecord(result?.acceptance);
+  const criteria = Array.isArray(acceptance?.criteria) ? acceptance.criteria : [];
+  if (criteria.length > 0) {
+    const lines = criteria
+      .map((entry) => {
+        const record = asRecord(entry);
+        if (!record) {
+          return undefined;
+        }
+        const mark = record.status === "verified" ? "✓" : "?";
+        return `- ${mark} ${String(record.criterion ?? "")}`;
+      })
+      .filter((line): line is string => Boolean(line));
+    const needsHuman = acceptance?.requiresHumanAcceptance === true;
+    blocks.push(
+      markdownBlock(
+        `**Acceptance**\n${lines.join("\n")}` +
+          (needsHuman
+            ? "\n\n⚠️ 有验收标准没有可执行检查 —— 需要人验收，不能自动通过。"
+            : ""),
+      ),
+    );
+  }
   const workspaces = Array.isArray(result?.workspaces) ? result.workspaces : [];
   if (workspaces.length > 0) {
     const lines = workspaces

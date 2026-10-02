@@ -10,6 +10,7 @@ import {
   ExecutionTimeoutError,
   WorkerExecutionError,
 } from "../errors.js";
+import { acceptanceChecksOf, buildAcceptanceEvidence } from "../verification/acceptance.js";
 
 /** TASK-1219: default Run cap; `AI_RUN_TIMEOUT_MS=0` disables it. */
 export const DEFAULT_EXECUTION_TIMEOUT_MS = 30 * 60 * 1000;
@@ -285,10 +286,16 @@ export class Worker {
           role: target.role,
           workdir: execution.workdirs?.[target.id] ?? execution.workdir,
           commands: repository.verificationCommands,
+          // TASK-1220: the Task's own checks (from its work item) run too.
+          acceptanceChecks: acceptanceChecksOf(task.constraints),
           exec,
         })),
       );
       const verification = aggregateVerification(targetResults);
+      const acceptance = buildAcceptanceEvidence(
+        task.acceptance,
+        acceptanceChecksOf(task.constraints),
+      );
       await this.emit(
         verification.passed ? "VerificationPassed" : "VerificationFailed",
         {
@@ -329,6 +336,7 @@ export class Worker {
             agentStdout: truncate(agentResult.stdout, 100_000),
             agentStderr: truncate(agentResult.stderr, 100_000),
             verification,
+            acceptance,
           },
           finishedAt,
         });
