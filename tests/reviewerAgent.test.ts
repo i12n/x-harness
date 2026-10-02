@@ -11,6 +11,7 @@ import {
 import type { ReviewerReport } from "../src/reviewer/domain/verdict.js";
 import { buildAcceptanceEvidence } from "../src/verification/acceptance.js";
 import { collectGitDiff } from "../src/verification/diff.js";
+import { assessChangeRisk } from "../src/reviewer/domain/risk.js";
 
 const report = (over: Partial<ReviewerReport> = {}): ReviewerReport => ({
   verdict: "approve",
@@ -48,6 +49,40 @@ describe("review action policy (TASK-1221)", () => {
     expect(decideReviewAction(report(), verified, "shadow")).toBe("human_review");
     expect(decideReviewAction(report(), verified, "off")).toBe("human_review");
     expect(decideReviewAction(undefined, verified, "on")).toBe("human_review");
+  });
+
+  it("forces a human when the change itself is risky (TASK-1222)", () => {
+    const risky = assessChangeRisk(["migrations/013_x.sql"]);
+    expect(risky.level).toBe("high");
+    expect(decideReviewAction(report(), verified, "on", risky)).toBe("human_review");
+    expect(decideReviewAction(report(), verified, "on")).toBe("auto_approve");
+  });
+});
+
+describe("change risk (TASK-1222)", () => {
+  it("flags migrations, deployment, config, secrets and CI", () => {
+    for (const file of [
+      "migrations/001_init.sql",
+      "deploy/install.sh",
+      "docker/execution/Dockerfile",
+      ".github/workflows/ci.yml",
+      "config/config.yaml",
+      "app/.env.local",
+    ]) {
+      expect(assessChangeRisk([file])).toMatchObject({ level: "high" });
+    }
+  });
+
+  it("keeps ordinary business changes low risk", () => {
+    const risk = assessChangeRisk(["app/globals.css", "tests/mobile.spec.ts"]);
+    expect(risk).toEqual({ level: "low", reasons: [] });
+  });
+
+  it("treats a very large change as risky and says why", () => {
+    const files = Array.from({ length: 26 }, (_, index) => `src/f${index}.ts`);
+    const risk = assessChangeRisk(files);
+    expect(risk.level).toBe("high");
+    expect(risk.reasons.join()).toContain("改动范围过大");
   });
 });
 

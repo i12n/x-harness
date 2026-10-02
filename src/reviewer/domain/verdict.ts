@@ -1,4 +1,5 @@
 import type { AcceptanceEvidence } from "../../verification/acceptance.js";
+import type { ChangeRisk } from "./risk.js";
 
 export const REVIEW_VERDICTS = ["approve", "request_changes", "needs_human"] as const;
 export type ReviewVerdict = (typeof REVIEW_VERDICTS)[number];
@@ -36,12 +37,15 @@ export type ReviewAction =
  *   - the reviewer must actually approve;
  *   - every acceptance criterion must have executable proof — a criterion the
  *     machine could not judge always keeps a human in the loop;
+ *   - the change itself must be low risk (TASK-1222): migrations, deployment,
+ *     configuration, secrets and CI always go to a human;
  *   - `shadow`/`off` never change the task's status.
  */
 export function decideReviewAction(
   report: ReviewerReport | undefined,
   acceptance: AcceptanceEvidence | undefined,
   mode: ReviewerMode,
+  risk: ChangeRisk = { level: "low", reasons: [] },
 ): ReviewAction {
   if (mode !== "on") {
     return "human_review";
@@ -57,6 +61,9 @@ export function decideReviewAction(
   }
   if (acceptance?.requiresHumanAcceptance) {
     return "human_acceptance";
+  }
+  if (risk.level === "high") {
+    return "human_review";
   }
   return "auto_approve";
 }

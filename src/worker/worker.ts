@@ -17,6 +17,8 @@ import type { CollectedDiff } from "../verification/diff.js";
 import type { ReviewerAgent } from "../reviewer/application/reviewerAgent.js";
 import type { ReviewerMode, ReviewerReport } from "../reviewer/domain/verdict.js";
 import { decideReviewAction, describeReviewerReport } from "../reviewer/domain/verdict.js";
+import { assessChangeRisk } from "../reviewer/domain/risk.js";
+import type { ChangeRisk } from "../reviewer/domain/risk.js";
 import type { ReviewService } from "../review/application/reviewService.js";
 
 /** TASK-1219: default Run cap; `AI_RUN_TIMEOUT_MS=0` disables it. */
@@ -327,6 +329,9 @@ export class Worker {
         { task, acceptance, verification, diff },
         runId,
       );
+      // TASK-1222: some changes must not be waved through, whatever the
+      // reviewer thinks of them.
+      const risk = assessChangeRisk(diff.files);
       await this.emit(
         verification.passed ? "VerificationPassed" : "VerificationFailed",
         {
@@ -370,11 +375,19 @@ export class Worker {
             acceptance,
             diff,
             review,
+            risk,
           },
           finishedAt,
         });
         await this.emit("RunSucceeded", { taskId: task.id, runId });
-        await this.settleAfterReview({ task, runId, attempt: claimed.attempt, review, acceptance });
+        await this.settleAfterReview({
+          task,
+          runId,
+          attempt: claimed.attempt,
+          review,
+          acceptance,
+          risk,
+        });
       } else {
         await this.executionManager.finish(environment, "FAILED", "verification failed");
         await this.failRun(
@@ -499,10 +512,12 @@ export class Worker {
     attempt: number;
     review?: ReviewerReport;
     acceptance: AcceptanceEvidence;
+    risk?: ChangeRisk;
   }): Promise<void> {
     const { task, runId, review, acceptance } = input;
     await this.taskStore.updateTaskStatus(task.id, "REVIEW");
-    const action = decideReviewAction(review, acceptance, this.reviewerMode);
+    const risk = input.risk ?? { level: "low" as const, reasons: [] };
+    const action = decideReviewAction(review, acceptance, this.reviewerMode, risk);
     if (review) {
       try {
         await this.taskStore.appendTaskReview(task.id, {
@@ -517,7 +532,7 @@ export class Worker {
     await this.emit("TaskReview", {
       taskId: task.id,
       runId,
-      payload: { action, verdict: review?.verdict ?? null },
+      payload: { action, verdict: review?.verdict ?? null, risk },
     });
 
     if (action === "auto_approve" && this.reviews) {
