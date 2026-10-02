@@ -137,6 +137,12 @@ ai repository update repo-x-music \
 机器人会先判断这条消息是**查询 / 操作 / 新需求 / 闲聊**（判定规则与矩阵见
 [intent-triage.md](intent-triage.md)）。含糊到无法判断时它会先问一句：
 
+**TASK-1219 之后**：需求确认（`确认`）就是唯一的一次「开始」授权——
+规格推导 → 拆解 → 自动过 Task Intake → **任务 READY，调度器直接开跑**。
+不再需要逐条 `运行 task-x`。没通过 intake 的任务会被拦成 `BLOCKED` 并在聊天里点名单个
+原因。用 `AI_AUTO_START=false` 可回到"人工 intake + 人工运行"。`task.run` 保留为
+重跑入口。Run 默认 30 分钟超时（`AI_RUN_TIMEOUT_MS`，设 0 关闭）。
+
 ```text
 这是要我开工，还是只想了解情况？
   开工     → 按你原话建问题并开始澄清

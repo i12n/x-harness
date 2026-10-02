@@ -40,6 +40,7 @@ import {
 } from "../execution/driverSelection.js";
 import { GitService } from "../git/gitService.js";
 import { GitPublishService } from "../git/publishService.js";
+import { TaskIntakeService } from "../task/application/intakeService.js";
 import {
   createRepositoryCommand,
   listRepositoriesCommand,
@@ -1261,6 +1262,16 @@ function dispatchSpecificationCommand(
     events: handle.events,
     // TASK-1205: planning a Specification creates its Delivery automatically.
     deliveries: deliveryService(handle),
+    // TASK-1219: planning also runs Task Intake, so tasks come out READY for
+    // the Scheduler. AI_AUTO_START=off restores manual `ai task validate`.
+    intake:
+      (process.env.AI_AUTO_START ?? "true").toLowerCase() !== "false"
+        ? new TaskIntakeService({
+            tasks: handle.tasks,
+            repositories: handle.repositories,
+            events: handle.events,
+          })
+        : undefined,
   });
   const dispatcher = new CommandDispatcher({
     handlers: createSpecificationCommandHandlers({ planning, specification }),

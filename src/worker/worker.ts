@@ -10,6 +10,9 @@ import {
   ExecutionTimeoutError,
   WorkerExecutionError,
 } from "../errors.js";
+
+/** TASK-1219: default Run cap; `AI_RUN_TIMEOUT_MS=0` disables it. */
+export const DEFAULT_EXECUTION_TIMEOUT_MS = 30 * 60 * 1000;
 import type { ExecutionStatus } from "../domain/execution.js";
 import {
   ExecutionManager,
@@ -97,7 +100,9 @@ export class Worker {
     this.leaseMs = (options.leaseSeconds ?? 30) * 1000;
     this.executionTimeoutMs =
       options.executionTimeoutMs ??
-      Number(process.env.AI_RUN_TIMEOUT_MS ?? 0);
+      // TASK-1219: auto-start multiplies the cost of a runaway Run, so the
+      // default is a 30-minute cap instead of "no timeout". Set 0 to disable.
+      Number(process.env.AI_RUN_TIMEOUT_MS ?? DEFAULT_EXECUTION_TIMEOUT_MS);
   }
 
   async executeRun(

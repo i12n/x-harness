@@ -26,7 +26,14 @@ describe("loadServerConfig", () => {
     expect(config.maxConcurrency).toBe(2);
     expect(config.executionDriver).toBe("local");
     expect(config.autoBootstrapSpecification).toBe(true);
+    expect(config.autoStart).toBe(true);
     expect(config.access.allowedUserIds).toEqual([]);
+  });
+
+  it("can turn auto-start off (TASK-1219 rollback)", () => {
+    expect(loadServerConfig({ ...BASE, AI_AUTO_START: "false" }).autoStart).toBe(false);
+    expect(loadServerConfig({ ...BASE, AI_AUTO_START: "off" }).autoStart).toBe(false);
+    expect(loadServerConfig({ ...BASE, AI_AUTO_START: "true" }).autoStart).toBe(true);
   });
 
   it("parses an allow-list, role map and driver override", () => {

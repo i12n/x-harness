@@ -1,7 +1,7 @@
 import type { CreateTaskInput, Task, TaskStatus } from "../../domain/task.js";
 import type { CreateTaskTargetInput } from "../../domain/taskTarget.js";
-import { assessTask } from "../../domain/task.js";
 import { ValidationError } from "../../errors.js";
+import { TaskIntakeService } from "../../task/application/intakeService.js";
 import type { RepositoryStore } from "../../store/repositoryStore.js";
 import type { EventStore } from "../../store/eventStore.js";
 import type { TaskListFilter, TaskStore } from "../../store/taskStore.js";
@@ -112,6 +112,9 @@ export interface ValidateTaskResult {
 /**
  * Task Intake (plan section 九): INBOX -> READY when the repository exists and
  * description/acceptance are present, otherwise INBOX -> BLOCKED.
+ *
+ * The rule itself lives in TaskIntakeService so planning can apply it
+ * automatically (TASK-1219); this stays as the CLI entry point.
  */
 export async function validateTaskCommand(
   tasks: TaskStore,
@@ -119,29 +122,5 @@ export async function validateTaskCommand(
   id: string,
   events?: EventStore,
 ): Promise<ValidateTaskResult> {
-  const task = await tasks.findTask(id);
-  const issues: string[] = [];
-
-  try {
-    await repositories.findRepository(task.repositoryId);
-  } catch {
-    issues.push(`repository not found: ${task.repositoryId}`);
-  }
-
-  issues.push(...assessTask(task).issues);
-
-  const status: TaskStatus = issues.length === 0 ? "READY" : "BLOCKED";
-  const updated = await tasks.updateTaskStatus(task.id, status);
-  if (events) {
-    try {
-      await events.record({
-        type: status === "READY" ? "TaskReady" : "TaskBlocked",
-        taskId: task.id,
-        payload: { issues },
-      });
-    } catch {
-      // History must never break intake validation.
-    }
-  }
-  return { task: updated, issues };
+  return new TaskIntakeService({ tasks, repositories, events }).intake(id);
 }

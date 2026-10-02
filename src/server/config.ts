@@ -53,6 +53,11 @@ export interface ServerConfig {
   executionDriver: "local" | "docker";
   /** Turn a CONFIRMED problem into a READY specification + planned tasks. */
   autoBootstrapSpecification: boolean;
+  /**
+   * TASK-1219: run Task Intake automatically after planning so READY tasks are
+   * picked up by the Scheduler without a human `运行 task-x` per task.
+   */
+  autoStart: boolean;
   /** Extra deployment knowledge appended to the intent prompt. */
   intentNotes?: string;
   /**
@@ -108,11 +113,19 @@ export function loadServerConfig(env: EnvLike = process.env): ServerConfig {
       "AI_MAX_CONCURRENCY",
     ),
     executionDriver: parseDriver(env.AI_EXECUTION_DRIVER),
-    autoBootstrapSpecification:
-      (optional(env, "AI_AUTO_BOOTSTRAP_SPECIFICATION") ?? "true").toLowerCase() !== "false",
+    autoBootstrapSpecification: envFlag(env.AI_AUTO_BOOTSTRAP_SPECIFICATION, true),
+    autoStart: envFlag(env.AI_AUTO_START, true),
     intentNotes: optional(env, "AI_INTENT_NOTES"),
     configFile: optional(env, "AI_ENV_FILE") ?? resolveEnvFileDefault(),
   };
+}
+
+/** Env booleans accept the usual spellings (`false`, `off`, `0`, `no`). */
+function envFlag(value: string | undefined, fallback: boolean): boolean {
+  if (value === undefined || value.trim() === "") {
+    return fallback;
+  }
+  return !["false", "off", "0", "no"].includes(value.trim().toLowerCase());
 }
 
 function parseThreadReplies(value: string | undefined): ThreadReplyMode {

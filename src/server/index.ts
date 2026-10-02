@@ -61,6 +61,7 @@ import { PlanningService } from "../specification/application/planning.js";
 import { SpecificationService } from "../specification/application/service.js";
 import { openStores, type StoreHandle } from "../store/index.js";
 import { TaskDependencyService } from "../task/application/dependencyService.js";
+import { TaskIntakeService } from "../task/application/intakeService.js";
 import { Verifier } from "../verification/runner.js";
 import { Worker } from "../worker/worker.js";
 import { WorkspaceManager } from "../workspace/manager.js";
@@ -240,6 +241,15 @@ export class HarnessRuntime {
       planner: new DeterministicTaskPlanner(),
       events: stores.events,
       deliveries,
+      // TASK-1219: planning ends with READY tasks, so the Scheduler starts
+      // them on the next tick. AI_AUTO_START=off restores manual intake.
+      intake: config.autoStart
+        ? new TaskIntakeService({
+            tasks: stores.tasks,
+            repositories: stores.repositories,
+            events: stores.events,
+          })
+        : undefined,
     });
     const specifications = new SpecificationService({
       specifications: stores.specifications,

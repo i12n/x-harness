@@ -25,10 +25,20 @@ export interface PlanningServiceDeps {
    * users never create one by hand. Idempotent (one per Specification).
    */
   deliveries?: DeliveryCreationPort;
+  /**
+   * TASK-1219: Task Intake applied to *newly created* tasks, so planning ends
+   * with tasks the Scheduler can start — no per-task human `task validate`.
+   * Absent keeps the old behaviour (tasks stay INBOX) for callers that opt out.
+   */
+  intake?: PlannedTaskIntake;
 }
 
 export interface DeliveryCreationPort {
   createForSpecification(specificationId: string): Promise<unknown>;
+}
+
+export interface PlannedTaskIntake {
+  intakeAll(taskIds: string[]): Promise<unknown>;
 }
 
 export interface PlanningOutcome {
@@ -118,7 +128,18 @@ export class PlanningService {
       );
     }
 
-    const { tasks, created } = await this.materializeTasks(specification, items);
+    const { tasks, created, createdTaskIds } = await this.materializeTasks(
+      specification,
+      items,
+    );
+    // TASK-1219: a planned task goes through intake immediately. Only *new*
+    // tasks are touched — re-intaking a finished task would resurrect it.
+    if (this.deps.intake && createdTaskIds.length > 0) {
+      await this.deps.intake.intakeAll(createdTaskIds);
+    }
+    const settled = this.deps.intake
+      ? await Promise.all(tasks.map((task) => this.deps.tasks.findTask(task.id)))
+      : tasks;
     if (this.deps.deliveries) {
       try {
         await this.deps.deliveries.createForSpecification(specificationId);
@@ -131,7 +152,7 @@ export class PlanningService {
     return {
       specification: refreshed,
       planItems: await this.deps.plans.listPlanItems(specificationId),
-      tasks,
+      tasks: settled,
       replayed: replayed && created === 0,
     };
   }
@@ -164,8 +185,9 @@ export class PlanningService {
   private async materializeTasks(
     specification: Specification,
     items: SpecificationPlanItem[],
-  ): Promise<{ tasks: Task[]; created: number }> {
+  ): Promise<{ tasks: Task[]; created: number; createdTaskIds: string[] }> {
     const tasks: Task[] = [];
+    const createdTaskIds: string[] = [];
     let created = 0;
     for (const item of items) {
       if (item.taskId) {
@@ -188,6 +210,7 @@ export class PlanningService {
           acceptance: specification.acceptance,
         });
         created += 1;
+        createdTaskIds.push(task.id);
       } catch (error) {
         if (!(error instanceof DuplicateTaskError)) {
           throw error;
@@ -197,7 +220,7 @@ export class PlanningService {
       await this.deps.plans.attachTask(item.id, task.id);
       tasks.push(task);
     }
-    return { tasks, created };
+    return { tasks, created, createdTaskIds };
   }
 
   private async emit(

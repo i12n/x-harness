@@ -9,6 +9,7 @@ import type { CommandDispatcher } from "../command/dispatcher.js";
 import type { CommandResult, IntentEngine, IntentInput, Role } from "../command/types.js";
 import type { ConversationService } from "../conversation/service.js";
 import type { Problem } from "../domain/problem.js";
+import type { Task } from "../domain/task.js";
 import { HarnessError } from "../errors.js";
 import { resolveRoles, type AccessConfig } from "./config.js";
 import type { ChatTarget, RunChatNotifier } from "./notifications.js";
@@ -516,12 +517,7 @@ export class ChatSession {
           },
           {
             type: "markdown",
-            text:
-              outcome.tasks.length > 0
-                ? `**已拆解 ${outcome.tasks.length} 个任务**\n${outcome.tasks
-                    .map((task) => `- ${task.id} · ${task.title}`)
-                    .join("\n")}\n\n回复 \`运行 ${outcome.tasks[0]!.id}\` 开始开发。`
-                : "**没有拆解出任务**",
+            text: describePlannedTasks(outcome.tasks),
           },
           ...(outcome.unknownTargets.length > 0
             ? [
@@ -682,6 +678,32 @@ function expiredCard(conversationId: string): OutgoingMessage {
     conversationId,
     text: "⚠️ 这张卡片已失效，请重新发送指令，或重新打开对应的问题/评审。",
   };
+}
+
+/**
+ * TASK-1219: planning now ends with tasks the Scheduler already picked up, so
+ * the reply reports what happens by itself and only asks for attention on the
+ * tasks intake refused.
+ */
+export function describePlannedTasks(tasks: Task[]): string {
+  if (tasks.length === 0) {
+    return "**没有拆解出任务**";
+  }
+  const lines = tasks.map((task) => `- ${task.id} · ${task.title} · ${task.status}`);
+  const blocked = tasks.filter((task) => task.status === "BLOCKED");
+  const pending = tasks.filter((task) => task.status === "INBOX");
+  let tail: string;
+  if (blocked.length > 0) {
+    tail =
+      `\n\n⚠️ ${blocked.length} 个任务没通过 intake，需要你处理：` +
+      `${blocked.map((task) => task.id).join("、")}\n（用 \`查看 ${blocked[0]!.id}\` 看原因）`;
+  } else if (pending.length > 0) {
+    // AI_AUTO_START=off: the old manual mode.
+    tail = `\n\n回复 \`运行 ${pending[0]!.id}\` 开始开发。`;
+  } else {
+    tail = "\n\n已自动排队开始，不需要逐条确认。要干预可以用 `停止 run-x` 或 `打回 task-x`。";
+  }
+  return `**已拆解 ${tasks.length} 个工作项**\n${lines.join("\n")}${tail}`;
 }
 
 function isBotSender(envelope: Record<string, unknown>): boolean {
