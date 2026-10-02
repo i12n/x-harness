@@ -20,6 +20,7 @@ export const COMMAND_TYPES = [
   "spec.plan",
   "delivery.show",
   "delivery.release",
+  "preview.build",
   "config.show",
   "config.set",
   "config.setDirect",

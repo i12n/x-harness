@@ -230,6 +230,9 @@ repository
   .command("update <id>")
   .description("fix a registered repository's execution profile / verification commands")
   .option("--verify <command>", "verification command (repeatable; replaces the list)", collect, [])
+  .option("--install <command>", "preview build: dependency install command")
+  .option("--build <command>", "preview build: build command")
+  .option("--screenshot <command>", "preview build: screenshot script (TASK-1226)")
   .option("--exec-image <image>", "container image for the execution profile")
   .option("--exec-profile <name>", "execution profile name")
   .option("--network <mode>", "container network mode: none | restricted")
@@ -1378,6 +1381,9 @@ type RepositoryCreateCliOptions = RepositoryCreateOptions & RepositoryProfileCli
 
 type RepositoryUpdateCliOptions = RepositoryProfileCliOptions & {
   verify?: string[];
+  install?: string;
+  build?: string;
+  screenshot?: string;
 };
 
 /**
@@ -1403,7 +1409,12 @@ function mergeExecutionProfile(
     name: options.execProfile?.trim() || current.name,
     image: options.execImage?.trim() || current.image,
     workspace: current.workspace,
-    commands: current.commands,
+    commands: {
+      install: options.install?.trim() || current.commands.install,
+      test: current.commands.test,
+      build: options.build?.trim() || current.commands.build,
+      screenshot: options.screenshot?.trim() || current.commands.screenshot,
+    },
     network,
     resources: {
       cpus: options.cpus ?? current.resources.cpus,

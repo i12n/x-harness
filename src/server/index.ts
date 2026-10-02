@@ -64,6 +64,8 @@ import { TaskDependencyService } from "../task/application/dependencyService.js"
 import { TaskIntakeService } from "../task/application/intakeService.js";
 import { LlmReviewerAgent } from "../reviewer/application/reviewerAgent.js";
 import { TokenBudget } from "../loop/budget.js";
+import { PreviewService, previewSettingsFromEnv } from "../preview/application/previewService.js";
+import { createPreviewCommandHandlers } from "../command/handlers/preview.js";
 import { Verifier } from "../verification/runner.js";
 import { Worker } from "../worker/worker.js";
 import { WorkspaceManager } from "../workspace/manager.js";
@@ -293,6 +295,16 @@ export class HarnessRuntime {
         }),
         ...createSpecificationCommandHandlers({ planning, specification: specifications }),
         ...createDeliveryCommandHandlers({ deliveries, runs: stores.runs }),
+        ...createPreviewCommandHandlers({
+          preview: new PreviewService({
+            deliveries: { load: (deliveryId) => deliveries.show(deliveryId) },
+            repositories: stores.repositories,
+            runs: stores.runs,
+            executionManager,
+            events: stores.events,
+            ...previewSettingsFromEnv(process.env),
+          }),
+        }),
         ...createConfigCommandHandlers({
           config: createConfigAdminPort({
             envFile: config.configFile,

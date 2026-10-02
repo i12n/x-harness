@@ -31,6 +31,12 @@ export interface ExecutionCommands {
   install?: string;
   test?: string;
   build?: string;
+  /**
+   * TASK-1226: the repository's own screenshot script, run by the preview
+   * build after `build`. The harness does not drive a browser itself — the
+   * repo knows how to start its app and which viewports matter.
+   */
+  screenshot?: string;
 }
 
 /** Per-repository execution environment (image, limits, policy, secrets). */
@@ -80,6 +86,7 @@ export function buildExecutionProfile(
       install: input.commands?.install?.trim() || undefined,
       test: input.commands?.test?.trim() || undefined,
       build: input.commands?.build?.trim() || undefined,
+      screenshot: input.commands?.screenshot?.trim() || undefined,
     },
     network: { mode, allow: dedupeNonEmpty(input.network?.allow ?? []) },
     resources: {

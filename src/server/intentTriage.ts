@@ -73,6 +73,10 @@ const RULES: { pattern: RegExp; build: (match: RegExpExecArray) => unknown }[] =
     build: () => ({ type: "review.list", payload: {} }),
   },
   {
+    pattern: /^\s*(?:预览|构建预览|preview)\s+(dlv-[A-Za-z0-9_-]+)\s*$/i,
+    build: (match) => ({ type: "preview.build", payload: { deliveryId: match[1] } }),
+  },
+  {
     pattern: /^\s*(?:推送|push)\s+(task-[A-Za-z0-9_-]+)\s*$/i,
     build: (match) => ({ type: "git.publish", payload: { taskId: match[1] } }),
   },

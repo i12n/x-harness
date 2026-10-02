@@ -133,6 +133,10 @@ export const COMMAND_SCHEMAS: Record<CommandType, CommandSchema> = {
     fields: { deliveryId: { type: "string", required: true } },
     roles: REVIEWERS,
   },
+  "preview.build": {
+    fields: { deliveryId: { type: "string", required: true } },
+    roles: OPERATORS,
+  },
   // Deployment configuration is admin-only: the same fields the config page
   // writes (see docs/deployment-feishu.md §3.1).
   "config.show": {

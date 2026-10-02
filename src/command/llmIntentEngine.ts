@@ -97,6 +97,8 @@ export function intentSystemPrompt(
     "- spec.plan {specificationId: string}",
     "- delivery.show {deliveryId: string}",
     "- delivery.release {deliveryId: string}",
+    "- preview.build {deliveryId: string} — build the delivery's change in a sandbox and",
+    "    collect build evidence (and screenshots when the repository provides a script).",
     "- config.show {key?: string} — show the deployment configuration (admin only).",
     "    Also used for 「谁有权限」「看看白名单」「当前配置」.",
     "- config.set {key: string, value: string} — change one configuration item (admin only).",
