@@ -41,6 +41,9 @@ import {
 import { GitService } from "../git/gitService.js";
 import { GitPublishService } from "../git/publishService.js";
 import { TaskIntakeService } from "../task/application/intakeService.js";
+import { PreviewService, previewSettingsFromEnv } from "../preview/application/previewService.js";
+import type { PreviewEvidence } from "../preview/application/previewService.js";
+import { createPreviewCommandHandlers } from "../command/handlers/preview.js";
 import {
   createRepositoryCommand,
   listRepositoriesCommand,
@@ -829,6 +832,40 @@ deliveryGroup
     });
   });
 
+// TASK-1226: build the delivery's change in a sandbox and collect the evidence.
+const previewGroup = program
+  .command("preview")
+  .description("preview build evidence for a delivery (TASK-1226)");
+
+previewGroup
+  .command("build <deliveryId>")
+  .description("run the repository's install/build/screenshot commands and collect evidence")
+  .option("--role <role>", "authorization role (default: developer)")
+  .action(async (deliveryId: string, options: { role?: string }) => {
+    await withStores(async (handle) => {
+      const evidence = await dispatchPreviewCommand(handle, deliveryId, options.role);
+      console.log(`${evidence.deliveryId} ${evidence.status}`);
+      for (const command of evidence.commands) {
+        console.log(
+          `- [${command.status}] ${command.command} (exit ${command.exitCode ?? "?"}, ${command.durationSeconds}s)`,
+        );
+      }
+      if (evidence.artifacts.length > 0) {
+        console.log(
+          `artifacts: ${evidence.artifacts
+            .map((artifact) => `${artifact.path} ${Math.round(artifact.sizeKb / 1024)}MB`)
+            .join(", ")}`,
+        );
+      }
+      if (evidence.screenshots.length > 0) {
+        console.log(`screenshots: ${evidence.screenshots.join(", ")}`);
+      }
+      for (const note of evidence.notes) {
+        console.log(`note: ${note}`);
+      }
+    });
+  });
+
 program
   .command("review <run-id>")
   .description("run a reviewer agent over a SUCCEEDED run's workspace diff")
@@ -1310,6 +1347,47 @@ function dispatchSpecificationCommand(
     });
 }
 
+/** TASK-1226: dispatch `preview.build` through the command layer. */
+async function dispatchPreviewCommand(
+  handle: StoreHandle,
+  deliveryId: string,
+  roleOption?: string,
+): Promise<PreviewEvidenceLike> {
+  const role = roleOption?.trim() || "developer";
+  if (!isRole(role)) {
+    throw new Error(`invalid role '${role}' (use guest|developer|reviewer|admin)`);
+  }
+  const preview = new PreviewService({
+    deliveries: { load: (id) => deliveryService(handle).show(id) },
+    repositories: handle.repositories,
+    runs: handle.runs,
+    executionManager: new ExecutionManager(createExecutionDriver(process.env)),
+    events: handle.events,
+    ...previewSettingsFromEnv(process.env),
+  });
+  const dispatcher = new CommandDispatcher({
+    handlers: createPreviewCommandHandlers({ preview }),
+    idempotency: new InMemoryIdempotencyStore(),
+  });
+  const result = await dispatcher.dispatch(
+    {
+      id: makeId("cmd"),
+      type: "preview.build",
+      version: COMMAND_VERSION,
+      actor: { channel: "cli", userId: "cli-user" },
+      payload: { deliveryId },
+      idempotencyKey: `cli:${makeId("msg")}:preview.build`,
+      createdAt: new Date().toISOString(),
+    },
+    { channel: "cli", userId: "cli-user", roles: [role] },
+  );
+  if (result.status !== "succeeded") {
+    const code = result.error?.code ?? "unknown";
+    throw new Error(`preview.build ${result.status}: ${code} ${result.error?.message ?? ""}`.trim());
+  }
+  return (result.data as { preview: PreviewEvidenceLike }).preview;
+}
+
 /** TASK-1205: Delivery aggregation + release records. */
 function deliveryService(handle: StoreHandle): DeliveryService {
   return new DeliveryService({
@@ -1385,6 +1463,8 @@ type RepositoryUpdateCliOptions = RepositoryProfileCliOptions & {
   build?: string;
   screenshot?: string;
 };
+
+type PreviewEvidenceLike = PreviewEvidence;
 
 /**
  * TASK-1218: `repository update` patches the profile instead of rebuilding it.
