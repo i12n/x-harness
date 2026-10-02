@@ -28,6 +28,8 @@ export interface SchedulerOptions {
    * whose prerequisites are not DONE is simply not selected.
    */
   runnableTasks?: RunnableTaskQuery;
+  /** TASK-1215: refuses to hand out work once the day's budget is spent. */
+  budget?: { canStart(): Promise<boolean> };
 }
 
 /**
@@ -46,6 +48,7 @@ export class Scheduler {
   private readonly engine: string;
   private readonly events: EventStore | undefined;
   private readonly runnableTasks: RunnableTaskQuery | undefined;
+  private readonly budget: { canStart(): Promise<boolean> } | undefined;
 
   constructor(options: SchedulerOptions) {
     this.taskStore = options.taskStore;
@@ -57,9 +60,14 @@ export class Scheduler {
     this.engine = options.engine ?? "codex";
     this.events = options.eventStore;
     this.runnableTasks = options.runnableTasks;
+    this.budget = options.budget;
   }
 
   async schedule(): Promise<Run[]> {
+    // TASK-1215: no new work while the day's token budget is gone.
+    if (this.budget && !(await this.budget.canStart())) {
+      return [];
+    }
     const ready: Task[] = (await this.taskStore.listTasks({ status: "READY" })).sort(
       (a, b) =>
         b.priority - a.priority || a.createdAt.localeCompare(b.createdAt),

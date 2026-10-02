@@ -63,6 +63,8 @@ export interface ServerConfig {
    * verdict without acting on it, `on` = approve automatically when safe.
    */
   reviewer: "off" | "shadow" | "on";
+  /** TASK-1215: tokens allowed per UTC day; 0 disables the guard. */
+  dailyTokenBudget: number;
   /** Extra deployment knowledge appended to the intent prompt. */
   intentNotes?: string;
   /**
@@ -121,6 +123,7 @@ export function loadServerConfig(env: EnvLike = process.env): ServerConfig {
     autoBootstrapSpecification: envFlag(env.AI_AUTO_BOOTSTRAP_SPECIFICATION, true),
     autoStart: envFlag(env.AI_AUTO_START, true),
     reviewer: parseReviewerMode(env.AI_REVIEWER),
+    dailyTokenBudget: nonNegativeInt(env.AI_TOKEN_BUDGET_PER_DAY, "AI_TOKEN_BUDGET_PER_DAY"),
     intentNotes: optional(env, "AI_INTENT_NOTES"),
     configFile: optional(env, "AI_ENV_FILE") ?? resolveEnvFileDefault(),
   };
@@ -258,6 +261,18 @@ function positiveInt(value: string | undefined, fallback: number, name: string):
   const parsed = Number(value);
   if (!Number.isFinite(parsed) || parsed <= 0) {
     throw new HarnessError(`${name} must be a positive number`);
+  }
+  return Math.trunc(parsed);
+}
+
+/** Like {@link positiveInt} but 0 (and an absent value) means "disabled". */
+function nonNegativeInt(value: string | undefined, name: string): number {
+  if (!value?.trim()) {
+    return 0;
+  }
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    throw new HarnessError(`${name} must be zero or a positive number`);
   }
   return Math.trunc(parsed);
 }

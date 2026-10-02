@@ -4,6 +4,7 @@ import type { AcceptanceEvidence } from "../../verification/acceptance.js";
 import type { CollectedDiff } from "../../verification/diff.js";
 import type { ReviewerReport } from "../domain/verdict.js";
 import { parseReviewerReport } from "../domain/verdict.js";
+import { describeTestEvidence, type TestEvidence } from "../domain/testEvidence.js";
 
 export interface ReviewerInput {
   task: {
@@ -17,6 +18,8 @@ export interface ReviewerInput {
   verification: { passed: boolean; checks: { command: string; status: string }[] };
   /** What actually changed, collected by the harness (never self-reported). */
   diff: CollectedDiff;
+  /** TASK-1225: whether production code changed without any test change. */
+  testEvidence?: TestEvidence;
 }
 
 export interface ReviewerAgent {
@@ -70,6 +73,7 @@ export function reviewerPrompt(input: ReviewerInput): string {
     "",
     "Changed files:",
     input.diff.files.join("\n") || "(none)",
+    ...(input.testEvidence ? [describeTestEvidence(input.testEvidence) ?? "测试证据：有测试变更"] : []),
     "",
     "Diff stat:",
     input.diff.stat || "(none)",

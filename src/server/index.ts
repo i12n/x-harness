@@ -63,6 +63,7 @@ import { openStores, type StoreHandle } from "../store/index.js";
 import { TaskDependencyService } from "../task/application/dependencyService.js";
 import { TaskIntakeService } from "../task/application/intakeService.js";
 import { LlmReviewerAgent } from "../reviewer/application/reviewerAgent.js";
+import { TokenBudget } from "../loop/budget.js";
 import { Verifier } from "../verification/runner.js";
 import { Worker } from "../worker/worker.js";
 import { WorkspaceManager } from "../workspace/manager.js";
@@ -414,6 +415,12 @@ export class HarnessRuntime {
         eventStore: stores.events,
         maxConcurrency: config.maxConcurrency,
         runnableTasks: dependencies,
+        // TASK-1215 (③): stop handing out work when the day's tokens are gone.
+        budget: new TokenBudget({
+          runs: stores.runs,
+          events: stores.events,
+          dailyTokenBudget: config.dailyTokenBudget,
+        }),
       }),
       worker,
       runStore: stores.runs,

@@ -19,6 +19,9 @@ import type { ReviewerMode, ReviewerReport } from "../reviewer/domain/verdict.js
 import { decideReviewAction, describeReviewerReport } from "../reviewer/domain/verdict.js";
 import { assessChangeRisk } from "../reviewer/domain/risk.js";
 import type { ChangeRisk } from "../reviewer/domain/risk.js";
+import { assessTestEvidence, describeTestEvidence } from "../reviewer/domain/testEvidence.js";
+import type { TestEvidence } from "../reviewer/domain/testEvidence.js";
+import { parseAgentUsage } from "../agent/usage.js";
 import type { ReviewService } from "../review/application/reviewService.js";
 
 /** TASK-1219: default Run cap; `AI_RUN_TIMEOUT_MS=0` disables it. */
@@ -325,13 +328,30 @@ export class Worker {
         exec,
         execution.workdirs?.[primaryTarget.target.id] ?? execution.workdir,
       );
-      const review = await this.runReviewer(
-        { task, acceptance, verification, diff },
-        runId,
-      );
       // TASK-1222: some changes must not be waved through, whatever the
       // reviewer thinks of them.
       const risk = assessChangeRisk(diff.files);
+      // TASK-1225: production code changed without a single test change is a
+      // risk the reviewer easily misses, so it is stated, not left implicit.
+      const testEvidence = assessTestEvidence(diff.files);
+      const testEvidenceReason = describeTestEvidence(testEvidence);
+      if (testEvidenceReason && primaryTarget.repository.verificationCommands.length > 0) {
+        risk.level = "high";
+        risk.reasons.push(testEvidenceReason);
+      }
+      const review = await this.runReviewer(
+        { task, acceptance, verification, diff, testEvidence },
+        runId,
+      );
+      // TASK-1215 (①): keep the usage codex reported, so cost is answerable.
+      const usage = parseAgentUsage(agentResult.stdout);
+      if (usage) {
+        await this.emit("RunUsage", {
+          taskId: task.id,
+          runId,
+          payload: usage,
+        });
+      }
       await this.emit(
         verification.passed ? "VerificationPassed" : "VerificationFailed",
         {
@@ -376,6 +396,7 @@ export class Worker {
             diff,
             review,
             risk,
+            ...(usage ? { usage } : {}),
           },
           finishedAt,
         });
@@ -469,6 +490,7 @@ export class Worker {
     acceptance: AcceptanceEvidence;
     verification: VerificationResult;
     diff: CollectedDiff;
+    testEvidence?: TestEvidence;
   }, runId: string): Promise<ReviewerReport | undefined> {
     if (!this.reviewer || this.reviewerMode === "off") {
       return undefined;
@@ -490,6 +512,7 @@ export class Worker {
           })),
         },
         diff: input.diff,
+        ...(input.testEvidence ? { testEvidence: input.testEvidence } : {}),
       });
     } catch (error) {
       await this.emit("ReviewerFailed", {
