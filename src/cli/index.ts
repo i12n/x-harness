@@ -45,6 +45,10 @@ import { PreviewService, previewSettingsFromEnv } from "../preview/application/p
 import type { PreviewEvidence } from "../preview/application/previewService.js";
 import { createPreviewCommandHandlers } from "../command/handlers/preview.js";
 import {
+  detectCommandsFromDirectory,
+  mergeDetectedCommands,
+} from "../repository/application/commandDetection.js";
+import {
   createRepositoryCommand,
   listRepositoriesCommand,
   showRepositoryCommand,
@@ -307,6 +311,14 @@ repository
       const repository = await repositories.findRepository(id);
       const outcome = await new GitService().syncRepository(repository);
       console.log(`${outcome.repositoryId} [${outcome.branch}] ${outcome.message}`);
+      // TASK-1226 follow-up: a freshly pulled checkout that declares no
+      // execution commands gets the obvious ones, so a missing `npm ci` never
+      // becomes a failure later.
+      const synced = await repositories.findRepository(id);
+      const added = await fillDetectedCommands(repositories, synced);
+      for (const line of added) {
+        console.log(`  detected: ${line}`);
+      }
       if (outcome.skipped) {
         process.exitCode = 1;
       }
@@ -1465,6 +1477,48 @@ type RepositoryUpdateCliOptions = RepositoryProfileCliOptions & {
 };
 
 type PreviewEvidenceLike = PreviewEvidence;
+
+/**
+ * Detects install/build/test/verify from the checkout and fills only what the
+ * repository does not already declare. Returns what was added, for the log.
+ */
+async function fillDetectedCommands(
+  repositories: {
+    findRepository(id: string): Promise<Repository>;
+    updateRepository(
+      id: string,
+      patch: { verificationCommands?: string[]; executionProfile?: ExecutionProfile },
+    ): Promise<Repository>;
+  },
+  repository: Repository,
+): Promise<string[]> {
+  const detected = await detectCommandsFromDirectory(repository.localPath);
+  const merged = mergeDetectedCommands(repository.executionProfile.commands, detected);
+  const added: string[] = [];
+  for (const key of ["install", "build", "test"] as const) {
+    if (!repository.executionProfile.commands[key] && merged[key]) {
+      added.push(`${key} = ${merged[key]}`);
+    }
+  }
+  const verificationCommands =
+    repository.verificationCommands.length === 0 && detected.verify
+      ? [detected.verify]
+      : undefined;
+  if (verificationCommands) {
+    added.push(`verify = ${verificationCommands[0]}`);
+  }
+  if (added.length === 0) {
+    return detected.note ? [`（未自动补全：${detected.note}）`] : [];
+  }
+  await repositories.updateRepository(repository.id, {
+    ...(verificationCommands ? { verificationCommands } : {}),
+    executionProfile: {
+      ...repository.executionProfile,
+      commands: merged,
+    },
+  });
+  return added;
+}
 
 /**
  * TASK-1218: `repository update` patches the profile instead of rebuilding it.

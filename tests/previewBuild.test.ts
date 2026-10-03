@@ -81,6 +81,12 @@ function service(commands: Record<string, string>, execution = fakeExecution()) 
     },
     executionManager: execution.manager as never,
     events,
+    // Build "in place" in tests: the scratch copy is real filesystem work.
+    fs: {
+      prepare: async (source: string) => source,
+      cleanup: async () => {},
+      keepScreenshots: async () => {},
+    },
   });
   return { preview, events, execution };
 }

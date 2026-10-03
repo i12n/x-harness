@@ -6,6 +6,15 @@ import type { Task } from "../../domain/task.js";
 import type { ExecutionEnvironment, ExecutionManager } from "../../execution/manager.js";
 import type { EventStore } from "../../store/eventStore.js";
 import { extractWorkspacesInfo } from "../../workspace/info.js";
+import {
+  detectCommandsFromDirectory,
+  mergeDetectedCommands,
+} from "../../repository/application/commandDetection.js";
+import { mkdir, rm } from "node:fs/promises";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+
+const execFileAsync = promisify(execFile);
 
 export type PreviewStatus = "BUILT" | "FAILED" | "NO_BUILD";
 
@@ -45,7 +54,21 @@ export interface PreviewServiceDeps {
   maxOutputChars?: number;
   memoryMb?: number;
   cpus?: number;
+  /**
+   * Where the throwaway copy of the worktree is built. Must live under the
+   * execution driver's allowed workspace roots.
+   */
+  scratchRoot?: string;
+  /** Injectable filesystem work so the service is testable without disk I/O. */
+  fs?: PreviewWorkspaceFs;
   now?: () => Date;
+}
+
+export interface PreviewWorkspaceFs {
+  /** A throwaway copy of `source` to build in; returns its path. */
+  prepare(source: string, deliveryId: string): Promise<string>;
+  cleanup(path: string): Promise<void>;
+  keepScreenshots(scratch: string, deliveryId: string, files: string[]): Promise<void>;
 }
 
 const DEFAULT_ALLOWED_HOSTS = ["registry.npmjs.org"];
@@ -103,7 +126,13 @@ export class PreviewService {
     }
 
     const { repository } = target;
-    const commands = repository.executionProfile.commands;
+    const notes: string[] = [];
+    // A checkout that declares no commands is not broken; derive them. An
+    // explicit configuration always wins.
+    const commands = mergeDetectedCommands(
+      repository.executionProfile.commands,
+      await detectCommandsFromDirectory(target.worktree),
+    );
     const plan = [commands.install, commands.build, commands.screenshot]
       .map((command, index) => ({ command, name: ["install", "build", "screenshot"][index]! }))
       .filter((entry): entry is { command: string; name: string } => Boolean(entry.command));
@@ -115,27 +144,35 @@ export class PreviewService {
         screenshots: [],
         artifacts: [],
         notes: [
-          "执行档案没有配置 commands.install / build / screenshot —— " +
-            "预览没有可执行的内容，只能依据仓库验证命令的结论。",
+          "既没有配置 commands.install / build / screenshot，" +
+            "也没能从仓库里识别出可执行命令 —— 预览没有可运行的内容，只能依据仓库验证命令的结论。",
         ],
         startedAt,
       });
     }
 
     const profile = this.previewProfile(repository.executionProfile);
+    if (!repository.executionProfile.commands.install && commands.install) {
+      notes.push(`仓库未声明安装命令，已自动使用 ${commands.install}`);
+    }
     const results: PreviewCommandResult[] = [];
     let environment: ExecutionEnvironment | undefined;
+    let scratch: string | undefined;
     try {
+      // Build in a throwaway copy: `npm ci` writes ~hundreds of MB, and the
+      // retained worktree is the artefact under review.
+      scratch = await this.workspaceFs().prepare(target.worktree, deliveryId);
       environment = await this.deps.executionManager.prepare({
         runId: `preview-${delivery.id}`,
         profile,
-        workspacePath: target.worktree,
+        workspacePath: scratch,
       });
       for (const entry of plan) {
         results.push(await this.runCommand(environment, entry.command, entry.name));
       }
       const artifacts = await this.collectArtifacts(environment);
       const screenshots = await this.collectScreenshots(environment);
+      await this.workspaceFs().keepScreenshots(scratch, deliveryId, screenshots);
       const failed = results.some((result) => result.status === "failed");
       return this.finish({
         deliveryId,
@@ -143,7 +180,9 @@ export class PreviewService {
         commands: results,
         screenshots,
         artifacts,
-        notes: failed ? ["构建或截图命令失败：应用很可能起不来"] : [],
+        notes: failed
+          ? [...notes, "构建或截图命令失败：应用很可能起不来"]
+          : notes,
         startedAt,
       });
     } catch (error) {
@@ -153,7 +192,10 @@ export class PreviewService {
         commands: results,
         screenshots: [],
         artifacts: [],
-        notes: [`预览容器启动失败：${error instanceof Error ? error.message : String(error)}`],
+        notes: [
+          ...notes,
+          `预览容器启动失败：${error instanceof Error ? error.message : String(error)}`,
+        ],
         startedAt,
       });
     } finally {
@@ -166,7 +208,14 @@ export class PreviewService {
           // Cleanup must never mask the evidence.
         }
       }
+      if (scratch) {
+        await this.workspaceFs().cleanup(scratch);
+      }
     }
+  }
+
+  private workspaceFs(): PreviewWorkspaceFs {
+    return this.deps.fs ?? defaultWorkspaceFs(this.deps.scratchRoot ?? defaultScratchRoot());
   }
 
   /** First required task with a successful Run that recorded a workspace. */
@@ -194,7 +243,9 @@ export class PreviewService {
   }
 
   private previewProfile(profile: ExecutionProfile): ExecutionProfile {
-    const allow = [...new Set([...profile.network.allow, ...(this.deps.allowedHosts ?? DEFAULT_ALLOWED_HOSTS)])];
+    const allow = [
+      ...new Set([...profile.network.allow, ...(this.deps.allowedHosts ?? DEFAULT_ALLOWED_HOSTS)]),
+    ];
     return {
       ...profile,
       network: { mode: "restricted", allow },
@@ -260,9 +311,7 @@ export class PreviewService {
     return artifacts;
   }
 
-  private async collectScreenshots(
-    environment: ExecutionEnvironment,
-  ): Promise<string[]> {
+  private async collectScreenshots(environment: ExecutionEnvironment): Promise<string[]> {
     try {
       const result = await this.deps.executionManager.exec(
         environment,
@@ -306,4 +355,51 @@ export class PreviewService {
   private nowIso(): string {
     return (this.deps.now?.() ?? new Date()).toISOString();
   }
+}
+
+/** The default implementation: a throwaway copy next to the workspaces. */
+function defaultWorkspaceFs(scratchRoot: string): PreviewWorkspaceFs {
+  return {
+    async prepare(source: string, deliveryId: string): Promise<string> {
+      const destination = `${scratchRoot}/${deliveryId}-${Date.now()}`;
+      await mkdir(destination, { recursive: true });
+      try {
+        await execFileAsync("sh", [
+          "-c",
+          `tar -C ${shellQuote(source)} --exclude=node_modules --exclude=.next ` +
+            `--exclude=dist --exclude=build -cf - . | tar -C ${shellQuote(destination)} -xf -`,
+        ]);
+      } catch {
+        await execFileAsync("cp", ["-a", `${source}/.`, destination]);
+      }
+      return destination;
+    },
+    async cleanup(path: string): Promise<void> {
+      await rm(path, { recursive: true, force: true }).catch(() => undefined);
+    },
+    async keepScreenshots(scratch: string, deliveryId: string, files: string[]): Promise<void> {
+      if (files.length === 0) {
+        return;
+      }
+      const target = `${scratchRoot}/../_preview-artifacts/${deliveryId}`;
+      try {
+        await mkdir(target, { recursive: true });
+        for (const file of files) {
+          await execFileAsync("cp", [`${scratch}/${file}`, `${target}/`]);
+        }
+      } catch {
+        // Keeping screenshots is best-effort.
+      }
+    },
+  };
+}
+
+/** Scratch lives under the driver's allowed workspace roots. */
+function defaultScratchRoot(): string {
+  const workspaces = process.env.AI_WORKSPACES_DIR ?? "/root/ai-workspaces";
+  return `${workspaces}/_previews`;
+}
+
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, `'\\''`)}'`;
 }

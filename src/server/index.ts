@@ -66,6 +66,10 @@ import { LlmReviewerAgent } from "../reviewer/application/reviewerAgent.js";
 import { TokenBudget } from "../loop/budget.js";
 import { PreviewService, previewSettingsFromEnv } from "../preview/application/previewService.js";
 import { createPreviewCommandHandlers } from "../command/handlers/preview.js";
+import {
+  detectCommandsFromDirectory,
+  mergeDetectedCommands,
+} from "../repository/application/commandDetection.js";
 import { Verifier } from "../verification/runner.js";
 import { Worker } from "../worker/worker.js";
 import { WorkspaceManager } from "../workspace/manager.js";
@@ -530,10 +534,46 @@ export class HarnessRuntime {
       return result;
     };
     for (const repository of repositories) {
+      // TASK-1226 follow-up: a checkout that declares nothing is not broken.
+      // Fill the obvious commands once, then gate on the result.
+      const detected = await detectCommandsFromDirectory(repository.localPath);
+      const merged = mergeDetectedCommands(repository.executionProfile.commands, detected);
+      const additions = (["install", "build", "test"] as const).filter(
+        (key) => !repository.executionProfile.commands[key] && merged[key],
+      );
+      const verificationCommands =
+        repository.verificationCommands.length === 0 && detected.verify
+          ? [detected.verify]
+          : repository.verificationCommands;
+      let profile = repository.executionProfile;
+      if (additions.length > 0 || verificationCommands !== repository.verificationCommands) {
+        profile = { ...repository.executionProfile, commands: merged };
+        try {
+          await stores.repositories.updateRepository(repository.id, {
+            ...(verificationCommands !== repository.verificationCommands
+              ? { verificationCommands }
+              : {}),
+            executionProfile: profile,
+          });
+          this.log(
+            `preflight: repository ${repository.id}: auto-filled ` +
+              [
+                ...additions.map((key) => `${key}=${merged[key]}`),
+                ...(verificationCommands !== repository.verificationCommands
+                  ? [`verify=${verificationCommands[0]}`]
+                  : []),
+              ].join(", "),
+          );
+        } catch (error) {
+          this.log(
+            `preflight: repository ${repository.id}: could not save detected commands: ${describe(error)}`,
+          );
+        }
+      }
       const issues = await collectProfileIssues({
         repositoryId: repository.id,
-        verificationCommands: repository.verificationCommands,
-        profile: repository.executionProfile,
+        verificationCommands,
+        profile,
         env: process.env,
         checkImage,
       });
