@@ -37,12 +37,18 @@ echo "==> install dependencies on the host"
 "${SSH[@]}" "cd '$REMOTE_DIR' && npm ci --no-audit --no-fund >/dev/null && echo deps-ok"
 
 echo "==> migrate + restart"
-"${SSH[@]}" bash -s <<REMOTE
+# The heredoc is quoted so nothing inside the remote script is expanded here.
+# With an unquoted heredoc, `bash` ran command substitution locally on every
+# backtick — including the ones in the comment below (`systemctl cat`,
+# `list-unit-files | grep -q`) — which injected the output of failed local
+# commands into the script that got piped to the host. The one value the remote
+# script needs is passed through the ssh environment instead.
+"${SSH[@]}" "REMOTE_DIR='$REMOTE_DIR' bash -s" <<'REMOTE'
 set -euo pipefail
-cd '$REMOTE_DIR'
+cd "$REMOTE_DIR"
 set -a; . deploy/ai-harness.env; set +a
 node scripts/migrate.mjs
-if [ -z "\${FEISHU_APP_ID:-}" ]; then
+if [ -z "${FEISHU_APP_ID:-}" ]; then
   echo "FEISHU_APP_ID is empty — credentials not configured yet, skipping restart"
 # `systemctl cat` instead of `list-unit-files | grep -q`: under `set -o pipefail`
 # an early-exiting grep sends SIGPIPE to systemctl, so an installed unit was
