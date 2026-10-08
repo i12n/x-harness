@@ -72,6 +72,8 @@ export class GitService {
   private readonly authorName: string;
   private readonly authorEmail: string;
   private readonly pushPrefix: string;
+  /** TASK-1230: several allowed prefixes (e.g. `ai/,test/`). */
+  private readonly pushPrefixes: string[];
   private readonly timeoutMs: number;
 
   constructor(options: GitServiceOptions = {}) {
@@ -80,6 +82,10 @@ export class GitService {
     this.authorEmail =
       options.authorEmail ?? process.env.AI_GIT_AUTHOR_EMAIL ?? "ai-harness@localhost";
     this.pushPrefix = options.pushPrefix ?? process.env.AI_GIT_PUSH_PREFIX ?? "ai/";
+    this.pushPrefixes = this.pushPrefix
+      .split(",")
+      .map((prefix) => prefix.trim())
+      .filter(Boolean);
     this.timeoutMs = options.timeoutMs ?? 120_000;
   }
 
@@ -196,7 +202,7 @@ export class GitService {
           message: `拒绝推送到受保护分支 ${branch}`,
         };
       }
-      if (!branch.startsWith(this.pushPrefix)) {
+      if (!this.pushPrefixes.some((prefix) => branch.startsWith(prefix))) {
         return {
           ...base,
           branch,

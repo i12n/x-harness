@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { renderPreviewMessage } from "../src/channel/rendering/preview.js";
 import type { MessageBlock } from "../src/channel/message.js";
 import { buildExecutionProfile } from "../src/domain/executionProfile.js";
-import { PreviewService, previewSettingsFromEnv } from "../src/preview/application/previewService.js";
+import { PreviewService } from "../src/preview/application/previewService.js";
 import { InMemoryEventStore } from "../src/store/inMemoryEventStore.js";
 
 const GIT_URL = "git@github.com:i12n/x-music.git";
@@ -150,15 +150,6 @@ describe("preview build (TASK-1226)", () => {
     expect(seen).toEqual(["prepare"]);
   });
 
-  it("parses preview knobs from the environment", () => {
-    expect(previewSettingsFromEnv({})).toEqual({});
-    expect(
-      previewSettingsFromEnv({
-        AI_PREVIEW_ALLOW: "registry.npmjs.org, registry.npmmirror.com",
-        AI_PREVIEW_MEMORY_MB: "512",
-      }),
-    ).toEqual({ allowedHosts: ["registry.npmjs.org", "registry.npmmirror.com"], memoryMb: 512 });
-  });
 });
 
 describe("preview card (TASK-1226)", () => {

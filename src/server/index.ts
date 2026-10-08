@@ -64,7 +64,8 @@ import { TaskDependencyService } from "../task/application/dependencyService.js"
 import { TaskIntakeService } from "../task/application/intakeService.js";
 import { LlmReviewerAgent } from "../reviewer/application/reviewerAgent.js";
 import { TokenBudget } from "../loop/budget.js";
-import { PreviewService, previewSettingsFromEnv } from "../preview/application/previewService.js";
+import { PreviewService } from "../preview/application/previewService.js";
+import { previewSettingsFromEnv } from "../preview/application/previewSettings.js";
 import { createPreviewCommandHandlers } from "../command/handlers/preview.js";
 import {
   detectCommandsFromDirectory,
@@ -285,6 +286,19 @@ export class HarnessRuntime {
       repositories: stores.repositories,
     });
 
+    // TASK-1229: one preview configuration for every repository.
+    const previewSettings = previewSettingsFromEnv(process.env);
+    const previewService = new PreviewService({
+      deliveries: { load: (deliveryId) => deliveries.show(deliveryId) },
+      repositories: stores.repositories,
+      runs: stores.runs,
+      executionManager,
+      events: stores.events,
+      allowedHosts: previewSettings.allowedHosts,
+      memoryMb: previewSettings.memoryMb,
+      cpus: previewSettings.cpus,
+    });
+
     const dispatcher = new CommandDispatcher({
       handlers: {
         ...createProblemCommandHandlers({ problems, conversations }),
@@ -300,14 +314,7 @@ export class HarnessRuntime {
         ...createSpecificationCommandHandlers({ planning, specification: specifications }),
         ...createDeliveryCommandHandlers({ deliveries, runs: stores.runs }),
         ...createPreviewCommandHandlers({
-          preview: new PreviewService({
-            deliveries: { load: (deliveryId) => deliveries.show(deliveryId) },
-            repositories: stores.repositories,
-            runs: stores.runs,
-            executionManager,
-            events: stores.events,
-            ...previewSettingsFromEnv(process.env),
-          }),
+          preview: previewService,
         }),
         ...createConfigCommandHandlers({
           config: createConfigAdminPort({

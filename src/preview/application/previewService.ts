@@ -78,23 +78,6 @@ const DEFAULT_CPUS = 1;
 /** Build outputs worth reporting a size for. */
 const ARTIFACT_DIRS = [".next", "dist", "build", "out"];
 
-/** Env knobs, resolved in one place so wiring stays declarative. */
-export function previewSettingsFromEnv(
-  env: Record<string, string | undefined>,
-): { allowedHosts?: string[]; memoryMb?: number; cpus?: number } {
-  const allowedHosts = (env.AI_PREVIEW_ALLOW ?? "")
-    .split(",")
-    .map((host) => host.trim())
-    .filter(Boolean);
-  const memoryMb = Number(env.AI_PREVIEW_MEMORY_MB);
-  const cpus = Number(env.AI_PREVIEW_CPUS);
-  return {
-    ...(allowedHosts.length > 0 ? { allowedHosts } : {}),
-    ...(Number.isFinite(memoryMb) && memoryMb > 0 ? { memoryMb } : {}),
-    ...(Number.isFinite(cpus) && cpus > 0 ? { cpus } : {}),
-  };
-}
-
 /**
  * TASK-1226: evidence-style preview.
  *
@@ -217,6 +200,7 @@ export class PreviewService {
   private workspaceFs(): PreviewWorkspaceFs {
     return this.deps.fs ?? defaultWorkspaceFs(this.deps.scratchRoot ?? defaultScratchRoot());
   }
+
 
   /** First required task with a successful Run that recorded a workspace. */
   private async findWorktree(

@@ -41,7 +41,8 @@ import {
 import { GitService } from "../git/gitService.js";
 import { GitPublishService } from "../git/publishService.js";
 import { TaskIntakeService } from "../task/application/intakeService.js";
-import { PreviewService, previewSettingsFromEnv } from "../preview/application/previewService.js";
+import { PreviewService } from "../preview/application/previewService.js";
+import { previewSettingsFromEnv } from "../preview/application/previewSettings.js";
 import type { PreviewEvidence } from "../preview/application/previewService.js";
 import { createPreviewCommandHandlers } from "../command/handlers/preview.js";
 import {
@@ -1369,13 +1370,16 @@ async function dispatchPreviewCommand(
   if (!isRole(role)) {
     throw new Error(`invalid role '${role}' (use guest|developer|reviewer|admin)`);
   }
+  const previewSettings = previewSettingsFromEnv(process.env);
   const preview = new PreviewService({
     deliveries: { load: (id) => deliveryService(handle).show(id) },
     repositories: handle.repositories,
     runs: handle.runs,
     executionManager: new ExecutionManager(createExecutionDriver(process.env)),
     events: handle.events,
-    ...previewSettingsFromEnv(process.env),
+    allowedHosts: previewSettings.allowedHosts,
+    memoryMb: previewSettings.memoryMb,
+    cpus: previewSettings.cpus,
   });
   const dispatcher = new CommandDispatcher({
     handlers: createPreviewCommandHandlers({ preview }),

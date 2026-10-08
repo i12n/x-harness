@@ -12,6 +12,10 @@
 !.env.example
 deploy/ai-harness.env
 
+# Private keys / certificates (e.g. the GitHub App key) — never commit
+*.pem
+*.key
+
 # Local deployment facts (real host, addresses, account ids) — never committed.
 docs/private/
 

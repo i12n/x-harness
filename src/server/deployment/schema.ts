@@ -70,6 +70,11 @@ export const CONFIG_GROUPS = [
     label: "对话行为",
     description: "机器人如何把聊天变成开发流程。",
   },
+  {
+    id: "preview",
+    label: "预览构建证据",
+    description: "构建改动并收集证据（截图/产物）；部署由 GitHub Actions 负责。",
+  },
 ] as const;
 
 export type ConfigGroupId = (typeof CONFIG_GROUPS)[number]["id"];
@@ -283,7 +288,64 @@ export const CONFIG_FIELDS: readonly ConfigField[] = [
     type: "string",
     group: "git",
     default: "ai/",
-    help: "硬约束：只有这个前缀下的分支会被推送，且永不推送默认分支。",
+    help:
+      "硬约束：只有这个前缀下的分支会被推送，且永不推送默认分支。" +
+      "TASK-1230 的测试分支是 test/<dlv>，需要把它纳入（多个前缀用逗号分隔）。",
+  },
+  // ---- GitHub App（TASK-1230：部署监控）------------------------------------
+  // 部署由各仓库的 GitHub Actions 负责；harness 只用 App 推测试分支、开/合并 PR、
+  // 读 workflow run 状态。填了 App 三项就用 App，否则回退到 AI_GITHUB_TOKEN。
+  {
+    key: "AI_GITHUB_APP_ID",
+    label: "GitHub App ID",
+    type: "string",
+    group: "git",
+    advanced: true,
+    placeholder: "123456",
+    help: "App 的 ID；安装令牌 1 小时自动续期，无人值守不会因令牌过期停摆。",
+  },
+  {
+    key: "AI_GITHUB_APP_ACCOUNT",
+    label: "GitHub App 账号",
+    type: "string",
+    group: "git",
+    advanced: true,
+    placeholder: "i12n",
+    help: "App 装在多个账号时用来选中一个；只装了一个可留空。",
+  },
+  {
+    key: "AI_GITHUB_APP_INSTALLATION_ID",
+    label: "GitHub App 安装 ID（可留空）",
+    type: "string",
+    group: "git",
+    advanced: true,
+    help: "留空则自动发现（查 App 的 installations）；装了一个账号时无需填。",
+  },
+  {
+    key: "AI_GITHUB_APP_PRIVATE_KEY_PATH",
+    label: "GitHub App 私钥路径",
+    type: "string",
+    group: "git",
+    advanced: true,
+    placeholder: "/srv/ai-harness/deploy/github-app.pem",
+    help: "App 私钥文件路径（只读 600）；不要把它放进仓库。",
+  },
+  {
+    key: "AI_GITHUB_TOKEN",
+    label: "GitHub 令牌（回退）",
+    type: "secret",
+    group: "git",
+    advanced: true,
+    help: "没有配置 App 时使用的 fine-grained PAT；有有效期，建议仅作过渡。",
+  },
+  {
+    key: "AI_GITHUB_API_BASE",
+    label: "GitHub API 地址",
+    type: "string",
+    group: "git",
+    advanced: true,
+    placeholder: "https://api.github.com",
+    help: "GitHub Enterprise 才需要改。",
   },
   {
     key: "AI_GIT_BIN",
@@ -370,6 +432,35 @@ export const CONFIG_FIELDS: readonly ConfigField[] = [
     advanced: true,
     placeholder: "deploy/ai-harness.env",
     help: "机器人写配置时落盘的文件；改动它本身需要手动重启一次。",
+  },
+
+  // ---- 预览构建证据（TASK-1226）--------------------------------------------
+  // 部署由 GitHub Actions 负责（见 docs/test-environment-deployment-plan.md），
+  // 所以这里只剩 harness 仍要做的一件事：构建改动、收集证据。所有仓库共用。
+  {
+    key: "AI_PREVIEW_MEMORY_MB",
+    label: "预览内存上限（MB）",
+    type: "int",
+    group: "preview",
+    default: "768",
+    advanced: true,
+  },
+  {
+    key: "AI_PREVIEW_CPUS",
+    label: "预览 CPU 上限",
+    type: "int",
+    group: "preview",
+    default: "1",
+    advanced: true,
+  },
+  {
+    key: "AI_PREVIEW_ALLOW",
+    label: "预览构建放行的包源",
+    type: "csv",
+    group: "preview",
+    default: "registry.npmjs.org",
+    advanced: true,
+    help: "预览构建容器唯一可访问的外部主机。",
   },
 ];
 

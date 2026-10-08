@@ -162,6 +162,21 @@ describe("GitService.publishWorkspace", () => {
     expect(outcome.skipped).toBe("protected_branch");
   });
 
+  // TASK-1230: test branches live under `test/`, so the guard takes a list.
+  it("accepts several allowed prefixes", async () => {
+    const workspace = worktree("test/dlv-1");
+    writeFileSync(join(workspace, "app.txt"), "changed\n");
+
+    const outcome = await new GitService({ pushPrefix: "ai/,test/" }).publishWorkspace({
+      repository: makeRepository(),
+      workspacePath: workspace,
+      message: "test: dlv-1",
+    });
+
+    expect(outcome.pushed).toBe(true);
+    expect(git(["--git-dir", origin, "branch", "--list", "test/dlv-1"]).trim()).not.toBe("");
+  });
+
   it("reports nothing to publish for an untouched worktree", async () => {
     const workspace = worktree("ai/task-1-run-1");
     const outcome = await new GitService().publishWorkspace({
