@@ -25,7 +25,8 @@ function publisher(options: { allowedPrefixes?: string[] } = {}) {
     authorEmail: "ai@example.com",
     exec: async (args, _cwd, env) => {
       calls.push({ args, env });
-      return "";
+      // `status --porcelain` must report work, or the publisher stops early.
+      return args.includes("status") ? " M app/page.tsx\n" : "";
     },
   });
   return { service, calls };
@@ -47,8 +48,10 @@ describe("control-plane test-branch push (TASK-1230)", () => {
     // Every git call carries `-c safe.directory=…` (worktrees are owned by the
     // container user, so git refuses to touch them as root otherwise).
     expect(
-      calls.map((call) => call.args.find((arg) => ["checkout", "add", "commit", "push"].includes(arg))),
-    ).toEqual(["checkout", "add", "commit", "push"]);
+      calls.map((call) =>
+        call.args.find((arg) => ["checkout", "status", "add", "commit", "push"].includes(arg)),
+      ),
+    ).toEqual(["checkout", "status", "add", "commit", "push"]);
     expect(calls.every((call) => call.args.some((arg) => arg.startsWith("safe.directory=")))).toBe(true);
     const push = calls.at(-1)!;
     expect(push.args.join(" ")).toContain("https://github.com/i12n/x-music.git");
@@ -79,7 +82,7 @@ describe("control-plane test-branch push (TASK-1230)", () => {
         if (args.includes("push")) {
           throw new Error("remote: Permission denied");
         }
-        return "";
+        return args.includes("status") ? " M app/page.tsx\n" : "";
       },
     });
     const outcome = await service.publish(request("test/dlv-1"));

@@ -75,6 +75,12 @@ export class GitBranchPublisher implements TestBranchPublisher {
     const trusted = ["-c", `safe.directory=${resolve(input.workspacePath)}`];
     try {
       await this.run([...trusted, "checkout", "-B", input.branch], input.workspacePath, env);
+      // Check for work *before* committing: git prints "nothing to commit" on
+      // stdout, which a stderr-only error check would misread as a real failure.
+      const dirty = await this.run([...trusted, "status", "--porcelain"], input.workspacePath, env);
+      if (!dirty.trim()) {
+        return { pushed: false, reason: "工作区没有改动，没有可测试的内容" };
+      }
       await this.run([...trusted, "add", "-A"], input.workspacePath, env);
       await this.run(
         [
@@ -91,11 +97,10 @@ export class GitBranchPublisher implements TestBranchPublisher {
         env,
       );
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      // "Nothing staged" is a real signal: there is no change to test.
-      if (!/nothing to commit|no changes added to commit/i.test(message)) {
-        return { pushed: false, reason: `无法在 ${input.branch} 上提交改动：${message}` };
-      }
+      return {
+        pushed: false,
+        reason: `无法在 ${input.branch} 上提交改动：${error instanceof Error ? error.message : String(error)}`,
+      };
     }
 
     const token = await this.options.tokenProvider.getToken();
