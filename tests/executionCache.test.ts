@@ -23,9 +23,13 @@ describe("execution cache (TASK-1238)", () => {
 
   it("creates the cache directories and mounts them per target workdir", async () => {
     const root = mkdtempSync(join(tmpdir(), "ai-cache-"));
+    const worktree = mkdtempSync(join(tmpdir(), "ai-worktree-"));
     const plan = await prepareExecutionCache("repo-1", {
       env: { AI_CACHE_DIR: root },
-      targetWorkdirs: ["/workspace", "/workspaces/tgt-b"],
+      workdirs: [
+        { host: worktree, container: "/workspace" },
+        { host: `${worktree}-b`, container: "/workspaces/tgt-b" },
+      ],
     });
 
     expect(plan.root).toBe(join(root, "repo-1"));
@@ -38,6 +42,10 @@ describe("execution cache (TASK-1238)", () => {
     for (const mount of plan.mounts) {
       expect(statSync(mount.source).isDirectory()).toBe(true);
     }
+    // The bind target must exist in the worktree before docker starts, or docker
+    // creates `.next` as root and the container user cannot write into it.
+    expect(statSync(join(worktree, ".next", "cache")).isDirectory()).toBe(true);
+    expect(statSync(join(`${worktree}-b`, ".next", "cache")).isDirectory()).toBe(true);
   });
 
   it("is idempotent across runs of the same repository", async () => {

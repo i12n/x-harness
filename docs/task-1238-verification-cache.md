@@ -42,3 +42,16 @@ tests/dockerExecution.test.ts  缓存挂载与 env 出现在 docker run 参数�
 
 预期：第一次 Run 冷启动（填充缓存）与现在持平，**第二次起** `npm ci` 从 33s 降到几秒级、
 `next build` 因 `.next/cache` 命中而显著变快。实测数据见 §5（部署后补）。
+
+## 5. 实测
+
+第一次上线（attempt 10）**失败**了一个有价值的原因：挂载 `.next/cache` 时，docker 以
+root 创建了缺失的 `/workspace/.next`，容器用户（uid 1000）随后写 `.next/trace` 报
+`EACCES`。修法是 harness 在启动容器前**自己创建 `<worktree>/.next/cache` 并 chown 1000:1000**
+（D3 的同一原则），并只在仓库声明了 build 命令时才挂构建缓存。
+
+```text
+attempt 9   （无缓存）  agent 207s + 验证 114s = 322s
+attempt 10  （冷缓存，因 .next 属主失败）
+attempt 11  （热缓存）  → 实测见下
+```

@@ -46,7 +46,11 @@ export function executionCacheKey(key: string): string {
  */
 export async function prepareExecutionCache(
   key: string,
-  options: { env?: NodeJS.ProcessEnv; targetWorkdirs?: string[] } = {},
+  options: {
+    env?: NodeJS.ProcessEnv;
+    /** Host worktree + the path it is mounted at inside the container. */
+    workdirs?: { host: string; container: string }[];
+  } = {},
 ): Promise<ExecutionCachePlan> {
   const root = join(executionCacheRoot(options.env), executionCacheKey(key));
   const npm = join(root, "npm");
@@ -58,10 +62,20 @@ export async function prepareExecutionCache(
     await chown(dir, CONTAINER_UID, CONTAINER_GID).catch(() => undefined);
   }
   const mounts = [{ source: npm, target: `${CACHE_MOUNT_ROOT}/npm` }];
-  for (const workdir of options.targetWorkdirs ?? []) {
+  for (const workdir of options.workdirs ?? []) {
     // Next.js keeps its build cache inside the worktree; mounting it per target
     // keeps the cache across Runs while the worktree itself stays disposable.
-    mounts.push({ source: next, target: join(workdir, ".next/cache") });
+    //
+    // The bind target has to exist on the host first, owned by the container
+    // user: docker would otherwise create `.next` as root and the build dies on
+    // `EACCES ... /workspace/.next/trace` (live failure: run-e6464ed2c9).
+    const buildDir = join(workdir.host, ".next");
+    await mkdir(join(buildDir, "cache"), { recursive: true });
+    await chown(buildDir, CONTAINER_UID, CONTAINER_GID).catch(() => undefined);
+    await chown(join(buildDir, "cache"), CONTAINER_UID, CONTAINER_GID).catch(
+      () => undefined,
+    );
+    mounts.push({ source: next, target: join(workdir.container, ".next/cache") });
   }
   return {
     root,

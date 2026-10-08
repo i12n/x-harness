@@ -29,9 +29,14 @@ const execFileAsync = promisify(execFile);
 async function cacheArgsFor(
   cacheKey: string,
   mounts: ExecutionMount[],
+  profile: ExecutionProfile,
 ): Promise<{ cacheMounts: { source: string; target: string }[]; cacheEnv: Record<string, string> }> {
   const cache = await prepareExecutionCache(cacheKey, {
-    targetWorkdirs: mounts.map((mount) => mount.target),
+    // The build cache is only mounted for repositories that declare a build
+    // step — otherwise the harness would create `<worktree>/.next` everywhere.
+    workdirs: profile.commands.build
+      ? mounts.map((mount) => ({ host: resolve(mount.source), container: mount.target }))
+      : [],
   });
   return { cacheMounts: cache.mounts, cacheEnv: cache.env };
 }
@@ -281,7 +286,7 @@ export class DockerExecutionDriver implements ExecutionDriver {
       proxyUrl,
       mounts,
       ...(environment.cacheKey
-        ? await cacheArgsFor(environment.cacheKey, mounts)
+        ? await cacheArgsFor(environment.cacheKey, mounts, environment.profile)
         : {}),
     });
     const { stdout } = await this.runDocker(args);
