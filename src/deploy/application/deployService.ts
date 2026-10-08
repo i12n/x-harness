@@ -40,6 +40,8 @@ export interface DeployServiceDeps {
 export interface DeployTransition {
   deliveryId: string;
   state: TestDeployStatus["state"] | "stale";
+  /** TASK-1231: which deployment this is — the test env or the production one. */
+  kind: "test" | "production";
   run?: GitHubWorkflowRun;
   /** Terminal states stop the watch. */
   terminal: boolean;
@@ -81,7 +83,17 @@ export class DeployService {
   private readonly watchTtlMs: number;
   private readonly now: () => Date;
   /** TASK-1231: deliveries being watched → last state seen and next check time. */
-  private readonly watching = new Map<string, { last: string; startedAt: number; nextAt: number }>();
+  private readonly watching = new Map<
+    string,
+    {
+      last: string;
+      startedAt: number;
+      nextAt: number;
+      branch: string;
+      sinceMs: number;
+      kind: "test" | "production";
+    }
+  >();
 
   constructor(private readonly deps: DeployServiceDeps) {
     this.branchPrefix = deps.branchPrefix ?? "test/";
@@ -91,9 +103,18 @@ export class DeployService {
   }
 
   /** TASK-1231: start watching a deployment (called when the branch is pushed). */
-  watch(deliveryId: string): void {
+  watch(deliveryId: string, options: { branch?: string; kind?: "test" | "production" } = {}): void {
     const at = this.now().getTime();
-    this.watching.set(deliveryId, { last: "unknown", startedAt: at, nextAt: at });
+    this.watching.set(deliveryId, {
+      last: "unknown",
+      startedAt: at,
+      nextAt: at,
+      branch: options.branch ?? this.branchName(deliveryId),
+      // Only runs created *after* the watch started count: otherwise a branch
+      // that was already deployed reports "succeeded" from its old run.
+      sinceMs: at,
+      kind: options.kind ?? "test",
+    });
   }
 
   watched(): string[] {
@@ -115,13 +136,13 @@ export class DeployService {
       entry.nextAt = at + this.watchIntervalMs;
       if (at - entry.startedAt > this.watchTtlMs) {
         this.watching.delete(deliveryId);
-        transitions.push({ deliveryId, state: "stale", terminal: true });
+        transitions.push({ deliveryId, state: "stale", kind: entry.kind, terminal: true });
         await this.record("TestDeployStale", { deliveryId });
         continue;
       }
       let status: TestDeployStatus;
       try {
-        status = await this.status(deliveryId);
+        status = await this.statusOn(deliveryId, entry.branch, entry.sinceMs);
       } catch (error) {
         // A failed lookup is not a failed deployment: keep watching, say nothing.
         continue;
@@ -137,6 +158,7 @@ export class DeployService {
       transitions.push({
         deliveryId,
         state: status.state,
+        kind: entry.kind,
         ...(status.run ? { run: status.run } : {}),
         terminal,
       });
@@ -204,16 +226,28 @@ export class DeployService {
 
   /** Observe the repository's own deployment: we only read the runs. */
   async status(deliveryId: string): Promise<TestDeployStatus> {
+    return this.statusOn(deliveryId, this.branchName(deliveryId), 0);
+  }
+
+  /**
+   * TASK-1231: observe one branch. `sinceMs` ignores runs older than the watch,
+   * so a re-published branch cannot report success from its previous run.
+   */
+  private async statusOn(
+    deliveryId: string,
+    branch: string,
+    sinceMs: number,
+  ): Promise<TestDeployStatus> {
     // Only the repository is needed here — requiring a succeeded Run (and its
     // worktree) would make a deployment unobservable exactly when it matters.
     const repository = await this.resolveRepository(deliveryId);
-    const branch = this.branchName(deliveryId);
     const runs = await this.deps.github.listWorkflowRuns({
       repo: githubSlug(repository),
       branch,
       limit: 5,
     });
-    const run = runs[0];
+    // Newest first, so the first run at/after `sinceMs` is the one we watch.
+    const run = runs.find((candidate) => Date.parse(candidate.createdAt) >= sinceMs);
     if (!run) {
       return { deliveryId, branch, state: "none" };
     }
@@ -243,6 +277,9 @@ export class DeployService {
       pullRequest: merged.number,
       url: merged.url,
     });
+    // TASK-1231: the merge itself triggers the repository's production workflow.
+    // Watch the default branch from this moment so the上线 result is reported.
+    this.watch(deliveryId, { branch: repository.defaultBranch, kind: "production" });
     return { deliveryId, merged: merged.merged, pullRequest: merged };
   }
 

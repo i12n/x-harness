@@ -85,7 +85,7 @@ describe("deployment watching (TASK-1231)", () => {
     w.service.watch("dlv-1");
 
     expect(await w.service.poll()).toEqual([
-      { deliveryId: "dlv-1", state: "pending", run: run("in_progress"), terminal: false },
+      { deliveryId: "dlv-1", state: "pending", kind: "test", run: run("in_progress"), terminal: false },
     ]);
 
     w.advance(30_000);
@@ -119,7 +119,7 @@ describe("deployment watching (TASK-1231)", () => {
     await w.service.poll();
     w.advance(31 * 60_000);
     const stale = await w.service.poll();
-    expect(stale).toEqual([{ deliveryId: "dlv-1", state: "stale", terminal: true }]);
+    expect(stale).toEqual([{ deliveryId: "dlv-1", state: "stale", kind: "test", terminal: true }]);
     expect(w.service.watched()).toEqual([]);
   });
 

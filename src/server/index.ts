@@ -524,20 +524,31 @@ export class HarnessRuntime {
     // TASK-1231: where the test environment lives. GitHub owns the deploy, so
     // the harness cannot discover the URL by itself — it is configured once.
     const deployTestUrl = process.env.AI_DEPLOY_TEST_URL?.trim();
+    const deployProdUrl = process.env.AI_DEPLOY_PROD_URL?.trim();
     const notifyDeployTransitions = async (transitions: unknown[]): Promise<void> => {
       if (!deployChatId || transitions.length === 0) {
         return;
       }
-      const rows = transitions as { deliveryId: string; state: string; run?: { url?: string } }[];
+      const rows = transitions as {
+        deliveryId: string;
+        state: string;
+        kind?: string;
+        run?: { url?: string };
+      }[];
       for (const row of rows) {
+        const production = row.kind === "production";
+        const what = production ? "线上" : "测试环境";
         const label =
           row.state === "succeeded"
-            ? "✅ 测试环境就绪"
+            ? production
+              ? "🚀 已上线"
+              : "✅ 测试环境就绪"
             : row.state === "failed"
-              ? "❌ 部署失败"
+              ? `❌ ${what}部署失败`
               : row.state === "stale"
-                ? "⏳ 部署超时，仍在进行"
-                : "🔄 部署中";
+                ? `⏳ ${what}部署超时，仍在进行`
+                : `🔄 ${what}部署中`;
+        const url = production ? deployProdUrl : deployTestUrl;
         try {
           await sendToTarget(
             {
@@ -549,8 +560,8 @@ export class HarnessRuntime {
               conversationId: row.deliveryId,
               text: [
                 `${label}：${row.deliveryId}`,
-                deployTestUrl ? `🧪 测试环境：${deployTestUrl}` : "",
-                deployTestUrl
+                url ? `${production ? "🌐 线上环境" : "🧪 测试环境"}：${url}` : "",
+                !production && deployTestUrl
                   ? "打开链接即可验收（HTTP + IP + 端口，暂无鉴权）；数据为测试库，随部署更新。"
                   : "",
                 row.run?.url ? `Workflow：${row.run.url}` : "",
