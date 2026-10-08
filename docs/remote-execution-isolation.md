@@ -63,9 +63,24 @@ Codex 只看到 `/workspace`（当前 Run 的 worktree），看不到整个服�
 - **绝对禁止** 挂载 `/var/run/docker.sock`（等于交出宿主机控制权）
 - **绝对禁止** 挂载宿主 `/`、`/etc`、`/root`、`/home`、`/srv/harness`
 - 只允许：`/workspace`（当前 Run worktree，读写）+ `/tmp`（tmpfs）
+  + `AI_CACHE_DIR` 下**该仓库自己的**缓存目录（TASK-1238，读写；见下）
 - 不允许访问：其他 Run 的 workspace、PostgreSQL、生产环境
 - 建议默认：`--cap-drop ALL`、`no-new-privileges`、非 root 用户、
   只读根文件系统 + tmpfs
+
+### 5.1 验证缓存（TASK-1238）
+
+运行容器的 `HOME` 是 tmpfs，所以每次 Run 都要重新 `npm ci` 并从头构建前端——
+实测验证阶段占一次 Run 的 114~152 秒。执行层因此额外挂两处：
+
+```text
+<AI_CACHE_DIR>/<repositoryId>/npm   ->  /ai-cache/npm        （npm 包缓存）
+<AI_CACHE_DIR>/<repositoryId>/next  ->  <每个 target 的 workdir>/.next/cache
+```
+
+边界：只挂**该仓库**的缓存目录（不是整个缓存根）；目录由 harness 创建并 chown 给容器
+用户（uid 1000），宿主机其它路径照旧不可见；缓存内容 harness 自己从不读取。
+`AI_CACHE_DIR` 默认 `/var/cache/ai-harness`。
 
 ## 6. 网络隔离
 

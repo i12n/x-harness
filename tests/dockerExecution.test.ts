@@ -30,6 +30,35 @@ describe("buildDockerRunArgs isolation rules", () => {
     expect(mounts.some((mount) => mount.includes("src=/,"))).toBe(false);
   });
 
+  // TASK-1238: caches are mounted *in addition to* the worktree, never instead
+  // of the isolation flags — the container still sees no host path but them.
+  it("adds the repository cache mounts and env without weakening isolation", () => {
+    const args = buildDockerRunArgs({
+      runId: "run-002",
+      workspacePath: "/tmp/ws",
+      profile,
+      secrets: {},
+      cacheMounts: [
+        { source: "/var/cache/ai-harness/repo-1/npm", target: "/ai-cache/npm" },
+        { source: "/var/cache/ai-harness/repo-1/next", target: "/workspace/.next/cache" },
+      ],
+      cacheEnv: { npm_config_cache: "/ai-cache/npm", NEXT_TELEMETRY_DISABLED: "1" },
+    });
+
+    const mounts = args.filter((_, index) => args[index - 1] === "--mount");
+    expect(mounts).toEqual([
+      "type=bind,src=/tmp/ws,dst=/workspace",
+      "type=bind,src=/var/cache/ai-harness/repo-1/npm,dst=/ai-cache/npm",
+      "type=bind,src=/var/cache/ai-harness/repo-1/next,dst=/workspace/.next/cache",
+    ]);
+    expect(args.join(" ")).toContain("--env npm_config_cache=/ai-cache/npm");
+    expect(args.join(" ")).toContain("--env NEXT_TELEMETRY_DISABLED=1");
+    // Isolation flags are unaffected.
+    expect(args).toContain("--read-only");
+    expect(args.join(" ")).toContain("--user 1000:1000");
+    expect(args.join(" ")).not.toContain("/var/run/docker.sock");
+  });
+
   it("applies the isolation and resource flags", () => {
     const args = buildDockerRunArgs({
       runId: "run-001",

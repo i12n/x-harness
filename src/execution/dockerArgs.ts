@@ -14,6 +14,10 @@ export interface DockerRunSpec {
   proxyUrl?: string;
   /** TASK-1006 multi-workspace mounts; falls back to workspacePath. */
   mounts?: ExecutionMount[];
+  /** TASK-1238: persistent caches (npm tarballs, per-target build caches). */
+  cacheMounts?: { source: string; target: string }[];
+  /** TASK-1238: environment that points the tools at those caches. */
+  cacheEnv?: Record<string, string>;
 }
 
 export function containerNameFor(runId: string): string {
@@ -103,6 +107,10 @@ export function buildDockerRunArgs(spec: DockerRunSpec): string[] {
     );
   }
 
+  for (const mount of spec.cacheMounts ?? []) {
+    args.push("--mount", `type=bind,src=${resolve(mount.source)},dst=${mount.target}`);
+  }
+
   if (spec.networkName) {
     args.push("--network", spec.networkName);
   } else {
@@ -127,6 +135,10 @@ export function buildDockerRunArgs(spec: DockerRunSpec): string[] {
   }
 
   for (const [key, value] of Object.entries(spec.secrets)) {
+    args.push("--env", `${key}=${value}`);
+  }
+
+  for (const [key, value] of Object.entries(spec.cacheEnv ?? {})) {
     args.push("--env", `${key}=${value}`);
   }
 

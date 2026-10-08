@@ -221,6 +221,8 @@ export class Worker {
           primaryTarget.repository.executionProfile ?? defaultExecutionProfile(),
         mounts,
         primaryTargetId: primaryTarget.target.id,
+        // TASK-1238: reuse this repository's npm/build caches across Runs.
+        cacheKey: primaryTarget.repository.id,
       });
       const preparedEnvironment = environment;
       const exec = (

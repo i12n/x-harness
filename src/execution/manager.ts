@@ -20,9 +20,21 @@ import {
   buildDockerRunArgs,
   containerNameFor,
 } from "./dockerArgs.js";
+import { prepareExecutionCache } from "./cache.js";
 import { EnvSecretStore, type SecretStore } from "./secrets.js";
 
 const execFileAsync = promisify(execFile);
+
+/** TASK-1238: the cache mounts/env a Run container gets for its repository. */
+async function cacheArgsFor(
+  cacheKey: string,
+  mounts: ExecutionMount[],
+): Promise<{ cacheMounts: { source: string; target: string }[]; cacheEnv: Record<string, string> }> {
+  const cache = await prepareExecutionCache(cacheKey, {
+    targetWorkdirs: mounts.map((mount) => mount.target),
+  });
+  return { cacheMounts: cache.mounts, cacheEnv: cache.env };
+}
 
 export interface ExecutionRequest {
   runId: string;
@@ -31,6 +43,12 @@ export interface ExecutionRequest {
   mounts?: ExecutionMount[];
   workspacePath?: string;
   primaryTargetId?: string;
+  /**
+   * TASK-1238: repository this Run belongs to. When set, the docker driver
+   * mounts a per-repository cache (npm tarballs, frontend build cache) so the
+   * verification phase stops re-downloading and re-building from zero.
+   */
+  cacheKey?: string;
 }
 
 export interface ExecutionEnvironment {
@@ -48,6 +66,8 @@ export interface ExecutionEnvironment {
   networkName?: string;
   /** Allow-list proxy container name (restricted mode). */
   proxyContainerId?: string;
+  /** TASK-1238: per-repository cache key (docker driver only). */
+  cacheKey?: string;
   startedAt?: string;
   /** Persisted lifecycle record id (when an ExecutionStore is configured). */
   executionRecordId?: string;
@@ -209,6 +229,7 @@ export class DockerExecutionDriver implements ExecutionDriver {
       primaryTargetId: request.primaryTargetId ?? primary.targetId,
       profile: request.profile,
       driver: this.name,
+      cacheKey: request.cacheKey,
     };
   }
 
@@ -259,6 +280,9 @@ export class DockerExecutionDriver implements ExecutionDriver {
       networkName,
       proxyUrl,
       mounts,
+      ...(environment.cacheKey
+        ? await cacheArgsFor(environment.cacheKey, mounts)
+        : {}),
     });
     const { stdout } = await this.runDocker(args);
     return {
