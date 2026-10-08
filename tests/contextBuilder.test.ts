@@ -74,12 +74,31 @@ describe("ContextBuilder", () => {
     expect(context.prompt).toContain("Add user avatar");
     expect(context.prompt).toContain("Allow users to upload avatars.");
     expect(context.prompt).toContain("- JPG supported");
-    expect(context.prompt).toContain("Do not touch unrelated modules.");
+    // TASK-1237: the agent CLI loads AGENTS.md from the workspace itself, so the
+    // harness does not repeat its contents — it only states the contract.
+    expect(context.prompt).not.toContain("Do not touch unrelated modules.");
+    expect(context.prompt).toContain("Harness contract");
+    expect(context.prompt).toContain("AGENTS.md");
     // TASK-1236: the docs tree is an index, not payload — its contents cost
     // ~87k tokens per model call and the agent can read the file itself.
     expect(context.prompt).toContain("docs/architecture.md");
     expect(context.prompt).not.toContain("Modular monolith.");
     expect(context.prompt).toContain("my-app (git@github.com:example/my-app.git)");
+  });
+
+  it("states the verification contract the repository cannot know", async () => {
+    const workspace = mkdtempSync(join(tmpdir(), "ai-harness-workspace-"));
+    const context = await buildAgentContext({
+      runId: "run-003",
+      task: task(),
+      repository: repository(),
+      workspacePath: workspace,
+    });
+
+    expect(context.prompt).toContain("npm test");
+    expect(context.prompt).toContain("do not add or rewrite package.json scripts");
+    expect(context.prompt).toContain("Do not commit, push, open PRs");
+    expect(context.prompt).toContain("Do not update task boards, changelogs");
   });
 
   it("keeps a large documentation tree out of the prompt (TASK-1236)", async () => {

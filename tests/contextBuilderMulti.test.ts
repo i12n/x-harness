@@ -149,16 +149,18 @@ describe("Multi-repository Context Builder (TASK-1007)", () => {
     });
 
     expect(context.prompt).toContain("## Project Context");
-    // TASK-1236: instructions are injected, documents are only indexed.
-    for (const marker of ["A-INSTRUCTIONS", "B-INSTRUCTIONS", "docs/a.md", "docs/b.md"]) {
+    // TASK-1236: documents are only indexed. TASK-1237: the primary worktree's
+    // instructions are loaded by the agent CLI; a supporting repository's are
+    // still injected, because discovery cannot reach a mount outside the cwd.
+    for (const marker of ["B-INSTRUCTIONS", "docs/a.md", "docs/b.md"]) {
       expect(context.prompt).toContain(marker);
     }
-    for (const content of ["A-DOC-ONLY", "B-DOC-ONLY"]) {
+    for (const content of ["A-INSTRUCTIONS", "A-DOC-ONLY", "B-DOC-ONLY"]) {
       expect(context.prompt).not.toContain(content);
     }
     // A's instructions appear under A's heading, before B's heading.
     const headingA = context.prompt.indexOf("### rehelu (tgt-a)");
-    const instructionA = context.prompt.indexOf("A-INSTRUCTIONS");
+    const instructionA = context.prompt.indexOf("Instructions: AGENTS.md");
     const headingB = context.prompt.indexOf("### auth (tgt-b)");
     const instructionB = context.prompt.indexOf("B-INSTRUCTIONS");
     expect(headingA).toBeGreaterThanOrEqual(0);
@@ -186,8 +188,9 @@ describe("Multi-repository Context Builder (TASK-1007)", () => {
 
   it("bounds the total context size with a truncation marker", async () => {
     const huge = "x".repeat(200 * 1024);
-    const workspaceA = workspace({ "AGENTS.md": huge });
-    const workspaceB = workspace({ "AGENTS.md": "B-INSTRUCTIONS" });
+    const workspaceA = workspace({ "AGENTS.md": "A-INSTRUCTIONS" });
+    // The supporting repository is the one whose files go into the prompt now.
+    const workspaceB = workspace({ "AGENTS.md": huge });
 
     const context = await buildAgentContext({
       runId: "run-001",
@@ -198,7 +201,7 @@ describe("Multi-repository Context Builder (TASK-1007)", () => {
 
     expect(context.prompt).toContain("[additional instruction files omitted due to size limit]");
     expect(context.prompt.length).toBeLessThan(120 * 1024);
-    expect(context.prompt).toContain("B-INSTRUCTIONS");
+    expect(context.prompt).toContain("Instructions: AGENTS.md");
   });
 
   it("keeps the single-repository prompt free of Targets/Project Context sections", async () => {
@@ -212,7 +215,8 @@ describe("Multi-repository Context Builder (TASK-1007)", () => {
     });
 
     expect(context.prompt).toContain("inside a dedicated git worktree");
-    expect(context.prompt).toContain("Project instructions:");
+    expect(context.prompt).toContain("Harness contract");
+    expect(context.prompt).toContain("AGENTS.md");
     expect(context.prompt).not.toContain("## Targets");
   });
 });

@@ -76,6 +76,7 @@ export async function buildAgentContext(
     const context = await collectProjectContext(
       primary.hostWorkspacePath,
       MAX_INSTRUCTION_BYTES,
+      { includeInstructions: false },
     );
     return {
       runId: params.runId,
@@ -93,6 +94,7 @@ export async function buildAgentContext(
     const context = await collectProjectContext(
       target.hostWorkspacePath,
       budget,
+      { includeInstructions: target.targetId !== primary.targetId },
     );
     contextsPerTarget.set(target.targetId, context);
     remainingBytes -= context.instructions.reduce(
@@ -187,23 +189,34 @@ function composeMultiRepositoryPrompt(
     contextLines.push(`### ${target.repository.name} (${target.targetId})`);
     const context = contextsPerTarget.get(target.targetId);
     const files = context?.instructions ?? [];
-    if (files.length === 0 && (context?.docIndex.length ?? 0) === 0) {
+    const docs = context?.docIndex ?? [];
+    const isPrimary = target.targetId === primaryTargetId;
+    if (isPrimary) {
+      // The primary worktree: the agent CLI loads its AGENTS.md itself.
+      contextLines.push(
+        "Instructions: AGENTS.md in this workspace (loaded by the agent CLI when present).",
+      );
+    } else if (files.length === 0 && docs.length === 0) {
       contextLines.push("(no instruction files found)");
       continue;
+    } else {
+      for (const file of files) {
+        contextLines.push(`[${file.path}]\n${file.content.trim()}`);
+      }
     }
-    for (const file of files) {
-      contextLines.push(`[${file.path}]\n${file.content.trim()}`);
-    }
-    if (context && context.docIndex.length > 0) {
-      contextLines.push(docIndexSection(context.docIndex));
+    if (docs.length > 0) {
+      contextLines.push(docIndexSection(docs));
     }
   }
   sections.push(contextLines.join("\n\n"));
 
   sections.push(
-    "Make the code changes required by the task in the listed workspaces only. " +
-      "Do not modify files outside those workspaces. When you believe the task is " +
-      "done, stop; the harness runs verification separately.",
+    harnessContract(
+      targets.map((target) => ({
+        repository: target.repository,
+        label: `in ${target.repository.name} (${target.targetId})`,
+      })),
+    ),
   );
   return sections.join("\n\n");
 }
@@ -238,11 +251,7 @@ function composePrompt(
   if (context.docIndex.length > 0) {
     sections.push(docIndexSection(context.docIndex));
   }
-  sections.push(
-    "Make the code changes required by the task inside this workspace only. " +
-      "Do not modify files outside the workspace. When you believe the task is " +
-      "done, stop; the harness runs verification separately.",
-  );
+  sections.push(harnessContract([{ repository }]));
   return sections.join("\n\n");
 }
 
@@ -258,13 +267,85 @@ function docIndexSection(docIndex: string[]): string {
   ].join("\n");
 }
 
+/**
+ * TASK-1237: the harness, not the repository, owns delivery.
+ *
+ * Live evidence: a one-line CSS task ran 24+ commands over 13 minutes because
+ * the agent followed the repository's AGENTS.md bookkeeping workflow (read four
+ * context documents, update board/changelog/handoff, commit, then review the
+ * next task) — 7 of its 10 changed files were documentation. The contract below
+ * states the deployment facts the repository cannot know (what verification
+ * runs, what the sandbox can reach) and settles the conflict in the harness's
+ * favour.
+ *
+ * The repository's own AGENTS.md is *not* injected: the agent CLI loads it from
+ * the workspace root (verified against codex-cli 0.154.0 — a directory holding
+ * only AGENTS.md answers questions about its contents).
+ */
+function harnessContract(
+  entries: { repository: Repository; label?: string }[],
+): string {
+  const lines = ["Harness contract (it overrides project docs where they conflict):"];
+  const withCommands = entries.filter(
+    (entry) => entry.repository.verificationCommands.length > 0,
+  );
+  if (withCommands.length === 1 && entries.length === 1) {
+    lines.push(
+      `- After you stop, the harness runs these commands in this workspace: ${withCommands[0]!.repository.verificationCommands.join(" / ")}. They must pass — do not add or rewrite package.json scripts to make them pass.`,
+    );
+  } else if (withCommands.length > 0) {
+    for (const entry of withCommands) {
+      const label = entry.label ? `${entry.label}: ` : "";
+      lines.push(
+        `- After you stop, the harness runs ${label}${entry.repository.verificationCommands.join(" / ")}. They must pass — do not add or rewrite package.json scripts to make them pass.`,
+      );
+    }
+  } else {
+    lines.push(
+      "- The harness runs the repository's own verification separately; do not add or rewrite package.json scripts.",
+    );
+  }
+  const networks = [
+    ...new Set(entries.map((entry) => describeNetwork(entry.repository))),
+  ];
+  lines.push(`- Network: ${networks.join("; ")}. Assume no browser and no database.`);
+  lines.push(
+    "- Make the smallest change that satisfies the task. Do not commit, push, open PRs, or touch files outside the workspace — the harness owns git.",
+  );
+  lines.push(
+    "- Do not update task boards, changelogs, handoff or project-state notes unless the task itself asks for documentation. The harness owns that bookkeeping.",
+  );
+  lines.push(
+    "- Follow the repository's AGENTS.md, which the agent CLI loads from the workspace. When the change is done, stop; the harness runs verification separately.",
+  );
+  return lines.join("\n");
+}
+
+function describeNetwork(repository: Repository): string {
+  const network = repository.executionProfile?.network;
+  if (!network || network.mode === "none") {
+    return "disabled in this environment";
+  }
+  return network.allow.length > 0
+    ? `restricted to ${network.allow.join(", ")}`
+    : "restricted";
+}
+
 async function collectProjectContext(
   workspacePath: string,
   maxBytes = MAX_INSTRUCTION_BYTES,
+  options: { includeInstructions?: boolean } = {},
 ): Promise<ProjectContext> {
   const instructions: InstructionFile[] = [];
   let totalBytes = 0;
+  // TASK-1237: the primary worktree's instruction files are loaded by the agent
+  // CLI itself; only a supporting repository (mounted elsewhere) needs them in
+  // the prompt, because discovery would never reach it.
+  const includeInstructions = options.includeInstructions ?? true;
   for (const name of ROOT_INSTRUCTION_FILES) {
+    if (!includeInstructions) {
+      break;
+    }
     const content = await tryRead(join(workspacePath, name));
     if (content === undefined) {
       continue;

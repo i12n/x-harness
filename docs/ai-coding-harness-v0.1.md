@@ -844,10 +844,14 @@ PROJECT.md
 docs/
 ```
 
-Harness 负责把相关内容组装进去。**TASK-1236**：`AGENTS.md` / `PROJECT.md` /
-`README.md` 原文注入（总预算 32 KB），`docs/**/*.md` 只注入**路径索引**（≤4 KB）——
-agent 在工作区里有 shell，按需自己读；早期把整个 `docs/` 全文塞进每次调用，实测一条
-一行 CSS 的任务要 260 万输入 token。
+Harness 负责把相关内容组装进去。**TASK-1236/1237**：`AGENTS.md` 由 agent CLI 自己
+从工作区加载，harness 不再重复注入（多仓的 supporting 仓库例外，它挂在别的路径）；
+`docs/**/*.md` 只注入**路径索引**（≤4 KB），agent 按需自己读——早期把整个 `docs/`
+全文塞进每次调用，实测一条一行 CSS 的任务要 260 万输入 token。
+
+提示词里固定保留的是 **Harness contract**：harness 之后会跑哪些验证命令、不得为通过检查
+而改写 `package.json` 脚本、网络范围、不要提交/推送、看板与 changelog 由 harness 负责、
+只做最小改动且完成后停止。这些是仓库无从知晓的部署事实，冲突时以 contract 为准。
 
 ---
 
