@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { resolve } from "node:path";
 import { promisify } from "node:util";
 import type { Repository } from "../../domain/repository.js";
 import type { GitHubTokenProvider } from "../../github/tokenProvider.js";
@@ -69,11 +70,15 @@ export class GitBranchPublisher implements TestBranchPublisher {
     }
 
     const env: NodeJS.ProcessEnv = { ...process.env };
+    // Worktrees are owned by the container user, so git refuses to touch them as
+    // root ("dubious ownership"). Same rail GitService uses: trust that one dir.
+    const trusted = ["-c", `safe.directory=${resolve(input.workspacePath)}`];
     try {
-      await this.run(["checkout", "-B", input.branch], input.workspacePath, env);
-      await this.run(["add", "-A"], input.workspacePath, env);
+      await this.run([...trusted, "checkout", "-B", input.branch], input.workspacePath, env);
+      await this.run([...trusted, "add", "-A"], input.workspacePath, env);
       await this.run(
         [
+          ...trusted,
           "-c",
           `user.name=${this.authorName}`,
           "-c",
@@ -104,7 +109,12 @@ export class GitBranchPublisher implements TestBranchPublisher {
     };
     try {
       await this.run(
-        ["push", `https://github.com/${githubSlug(input.repository)}.git`, `HEAD:${input.branch}`],
+        [
+          ...trusted,
+          "push",
+          `https://github.com/${githubSlug(input.repository)}.git`,
+          `HEAD:${input.branch}`,
+        ],
         input.workspacePath,
         pushEnv,
       );

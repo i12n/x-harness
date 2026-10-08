@@ -44,13 +44,15 @@ describe("control-plane test-branch push (TASK-1230)", () => {
     const outcome = await service.publish(request("test/dlv-1"));
 
     expect(outcome.pushed).toBe(true);
-    expect(calls.map((call) => call.args.slice(0, 2).join(" "))).toEqual([
-      "checkout -B",
-      "add -A",
-      "-c user.name=AI Harness",
-      "push https://github.com/i12n/x-music.git",
-    ]);
+    // Every git call carries `-c safe.directory=…` (worktrees are owned by the
+    // container user, so git refuses to touch them as root otherwise).
+    expect(
+      calls.map((call) => call.args.find((arg) => ["checkout", "add", "commit", "push"].includes(arg))),
+    ).toEqual(["checkout", "add", "commit", "push"]);
+    expect(calls.every((call) => call.args.some((arg) => arg.startsWith("safe.directory=")))).toBe(true);
     const push = calls.at(-1)!;
+    expect(push.args.join(" ")).toContain("https://github.com/i12n/x-music.git");
+    expect(push.args.join(" ")).toContain("HEAD:test/dlv-1");
     expect(push.env.GIT_CONFIG_VALUE_0).toBe("AUTHORIZATION: bearer ghs_token");
     // The credential must not travel in argv, where `ps` would show it.
     expect(push.args.join(" ")).not.toContain("ghs_token");
@@ -76,7 +78,7 @@ describe("control-plane test-branch push (TASK-1230)", () => {
     const service = new GitBranchPublisher({
       tokenProvider: new StaticTokenProvider("ghs_token"),
       exec: async (args) => {
-        if (args[0] === "push") {
+        if (args.includes("push")) {
           throw new Error("remote: Permission denied");
         }
         return "";
