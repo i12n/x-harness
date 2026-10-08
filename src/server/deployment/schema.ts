@@ -428,14 +428,6 @@ export const CONFIG_FIELDS: readonly ConfigField[] = [
 
   // ---- 对话行为 -----------------------------------------------------------
   {
-    key: "AI_DEFAULT_REPOSITORY_ID",
-    label: "默认开发仓库",
-    type: "string",
-    group: "behavior",
-    placeholder: "repo-xmusic",
-    help: "用户没有点名仓库时落到哪个（需先用 `ai repository create` 注册）。",
-  },
-  {
     key: "AI_AUTO_BOOTSTRAP_SPECIFICATION",
     label: "确认后自动推导规格并拆任务",
     type: "bool",

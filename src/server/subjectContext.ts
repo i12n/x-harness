@@ -36,7 +36,8 @@ export async function describeConversationSubject(
 
 async function describeProblem(problemId: string, deps: SubjectContextDeps): Promise<string[]> {
   const problem = await deps.problems.findProblem(problemId);
-  const lines = [`# current problem ${problem.id} (${problem.status}): ${problem.title}`];
+  const repo = problem.repositoryId ? `, repositoryId=${problem.repositoryId}` : "";
+  const lines = [`# current problem ${problem.id} (${problem.status}${repo}): ${problem.title}`];
   const open = await deps.problems.listClarifications(problemId, { status: "OPEN" });
   if (open.length === 0) {
     return lines;
@@ -56,7 +57,9 @@ async function describeProblem(problemId: string, deps: SubjectContextDeps): Pro
 
 async function describeTask(taskId: string, deps: SubjectContextDeps): Promise<string[]> {
   const task = await deps.tasks.findTask(taskId);
-  const lines = [`# current task ${task.id} (${task.status}): ${task.title}`];
+  const lines = [
+    `# current task ${task.id} (${task.status}, repositoryId=${task.repositoryId}): ${task.title}`,
+  ];
   const runs = await deps.runs.listRuns({ taskId });
   const latest = runs[runs.length - 1];
   if (latest) {

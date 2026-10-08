@@ -52,7 +52,6 @@ describe("config schema", () => {
       "AI_LOOP_INTERVAL_MS",
       "AI_WORKER_ID",
       "AI_CONFIG_PATH",
-      "AI_DEFAULT_REPOSITORY_ID",
       "AI_AUTO_BOOTSTRAP_SPECIFICATION",
       "AI_INTENT_NOTES",
       "AI_ENV_FILE",

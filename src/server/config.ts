@@ -46,8 +46,6 @@ export interface ServerConfig {
   feishu: FeishuServiceConfig;
   llm: LlmServiceConfig;
   access: AccessConfig;
-  /** Repository used when the user does not name one. */
-  defaultRepositoryId?: string;
   loopIntervalMs: number;
   maxConcurrency: number;
   executionDriver: "local" | "docker";
@@ -108,7 +106,6 @@ export function loadServerConfig(env: EnvLike = process.env): ServerConfig {
       roleMap: parseRoleMap(env.FEISHU_ROLE_MAP),
       defaultRole: parseRole(env.FEISHU_DEFAULT_ROLE, "developer"),
     },
-    defaultRepositoryId: optional(env, "AI_DEFAULT_REPOSITORY_ID"),
     loopIntervalMs: positiveInt(
       env.AI_LOOP_INTERVAL_MS,
       DEFAULT_LOOP_INTERVAL_MS,

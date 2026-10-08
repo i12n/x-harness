@@ -16,10 +16,20 @@ export interface LlmIntentEngineOptions {
    * references. Optional so the engine stays usable without a conversation.
    */
   context?: (input: IntentInput) => Promise<string[]>;
-  /** Repository applied to `problem.create` when the user names no target. */
-  defaultRepositoryId?: string;
+  /**
+   * Registered repositories the model may target. Resolved per message so the
+   * intent can be tied to the repository the conversation is about, without a
+   * deployment-wide default.
+   */
+  repositories?: () => Promise<IntentRepositoryHint[]>;
   /** Shown to the model as extra deployment knowledge (repositories, users). */
   extraInstructions?: string;
+}
+
+/** A repository id/name pair handed to the intent model as deploy knowledge. */
+export interface IntentRepositoryHint {
+  id: string;
+  name: string;
 }
 
 /**
@@ -30,34 +40,82 @@ export interface LlmIntentEngineOptions {
 export class LlmIntentEngine implements IntentEngine {
   private readonly client: ChatClient;
   private readonly context: ((input: IntentInput) => Promise<string[]>) | undefined;
-  private readonly defaultRepositoryId: string | undefined;
+  private readonly repositories: (() => Promise<IntentRepositoryHint[]>) | undefined;
   private readonly extraInstructions: string | undefined;
 
   constructor(options: LlmIntentEngineOptions) {
     this.client = options.client;
     this.context = options.context;
-    this.defaultRepositoryId = options.defaultRepositoryId;
+    this.repositories = options.repositories;
     this.extraInstructions = options.extraInstructions;
   }
 
   async parse(input: IntentInput): Promise<IntentResult> {
     const context = (await this.context?.(input)) ?? [];
+    const repositories = (await this.repositories?.()) ?? [];
     const text = await this.client.complete({
       json: true,
       messages: [
-        { role: "system", content: intentSystemPrompt(this.defaultRepositoryId, this.extraInstructions) },
+        {
+          role: "system",
+          content: intentSystemPrompt({ repositories, extraInstructions: this.extraInstructions }),
+        },
         { role: "user", content: userTurn(input, context) },
       ],
     });
-    return normalizeIntent(parseJsonObject(text));
+    const result = normalizeIntent(parseJsonObject(text));
+    // When the engine knows the registered repositories, a repositoryId the
+    // model invented is dropped so the harness asks instead of targeting a
+    // repository that does not exist.
+    return this.repositories
+      ? dropUnknownRepository(result, repositories)
+      : result;
   }
 }
 
+/** Removes a `problem.create.repositoryId` that is not a registered id. */
+export function dropUnknownRepository(
+  intent: IntentResult,
+  repositories: IntentRepositoryHint[],
+): IntentResult {
+  const command = intent.command;
+  if (!command || typeof command !== "object" || Array.isArray(command)) {
+    return intent;
+  }
+  const record = command as Record<string, unknown>;
+  if (record.type !== "problem.create") {
+    return intent;
+  }
+  const payload =
+    record.payload && typeof record.payload === "object" && !Array.isArray(record.payload)
+      ? (record.payload as Record<string, unknown>)
+      : undefined;
+  if (!payload) {
+    return intent;
+  }
+  const repositoryId = payload.repositoryId;
+  if (typeof repositoryId !== "string" || !repositoryId.trim()) {
+    return intent;
+  }
+  if (repositories.some((repository) => repository.id === repositoryId.trim())) {
+    return intent;
+  }
+  const nextPayload = { ...payload };
+  delete nextPayload.repositoryId;
+  return { ...intent, command: { ...record, payload: nextPayload } };
+}
+
+export interface IntentPromptOptions {
+  /** Registered repositories the model may pick a target from. */
+  repositories?: IntentRepositoryHint[];
+  /** Deployment knowledge appended after the catalog (see `AI_INTENT_NOTES`). */
+  extraInstructions?: string;
+}
+
 /** Exported for testing: the exact catalog text handed to the model. */
-export function intentSystemPrompt(
-  defaultRepositoryId?: string,
-  extraInstructions?: string,
-): string {
+export function intentSystemPrompt(options: IntentPromptOptions = {}): string {
+  const repositories = options.repositories ?? [];
+  const extraInstructions = options.extraInstructions;
   const lines = [
     "You are the intent router for an AI coding harness driven from a chat group.",
     "Map the user's message to exactly ONE command from this catalog:",
@@ -162,13 +220,18 @@ export function intentSystemPrompt(
     "  credential still appears in a message, answer with type null and say nothing about",
     "  its content.",
   ];
-  if (defaultRepositoryId) {
-    lines.push(
-      "",
-      `- Unless the user names another repository, set repositoryId to "${defaultRepositoryId}"`,
-      "  on problem.create.",
-    );
-  }
+  lines.push(
+    "",
+    "Registered repositories (the only valid values for problem.create.repositoryId):",
+    repositories.length > 0
+      ? repositories.map((repository) => `- ${repository.id} (${repository.name})`).join("\n")
+      : "- (none registered — leave repositoryId out)",
+    "- Set problem.create.repositoryId from the conversation context: the repository the",
+    "  user names or refers to now, one named earlier in the thread, or the only",
+    "  registered one when there is just one. Use an id above verbatim.",
+    "- When the target is genuinely ambiguous, leave repositoryId out — the harness",
+    "  will ask rather than guess.",
+  );
   if (extraInstructions?.trim()) {
     lines.push("", "Deployment notes:", extraInstructions.trim());
   }

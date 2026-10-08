@@ -73,7 +73,7 @@ describe("LlmIntentEngine", () => {
     const client = new ScriptedChatClient('{"type":null}');
     const engine = new LlmIntentEngine({
       client,
-      defaultRepositoryId: "repo-x",
+      repositories: async () => [{ id: "repo-x", name: "xmusic" }],
       context: async () => ["user: 首页太空", "harness: 需要确认吗"],
     });
 
@@ -85,6 +85,46 @@ describe("LlmIntentEngine", () => {
     expect(userTurn).toContain("给首页加个空状态提示");
     const system = client.requests[0]!.messages.find((m) => m.role === "system")!.content;
     expect(system).toContain("repo-x");
+    expect(system).toContain("xmusic");
+    expect(system).toContain("conversation context");
+  });
+
+  it("tells the model to leave repositoryId out when nothing is registered", async () => {
+    const client = new ScriptedChatClient('{"type":null}');
+    const engine = new LlmIntentEngine({ client, repositories: async () => [] });
+
+    await engine.parse(input);
+
+    const system = client.requests[0]!.messages.find((m) => m.role === "system")!.content;
+    expect(system).toContain("none registered");
+  });
+
+  it("keeps a registered repositoryId the model resolved from context", async () => {
+    const client = new ScriptedChatClient(
+      '{"kind":"work","type":"problem.create","payload":{"title":"t","statement":"s","repositoryId":"repo-x"}}',
+    );
+    const engine = new LlmIntentEngine({
+      client,
+      repositories: async () => [{ id: "repo-x", name: "xmusic" }],
+    });
+
+    const result = await engine.parse(input);
+
+    expect(result.command?.payload.repositoryId).toBe("repo-x");
+  });
+
+  it("drops a repositoryId the model invented", async () => {
+    const client = new ScriptedChatClient(
+      '{"kind":"work","type":"problem.create","payload":{"title":"t","statement":"s","repositoryId":"repo-ghost"}}',
+    );
+    const engine = new LlmIntentEngine({
+      client,
+      repositories: async () => [{ id: "repo-x", name: "xmusic" }],
+    });
+
+    const result = await engine.parse(input);
+
+    expect(result.command?.payload.repositoryId).toBeUndefined();
   });
 
   it("lists every command type in the prompt", () => {

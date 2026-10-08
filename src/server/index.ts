@@ -408,8 +408,20 @@ export class HarnessRuntime {
 
     const intent = new LlmIntentEngine({
       client: chat,
-      defaultRepositoryId: config.defaultRepositoryId,
       extraInstructions: config.intentNotes,
+      repositories: async () => {
+        // The intent model resolves the target repository from the conversation
+        // context, so it needs the registered ids/names — no env default.
+        try {
+          const list = await stores.repositories.listRepositories();
+          return list.map((repository) => ({
+            id: repository.id,
+            name: repository.name,
+          }));
+        } catch {
+          return [];
+        }
+      },
       context: async (input) => {
         try {
           const conversation = await conversations.findConversation(input.conversationId);

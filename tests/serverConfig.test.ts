@@ -43,13 +43,11 @@ describe("loadServerConfig", () => {
       FEISHU_ROLE_MAP: "ou_a=admin,ou_b=reviewer",
       AI_EXECUTION_DRIVER: "docker",
       AI_AUTO_BOOTSTRAP_SPECIFICATION: "false",
-      AI_DEFAULT_REPOSITORY_ID: "repo-x",
     });
     expect(config.access.allowedUserIds).toEqual(["ou_a", "ou_b"]);
     expect(config.access.roleMap).toEqual({ ou_a: "admin", ou_b: "reviewer" });
     expect(config.executionDriver).toBe("docker");
     expect(config.autoBootstrapSpecification).toBe(false);
-    expect(config.defaultRepositoryId).toBe("repo-x");
   });
 
   it("accepts a JSON role map and rejects invalid roles", () => {
