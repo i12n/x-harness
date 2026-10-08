@@ -39,7 +39,7 @@ VerificationPassed
 
 | 文件 | 改动 |
 | --- | --- |
-| **新增** `src/verification/diff.ts` | `collectGitDiff(exec, workdir)`：`git diff --stat` + 截断 patch |
+| **新增** `src/verification/diff.ts` | `collectGitDiff(workdir)`：`git diff --stat` + 截断 patch。**TASK-1235 起在宿主侧采集**——原先经执行容器跑 `git diff`，而容器读不到 worktree 的 gitdir（指向宿主路径），必然失败后被吞成空 diff，评审因此把真实改动判成"empty diff" |
 | **新增** `src/reviewer/domain/verdict.ts` | verdict 类型、解析、`decideReviewAction(verdict, acceptance, mode)` 纯函数 |
 | **新增** `src/reviewer/application/reviewerAgent.ts` | `LlmReviewerAgent`（复用 ChatClient + JSON 契约） |
 | `src/worker/worker.ts` | 采集 diff；调评审；按 `decideReviewAction` 决定 DONE / READY / REVIEW |

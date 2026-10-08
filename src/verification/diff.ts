@@ -1,4 +1,8 @@
-import type { ExecutionExec } from "../execution/manager.js";
+import { execFile } from "node:child_process";
+import { resolve } from "node:path";
+import { promisify } from "node:util";
+
+const execFileAsync = promisify(execFile);
 
 export interface CollectedDiff {
   files: string[];
@@ -9,27 +13,43 @@ export interface CollectedDiff {
 }
 
 const MAX_PATCH_CHARS = 20_000;
+const DEFAULT_GIT_TIMEOUT_MS = 60_000;
+
+export interface GitDiffOptions {
+  maxPatchChars?: number;
+  /** `AI_GIT_BIN`; defaults to `git`. */
+  gitBinary?: string;
+  timeoutMs?: number;
+  /** Test seam: run git yourself instead of spawning it. */
+  runGit?: (args: string[], cwd: string) => Promise<string>;
+}
 
 /**
  * TASK-1221: the reviewer must look at what actually changed, not at what the
- * agent said it changed. Collected through the execution driver so it works in
- * a container as well as locally.
+ * agent said it changed.
+ *
+ * TASK-1235: collected on the **host**, never through the execution driver. A
+ * Run container cannot read the worktree's gitdir — the worktree's `.git` file
+ * points at `<repo>/.git/worktrees/<id>` on the host, a path the container does
+ * not mount — so `git diff` inside the container dies with "not a git
+ * repository". Because collection must never fail a Run, that error was
+ * swallowed and every change looked empty: the reviewer rejected real work
+ * (run-aa7a46f758 shipped a CSS change plus tests and was told the diff was
+ * empty). The harness owns the workspace path, so it reads the diff itself —
+ * the same place `GitService` fetches, commits and publishes from.
  *
  * Evidence collection never fails a Run: if git is unavailable the diff is
  * empty and the reviewer gets less to work with.
  */
 export async function collectGitDiff(
-  exec: ExecutionExec | undefined,
   workdir: string,
-  options: { maxPatchChars?: number } = {},
+  options: GitDiffOptions = {},
 ): Promise<CollectedDiff> {
-  if (!exec) {
-    return { files: [], stat: "", patch: "" };
-  }
+  const run = options.runGit ?? hostGitRunner(options);
   const limit = options.maxPatchChars ?? MAX_PATCH_CHARS;
-  const names = await run(exec, workdir, ["git", "diff", "--name-only"]);
-  const stat = await run(exec, workdir, ["git", "diff", "--stat"]);
-  const patch = await run(exec, workdir, ["git", "diff"]);
+  const names = await safeRun(run, ["diff", "--name-only"], workdir);
+  const stat = await safeRun(run, ["diff", "--stat"], workdir);
+  const patch = await safeRun(run, ["diff"], workdir);
   return {
     files: names
       .split(/\r?\n/)
@@ -40,14 +60,35 @@ export async function collectGitDiff(
   };
 }
 
-async function run(
-  exec: ExecutionExec,
+/**
+ * Run containers write worktrees as uid 1000 while the harness runs as root,
+ * which trips git's "dubious ownership" guard (CVE-2022-24765). Trust exactly
+ * the directory we are reading — a workspace the harness itself created — the
+ * same way `GitService` does, instead of mutating the host's git config.
+ */
+function hostGitRunner(options: GitDiffOptions): (args: string[], cwd: string) => Promise<string> {
+  const gitBinary = options.gitBinary ?? process.env.AI_GIT_BIN ?? "git";
+  const timeoutMs = options.timeoutMs ?? DEFAULT_GIT_TIMEOUT_MS;
+  return async (args: string[], cwd: string): Promise<string> => {
+    const trusted = ["-c", `safe.directory=${resolve(cwd)}`];
+    const { stdout } = await execFileAsync(gitBinary, [...trusted, ...args], {
+      cwd,
+      timeout: timeoutMs,
+      maxBuffer: 8 * 1024 * 1024,
+      encoding: "utf8",
+      env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
+    });
+    return stdout;
+  };
+}
+
+async function safeRun(
+  run: (args: string[], cwd: string) => Promise<string>,
+  args: string[],
   workdir: string,
-  command: string[],
 ): Promise<string> {
   try {
-    const result = await exec(command, { cwd: workdir });
-    return result.stdout ?? "";
+    return await run(args, workdir);
   } catch {
     return "";
   }

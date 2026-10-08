@@ -1,3 +1,7 @@
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { renderRunMessage } from "../src/channel/rendering/run.js";
 import type { MessageBlock } from "../src/channel/message.js";
@@ -23,6 +27,20 @@ const report = (over: Partial<ReviewerReport> = {}): ReviewerReport => ({
 
 const verified = buildAcceptanceEvidence(["criterion"], ["npm test"]);
 const unverifiable = buildAcceptanceEvidence(["looks nicer"], []);
+
+/** A throwaway repository with one committed file, for the diff tests. */
+function makeRepo(): string {
+  const dir = mkdtempSync(join(tmpdir(), "harness-diff-"));
+  writeFileSync(join(dir, "app.css"), "body {}\n");
+  execFileSync("git", ["init", "-q"], { cwd: dir });
+  execFileSync("git", ["add", "app.css"], { cwd: dir });
+  execFileSync(
+    "git",
+    ["-c", "user.email=test@example.com", "-c", "user.name=test", "commit", "-qm", "base"],
+    { cwd: dir },
+  );
+  return dir;
+}
 
 describe("review action policy (TASK-1221)", () => {
   it("auto-approves only when the reviewer approved and everything was provable", () => {
@@ -128,33 +146,58 @@ describe("reviewer prompt", () => {
 });
 
 describe("diff evidence", () => {
-  it("reads files, stat and a truncated patch through the driver", async () => {
-    const exec = async (command: string[]) => {
-      const joined = command.join(" ");
-      if (joined.includes("--name-only")) {
-        return { exitCode: 0, stdout: "a.ts\nb.ts\n", stderr: "" };
+  it("reads files, stat and a truncated patch from git", async () => {
+    const asked: string[] = [];
+    const runGit = async (args: string[]): Promise<string> => {
+      asked.push(args.join(" "));
+      if (args.includes("--name-only")) {
+        return "a.ts\nb.ts\n";
       }
-      if (joined.includes("--stat")) {
-        return { exitCode: 0, stdout: "2 files changed", stderr: "" };
+      if (args.includes("--stat")) {
+        return "2 files changed";
       }
-      return { exitCode: 0, stdout: "x".repeat(100), stderr: "" };
+      return "x".repeat(100);
     };
 
-    const diff = await collectGitDiff(exec as never, "/workspace", { maxPatchChars: 10 });
+    const diff = await collectGitDiff("/workspace", { maxPatchChars: 10, runGit });
     expect(diff.files).toEqual(["a.ts", "b.ts"]);
     expect(diff.stat).toBe("2 files changed");
     expect(diff.patch).toContain("truncated");
+    expect(asked).toEqual(["diff --name-only", "diff --stat", "diff"]);
   });
 
   it("returns an empty diff when git is unavailable", async () => {
-    const exec = async () => {
+    const runGit = async (): Promise<string> => {
       throw new Error("no git");
     };
-    await expect(collectGitDiff(exec as never, "/workspace")).resolves.toEqual({
+    await expect(collectGitDiff("/workspace", { runGit })).resolves.toEqual({
       files: [],
       stat: "",
       patch: "",
     });
+  });
+
+  // TASK-1235: the container cannot read a worktree's gitdir, so collection
+  // moved to the host. These two cases are the regression: a real repo, and a
+  // linked worktree (the shape every Run actually uses).
+  it("sees an uncommitted change in a real repository", async () => {
+    const repo = makeRepo();
+    writeFileSync(join(repo, "app.css"), "body {}\n.sep { margin: 0 }\n");
+
+    const diff = await collectGitDiff(repo);
+    expect(diff.files).toEqual(["app.css"]);
+    expect(diff.patch).toContain("margin: 0");
+  });
+
+  it("sees an uncommitted change inside a linked worktree", async () => {
+    const repo = makeRepo();
+    const worktree = `${repo}-wt`;
+    execFileSync("git", ["worktree", "add", "-q", worktree, "-b", "ai/example"], { cwd: repo });
+    writeFileSync(join(worktree, "app.css"), ".breadcrumbs .sep { margin: 16px }\n");
+
+    const diff = await collectGitDiff(worktree);
+    expect(diff.files).toEqual(["app.css"]);
+    expect(diff.patch).toContain(".breadcrumbs .sep");
   });
 });
 

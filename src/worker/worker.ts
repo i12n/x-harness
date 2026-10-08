@@ -323,11 +323,9 @@ export class Worker {
         acceptanceChecksOf(task.constraints),
       );
       // TASK-1221: review the change against the criteria, using evidence the
-      // harness collected itself.
-      const diff = await collectGitDiff(
-        exec,
-        execution.workdirs?.[primaryTarget.target.id] ?? execution.workdir,
-      );
+      // harness collected itself. TASK-1235: read the diff from the host-side
+      // worktree — the container cannot see the worktree's gitdir.
+      const diff = await collectGitDiff(execution.workspacePath);
       // TASK-1222: some changes must not be waved through, whatever the
       // reviewer thinks of them.
       const risk = assessChangeRisk(diff.files);
