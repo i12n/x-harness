@@ -108,14 +108,12 @@ export class GitBranchPublisher implements TestBranchPublisher {
       await this.run(
         [
           ...trusted,
-          // The documented form for a token push. It is visible in `ps` for the
-          // lifetime of the push, which on a single-tenant control-plane host is
-          // an accepted tradeoff; the alternative (env-based config) did not
-          // reach git reliably through the exec port.
-          "-c",
-          `http.extraheader=AUTHORIZATION: bearer ${token}`,
           "push",
-          `https://github.com/${githubSlug(input.repository)}.git`,
+          // GitHub's documented form for an App installation token is basic
+          // auth, not an Authorization header: `x-access-token:<token>`. The URL
+          // is visible in `ps` for the lifetime of the push, which on a
+          // single-tenant control-plane host is an accepted tradeoff.
+          `https://x-access-token:${token}@github.com/${githubSlug(input.repository)}.git`,
           `HEAD:${input.branch}`,
         ],
         input.workspacePath,

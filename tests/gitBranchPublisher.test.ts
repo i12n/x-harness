@@ -54,9 +54,9 @@ describe("control-plane test-branch push (TASK-1230)", () => {
     ).toEqual(["checkout", "status", "add", "commit", "push"]);
     expect(calls.every((call) => call.args.some((arg) => arg.startsWith("safe.directory=")))).toBe(true);
     const push = calls.at(-1)!;
-    expect(push.args.join(" ")).toContain("https://github.com/i12n/x-music.git");
+    expect(push.args.join(" ")).toContain("@github.com/i12n/x-music.git");
     expect(push.args.join(" ")).toContain("HEAD:test/dlv-1");
-    expect(push.args.join(" ")).toContain("http.extraheader=AUTHORIZATION: bearer ghs_token");
+    expect(push.args.join(" ")).toContain("x-access-token:ghs_token@");
   });
 
   it("never pushes the default branch", async () => {
