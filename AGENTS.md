@@ -33,6 +33,8 @@ ai repository|task|run ...     # CLI (or: AI_STORAGE=memory ...)
   map rows to domain models and schema lives in `migrations/`.
 - Keep the core minimal: do not add RabbitMQ/Kafka, Kubernetes, RAG, vector
   DBs, or a Web UI in v0.1 (see plan section 一).
+- 代码变更后，必须同步更新方案（[docs/ai-coding-harness-v0.1.md](docs/ai-coding-harness-v0.1.md)
+  / 相关设计文档）和受影响的文档，保持实现与文档一致。
 
 ## Verification before finishing a change
 
