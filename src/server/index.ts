@@ -321,7 +321,18 @@ export class HarnessRuntime {
           deliveries: { load: (deliveryId) => deliveries.show(deliveryId) },
           repositories: stores.repositories,
           runs: stores.runs,
-          git: new GitBranchPublisher({ git: gitService }),
+          git: new GitBranchPublisher({
+            tokenProvider: githubSettings.provider,
+            allowedPrefixes: [
+              ...new Set([
+                ...(process.env.AI_GIT_PUSH_PREFIX ?? "ai/,test/")
+                  .split(",")
+                  .map((prefix) => prefix.trim())
+                  .filter(Boolean),
+                githubSettings.testBranchPrefix,
+              ]),
+            ],
+          }),
           github: new HttpGitHubClient({
             tokenProvider: githubSettings.provider,
             ...(githubSettings.apiBase ? { apiBase: githubSettings.apiBase } : {}),

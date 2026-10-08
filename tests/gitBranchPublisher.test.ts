@@ -1,0 +1,89 @@
+import { describe, expect, it } from "vitest";
+import { GitBranchPublisher } from "../src/deploy/infrastructure/gitBranchPublisher.js";
+import { StaticTokenProvider } from "../src/github/tokenProvider.js";
+import { defaultExecutionProfile } from "../src/domain/executionProfile.js";
+import type { Repository } from "../src/domain/repository.js";
+
+const repository: Repository = {
+  id: "repo-x-music",
+  name: "x-music",
+  url: "git@github.com:i12n/x-music.git",
+  defaultBranch: "main",
+  localPath: "/srv/repos/x-music",
+  verificationCommands: [],
+  executionProfile: defaultExecutionProfile({ name: "default", image: "harness/execution:node22" }),
+  createdAt: "2026-09-30T00:00:00.000Z",
+  updatedAt: "2026-09-30T00:00:00.000Z",
+};
+
+function publisher(options: { allowedPrefixes?: string[] } = {}) {
+  const calls: { args: string[]; env: NodeJS.ProcessEnv }[] = [];
+  const service = new GitBranchPublisher({
+    tokenProvider: new StaticTokenProvider("ghs_token"),
+    ...(options.allowedPrefixes ? { allowedPrefixes: options.allowedPrefixes } : {}),
+    authorName: "AI Harness",
+    authorEmail: "ai@example.com",
+    exec: async (args, _cwd, env) => {
+      calls.push({ args, env });
+      return "";
+    },
+  });
+  return { service, calls };
+}
+
+const request = (branch: string) => ({
+  repository,
+  workspacePath: "/root/ai-workspaces/task-1/run-1/t0",
+  branch,
+  message: "test: dlv-1",
+});
+
+describe("control-plane test-branch push (TASK-1230)", () => {
+  it("cuts the branch, commits, and pushes it over HTTPS with the App token", async () => {
+    const { service, calls } = publisher();
+    const outcome = await service.publish(request("test/dlv-1"));
+
+    expect(outcome.pushed).toBe(true);
+    expect(calls.map((call) => call.args.slice(0, 2).join(" "))).toEqual([
+      "checkout -B",
+      "add -A",
+      "-c user.name=AI Harness",
+      "push https://github.com/i12n/x-music.git",
+    ]);
+    const push = calls.at(-1)!;
+    expect(push.env.GIT_CONFIG_VALUE_0).toBe("AUTHORIZATION: bearer ghs_token");
+    // The credential must not travel in argv, where `ps` would show it.
+    expect(push.args.join(" ")).not.toContain("ghs_token");
+  });
+
+  it("never pushes the default branch", async () => {
+    const { service, calls } = publisher({ allowedPrefixes: ["main"] });
+    const outcome = await service.publish(request("main"));
+    expect(outcome.pushed).toBe(false);
+    expect(outcome.reason).toContain("默认分支");
+    expect(calls).toHaveLength(0);
+  });
+
+  it("refuses branches outside the whitelisted prefixes", async () => {
+    const { service, calls } = publisher({ allowedPrefixes: ["test/"] });
+    const outcome = await service.publish(request("feature/x"));
+    expect(outcome.pushed).toBe(false);
+    expect(outcome.reason).toContain("前缀");
+    expect(calls).toHaveLength(0);
+  });
+
+  it("reports a failed push instead of pretending it worked", async () => {
+    const service = new GitBranchPublisher({
+      tokenProvider: new StaticTokenProvider("ghs_token"),
+      exec: async (args) => {
+        if (args[0] === "push") {
+          throw new Error("remote: Permission denied");
+        }
+        return "";
+      },
+    });
+    const outcome = await service.publish(request("test/dlv-1"));
+    expect(outcome.pushed).toBe(false);
+    expect(outcome.reason).toContain("Permission denied");
+  });
+});
