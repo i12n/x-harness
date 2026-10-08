@@ -75,6 +75,21 @@ export class GitBranchPublisher implements TestBranchPublisher {
     const trusted = ["-c", `safe.directory=${resolve(input.workspacePath)}`];
     const base = input.repository.defaultBranch;
     try {
+      // Decide first whether there is anything *new* to ship. Re-publishing an
+      // already-published delivery must be a no-op, not a non-fast-forward
+      // (the branch is rebuilt from the default branch, so it would be behind).
+      const dirty = await this.run([...trusted, "status", "--porcelain"], input.workspacePath, env);
+      if (!dirty.trim()) {
+        const existing = await this.run(
+          [...trusted, "ls-remote", "--heads", "origin", input.branch],
+          input.workspacePath,
+          env,
+        );
+        if (existing.trim()) {
+          return { pushed: true };
+        }
+        return { pushed: false, reason: "工作区没有改动，没有可测试的内容" };
+      }
       // Base the test branch on the repository's CURRENT default branch, not on
       // whatever commit the Run happened to leave behind. The workflow that
       // deploys the test environment lives on the default branch, so cutting
@@ -104,29 +119,21 @@ export class GitBranchPublisher implements TestBranchPublisher {
       if (stashed) {
         await this.run([...trusted, "stash", "pop"], input.workspacePath, env);
       }
-      // Check for work *before* committing: git prints "nothing to commit" on
-      // stdout, which a stderr-only error check would misread as a real failure.
-      const dirty = await this.run([...trusted, "status", "--porcelain"], input.workspacePath, env);
-      if (dirty.trim()) {
-        await this.run([...trusted, "add", "-A"], input.workspacePath, env);
-        await this.run(
-          [
-            ...trusted,
-            "-c",
-            `user.name=${this.authorName}`,
-            "-c",
-            `user.email=${this.authorEmail}`,
-            "commit",
-            "-m",
-            input.message,
-          ],
-          input.workspacePath,
-          env,
-        );
-      }
-      // A clean tree is not an error: on a re-run the changes are already the
-      // branch's content, so we still push (idempotent) and let the flow
-      // continue to the PR and the deployment watch.
+      await this.run([...trusted, "add", "-A"], input.workspacePath, env);
+      await this.run(
+        [
+          ...trusted,
+          "-c",
+          `user.name=${this.authorName}`,
+          "-c",
+          `user.email=${this.authorEmail}`,
+          "commit",
+          "-m",
+          input.message,
+        ],
+        input.workspacePath,
+        env,
+      );
     } catch (error) {
       return {
         pushed: false,

@@ -48,7 +48,9 @@ describe("control-plane test-branch push (TASK-1230)", () => {
     // Every git call carries `-c safe.directory=…` (worktrees are owned by the
     // container user, so git refuses to touch them as root otherwise).
     const verbs = calls
-      .map((call) => call.args.find((arg) => ["fetch", "stash", "checkout", "push"].includes(arg)))
+      .map((call) =>
+        call.args.find((arg) => ["fetch", "stash", "checkout", "push", "ls-remote"].includes(arg)),
+      )
       .filter(Boolean);
     expect(verbs).toContain("fetch");
     expect(verbs).toContain("checkout");
@@ -63,6 +65,24 @@ describe("control-plane test-branch push (TASK-1230)", () => {
     expect(push.args.join(" ")).toContain("@github.com/i12n/x-music.git");
     expect(push.args.join(" ")).toContain("HEAD:test/dlv-1");
     expect(push.args.join(" ")).toContain("x-access-token:ghs_token@");
+  });
+
+  it("treats an already-published delivery as a no-op, not an error", async () => {
+    const calls: string[][] = [];
+    const service = new GitBranchPublisher({
+      tokenProvider: new StaticTokenProvider("ghs_token"),
+      exec: async (args) => {
+        calls.push(args);
+        if (args.includes("status")) return ""; // clean tree
+        if (args.includes("ls-remote")) return "abc123\trefs/heads/test/dlv-1\n";
+        return "";
+      },
+    });
+    const outcome = await service.publish(request("test/dlv-1"));
+    expect(outcome.pushed).toBe(true);
+    // Nothing was committed or pushed again.
+    expect(calls.some((args) => args.includes("commit"))).toBe(false);
+    expect(calls.some((args) => args.includes("push"))).toBe(false);
   });
 
   it("never pushes the default branch", async () => {
