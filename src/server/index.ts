@@ -526,9 +526,38 @@ export class HarnessRuntime {
     const deployTestUrl = process.env.AI_DEPLOY_TEST_URL?.trim();
     const deployProdUrl = process.env.AI_DEPLOY_PROD_URL?.trim();
     const notifyDeployTransitions = async (transitions: unknown[]): Promise<void> => {
-      if (!deployChatId || transitions.length === 0) {
+      if (transitions.length === 0) {
         return;
       }
+      // TASK-1231: prefer the conversation the delivery was started from, so a
+      // delivery's 推送/部署/上线 messages stay in one Feishu thread.
+      const boundTarget = async (
+        deliveryId: string,
+      ): Promise<{ conversationId: string; receiveId: string; receiveIdType: string } | undefined> => {
+        try {
+          const events = await stores.events.listEvents({ type: "deploy.chat_target", limit: 50 });
+          for (const event of [...events].reverse()) {
+            const payload = event.payload as {
+              deliveryId?: string;
+              conversationId?: string;
+              receiveId?: string;
+              receiveIdType?: string;
+            };
+            if (payload?.deliveryId === deliveryId && payload.receiveId) {
+              return {
+                conversationId: payload.conversationId ?? deliveryId,
+                receiveId: payload.receiveId,
+                receiveIdType: payload.receiveIdType ?? "chat_id",
+              };
+            }
+          }
+        } catch {
+          // Fall through to the default chat.
+        }
+        return deployChatId
+          ? { conversationId: `deploy-${deliveryId}`, receiveId: deployChatId, receiveIdType: "chat_id" }
+          : undefined;
+      };
       const rows = transitions as {
         deliveryId: string;
         state: string;
@@ -550,12 +579,12 @@ export class HarnessRuntime {
                 : `🔄 ${what}部署中`;
         const url = production ? deployProdUrl : deployTestUrl;
         try {
+          const target = await boundTarget(row.deliveryId);
+          if (!target) {
+            continue;
+          }
           await sendToTarget(
-            {
-              conversationId: `deploy-${row.deliveryId}`,
-              receiveId: deployChatId,
-              receiveIdType: "chat_id",
-            },
+            { ...target, receiveIdType: target.receiveIdType as "chat_id" },
             {
               conversationId: row.deliveryId,
               text: [
@@ -568,7 +597,7 @@ export class HarnessRuntime {
               ]
                 .filter(Boolean)
                 .join("\n"),
-              metadata: { receiveId: deployChatId, receiveIdType: "chat_id" },
+              metadata: { receiveId: target.receiveId, receiveIdType: target.receiveIdType },
             },
           );
         } catch (error) {

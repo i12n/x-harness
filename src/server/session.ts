@@ -466,6 +466,17 @@ export class ChatSession {
       }
       return;
     }
+    // TASK-1231: remember where the delivery was started, so its deployment
+    // messages come back to THIS conversation (one delivery, one thread)
+    // instead of drifting into the default chat.
+    if (type === "deploy.test") {
+      const deliveryId =
+        typeof payload?.deliveryId === "string" ? payload.deliveryId : undefined;
+      if (deliveryId && this.deps.recordEvent) {
+        await this.deps.recordEvent("deploy.chat_target", { deliveryId, ...target });
+      }
+      return;
+    }
 
     const problem = payload?.problem as Problem | undefined;
     if (
