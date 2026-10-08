@@ -49,10 +49,16 @@ describe("control-plane test-branch push (TASK-1230)", () => {
     // container user, so git refuses to touch them as root otherwise).
     expect(
       calls.map((call) =>
-        call.args.find((arg) => ["checkout", "status", "add", "commit", "push"].includes(arg)),
+        call.args.find((arg) =>
+          ["fetch", "stash", "checkout", "status", "add", "commit", "push"].includes(arg),
+        ),
       ),
-    ).toEqual(["checkout", "status", "add", "commit", "push"]);
+    ).toEqual(["fetch", "stash", "checkout", "stash", "status", "add", "commit", "push"]);
     expect(calls.every((call) => call.args.some((arg) => arg.startsWith("safe.directory=")))).toBe(true);
+    // The test branch is cut from the repository's default branch, not from the
+    // Run's leftover HEAD — otherwise the deploy workflow would not be present.
+    const checkout = calls.find((call) => call.args.includes("checkout"))!;
+    expect(checkout.args).toContain("origin/main");
     const push = calls.at(-1)!;
     expect(push.args.join(" ")).toContain("@github.com/i12n/x-music.git");
     expect(push.args.join(" ")).toContain("HEAD:test/dlv-1");

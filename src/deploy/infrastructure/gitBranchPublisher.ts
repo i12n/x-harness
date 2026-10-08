@@ -73,8 +73,33 @@ export class GitBranchPublisher implements TestBranchPublisher {
     // Worktrees are owned by the container user, so git refuses to touch them as
     // root ("dubious ownership"). Same rail GitService uses: trust that one dir.
     const trusted = ["-c", `safe.directory=${resolve(input.workspacePath)}`];
+    const base = input.repository.defaultBranch;
     try {
-      await this.run([...trusted, "checkout", "-B", input.branch], input.workspacePath, env);
+      // Base the test branch on the repository's CURRENT default branch, not on
+      // whatever commit the Run happened to leave behind. The workflow that
+      // deploys the test environment lives on the default branch, so cutting
+      // from a stale HEAD would push a branch with nothing to run. The
+      // delivery's own changes are carried over via stash.
+      await this.run([...trusted, "fetch", "origin", base], input.workspacePath, env);
+      let stashed = false;
+      try {
+        await this.run(
+          [...trusted, "stash", "push", "-u", "-m", "harness test-branch"],
+          input.workspacePath,
+          env,
+        );
+        stashed = true;
+      } catch {
+        // Nothing to save (already clean) — fine, there is just nothing to ship.
+      }
+      await this.run(
+        [...trusted, "checkout", "-B", input.branch, `origin/${base}`],
+        input.workspacePath,
+        env,
+      );
+      if (stashed) {
+        await this.run([...trusted, "stash", "pop"], input.workspacePath, env);
+      }
       // Check for work *before* committing: git prints "nothing to commit" on
       // stdout, which a stderr-only error check would misread as a real failure.
       const dirty = await this.run([...trusted, "status", "--porcelain"], input.workspacePath, env);
