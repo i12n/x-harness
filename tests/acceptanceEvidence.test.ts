@@ -32,6 +32,23 @@ describe("acceptance evidence (TASK-1220)", () => {
     expect(acceptanceChecksOf({ checks: ["a", "  ", 3, "b"] })).toEqual(["a", "b"]);
     expect(acceptanceChecksOf(undefined)).toEqual([]);
   });
+
+  it("does not count a manual step as proof, and says so", () => {
+    const checks = acceptanceChecksOf({
+      checks: [
+        "npm test",
+        "在运行应用的开发者工具中选取面包屑 sep 元素，断言间距为 16px",
+      ],
+    });
+    expect(checks).toEqual(["npm test"]);
+
+    // A task whose only "check" was prose proves nothing — a human must look.
+    const evidence = buildAcceptanceEvidence(["sep 左右各 16px"], acceptanceChecksOf({
+      checks: ["在运行应用的开发者工具中选取面包屑 sep 元素，断言间距为 16px"],
+    }));
+    expect(evidence.criteria[0]).toMatchObject({ status: "unverifiable", checks: [] });
+    expect(evidence.requiresHumanAcceptance).toBe(true);
+  });
 });
 
 describe("task checks run alongside the repository's (TASK-1220)", () => {

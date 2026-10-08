@@ -51,6 +51,29 @@ export interface SpecificationWorkItem {
 
 const WORK_ITEMS_KEY = "workItems";
 
+/**
+ * A work item's `checks` are shell commands the harness runs verbatim
+ * (`sh -lc` in the repository worktree) — never a description of a manual step.
+ *
+ * The model is asked for commands and the catalog says to write the rest of the
+ * spec in the problem's language, so it occasionally writes a sentence in that
+ * language instead of a command. That sentence then dies with a shell syntax
+ * error and burns the Task's attempts (live evidence: task-spec-e13a0f2517-0).
+ *
+ * Commands are ASCII, so the tells are cheap and high-confidence: CJK /
+ * full-width text, a multi-line blob, or a sentence terminator at the end.
+ */
+export function isExecutableCheck(check: string): boolean {
+  const value = check.trim();
+  if (!value || value.includes("\n")) {
+    return false;
+  }
+  if (/[\u3000-\u303f\u3040-\u30ff\u4e00-\u9fff\uff00-\uffef]/.test(value)) {
+    return false;
+  }
+  return !/[.!?]$/.test(value);
+}
+
 /** Reads work items defensively; malformed entries are dropped, never thrown. */
 export function readWorkItems(
   specification: Pick<Specification, "constraints">,

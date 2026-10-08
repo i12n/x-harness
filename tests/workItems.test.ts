@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { buildSpecification, readWorkItems, withWorkItems } from "../src/domain/specification.js";
+import {
+  buildSpecification,
+  isExecutableCheck,
+  readWorkItems,
+  withWorkItems,
+} from "../src/domain/specification.js";
 import type { SpecificationWorkItem } from "../src/domain/specification.js";
 import { repairWorkItems } from "../src/specification/application/workItems.js";
 import { DeterministicTaskPlanner } from "../src/specification/application/planner.js";
@@ -19,6 +24,49 @@ const item = (over: Partial<SpecificationWorkItem>): SpecificationWorkItem => ({
 });
 
 describe("work item repair (TASK-1224)", () => {
+  it("tells a command apart from a manual step", () => {
+    expect(isExecutableCheck("npm test")).toBe(true);
+    expect(isExecutableCheck("node scripts/check-docs.mjs && npm test")).toBe(true);
+    expect(isExecutableCheck("   ")).toBe(false);
+    expect(isExecutableCheck("在运行应用的开发者工具中选取面包屑 sep 元素，断言间距为 16px")).toBe(
+      false,
+    );
+    expect(isExecutableCheck("Select the sep element and assert its margin is 16px.")).toBe(false);
+  });
+
+  it("drops a non-command check instead of planning a Run that cannot pass", () => {
+    const repaired = repairWorkItems(
+      [
+        item({
+          title: "给面包屑 sep 加 16px 间距",
+          acceptance: [0, 1],
+          checks: [
+            "npm test",
+            "在运行应用的开发者工具中选取面包屑 sep 元素，断言 getComputedStyle(el).marginLeft === '16px'",
+          ],
+        }),
+      ],
+      2,
+    );
+
+    expect(repaired).toHaveLength(1);
+    expect(repaired[0]!.checks).toEqual(["npm test"]);
+  });
+
+  it("treats an item whose only check was prose as check-less", () => {
+    const repaired = repairWorkItems(
+      [
+        item({ title: "改间距", acceptance: [0], checks: ["npm test"] }),
+        item({ title: "人工确认间距", acceptance: [1], checks: ["请人工在浏览器里确认间距"] }),
+      ],
+      2,
+    );
+
+    // Rule 2: the prose item is not a deliverable, its criterion joins the real one.
+    expect(repaired).toHaveLength(1);
+    expect(repaired[0]!.acceptance).toEqual([0, 1]);
+  });
+
   it("collapses the x-music shape into one deliverable", () => {
     // 5 acceptance criteria; the model described the same change three times:
     // one real change with checks, plus a scope constraint and a stability note.

@@ -1,3 +1,5 @@
+import { isExecutableCheck } from "../domain/specification.js";
+
 /**
  * TASK-1220: the acceptance half of a Run's evidence.
  *
@@ -48,7 +50,13 @@ export function buildAcceptanceEvidence(
   };
 }
 
-/** Reads the task-level checks a work item contributed (TASK-1224). */
+/**
+ * Reads the task-level checks a work item contributed (TASK-1224).
+ *
+ * Only commands count. A "check" the model wrote as a manual step cannot be
+ * executed, so running it fails the whole Run and counting it as proof would
+ * claim evidence that does not exist — both are worse than saying so.
+ */
 export function acceptanceChecksOf(
   constraints: Record<string, unknown> | undefined,
 ): string[] {
@@ -59,5 +67,5 @@ export function acceptanceChecksOf(
   return raw
     .filter((check): check is string => typeof check === "string")
     .map((check) => check.trim())
-    .filter(Boolean);
+    .filter(isExecutableCheck);
 }

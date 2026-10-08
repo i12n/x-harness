@@ -50,6 +50,8 @@ derive 返回：
 harness 侧的**确定性修复**（不信任模型的拆分质量）：
 
 ```text
+0. 先丢掉**不是命令**的 check（TASK-1234：人工步骤/散文当 check 会让 Run 必然 shell 报错，
+   该条目因此变成"没有 check"的条目，走第 2 条而不是变成注定失败的任务）
 1. 丢掉 acceptance 索引全部越界的 work item
 2. 丢掉没写 checks 的 work item —— 其 acceptance 并入前一条（没有前一条就并入后一条）
 3. 完全相同的 acceptance 集合 → 合并成一条

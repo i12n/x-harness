@@ -1,3 +1,4 @@
+import { isExecutableCheck } from "../../domain/specification.js";
 import type { SpecificationWorkItem } from "../../domain/specification.js";
 
 /**
@@ -7,6 +8,8 @@ import type { SpecificationWorkItem } from "../../domain/specification.js";
  * into three tasks just because a model wrote three paragraphs.
  *
  * Rules, in order:
+ *   0. keep only executable checks; a work item whose checks were all prose is
+ *      a check-less item (rule 2) instead of a Task that can never pass
  *   1. keep only in-range acceptance indices; drop items left with none
  *   2. an item without an executable check is not a deliverable — fold its
  *      acceptance into a neighbour instead of making a task out of it
@@ -22,6 +25,7 @@ export function repairWorkItems(
     .map((item) => ({
       ...item,
       acceptance: dedupeIndices(item.acceptance, acceptanceCount),
+      checks: item.checks.filter(isExecutableCheck),
     }))
     .filter((item) => item.acceptance.length > 0);
 
