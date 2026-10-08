@@ -31,6 +31,15 @@ export interface LoopOptions {
    * internals — aggregation stays in DeliveryService.
    */
   deliveryReconciler?: DeliveryReconcilerPort;
+  /**
+   * TASK-1231: watches deployments the harness handed to GitHub Actions and
+   * reports only state changes. Optional, like every other loop port.
+   */
+  deployWatcher?: DeployWatcherPort;
+}
+
+export interface DeployWatcherPort {
+  poll(): Promise<unknown[]>;
 }
 
 export interface DeliveryReconcileReportLike {
@@ -51,6 +60,7 @@ export type LoopPhase =
   | "cancel"
   | "cleanup"
   | "delivery_reconcile"
+  | "deploy_watch"
   | "schedule";
 
 /**
@@ -73,6 +83,8 @@ export interface TickReport {
   deliveryNotificationFailures: DeliveryReconcileReportLike["notificationFailures"];
   /** TASK-1207 Phase B: notifications still queued for a later tick. */
   deliveryPendingNotifications: number;
+  /** TASK-1231: deployment state changes observed this tick. */
+  deployTransitions: unknown[];
   scheduled: Run[];
   executed: Run[];
   cleanupRetries: number;
@@ -97,6 +109,7 @@ export class Loop {
   private readonly repositories: RepositoryStore | undefined;
   private readonly workspaceManager: WorkspaceManager | undefined;
   private readonly deliveryReconciler: DeliveryReconcilerPort | undefined;
+  private readonly deployWatcher: DeployWatcherPort | undefined;
 
   constructor(options: LoopOptions) {
     this.scheduler = options.scheduler;
@@ -112,6 +125,7 @@ export class Loop {
     this.repositories = options.repositories;
     this.workspaceManager = options.workspaceManager;
     this.deliveryReconciler = options.deliveryReconciler;
+    this.deployWatcher = options.deployWatcher;
   }
 
   async start(intervalMs = 1_000): Promise<void> {
@@ -151,6 +165,13 @@ export class Loop {
       () => this.retryFailedCleanups(),
       0,
     );
+    // TASK-1231: GitHub Actions owns the deploy; we only ask whether it is done.
+    const deployTransitions = await this.runPhase(
+      "deploy_watch",
+      errors,
+      () => this.deployWatcher?.poll() ?? Promise.resolve([]),
+      [] as unknown[],
+    );
     // Reconcile after Task state changed (recovery/cancel above) and before
     // scheduling picks up new work…
     let deliveries = await this.reconcileDeliveries(errors);
@@ -172,6 +193,7 @@ export class Loop {
       deliveryNotifications: deliveries.notified,
       deliveryNotificationFailures: deliveries.notificationFailures,
       deliveryPendingNotifications: deliveries.pendingNotifications,
+      deployTransitions,
       scheduled,
       executed,
       cleanupRetries,

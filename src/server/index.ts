@@ -316,7 +316,7 @@ export class HarnessRuntime {
         "GitHub 凭证已配置但不可用（App 私钥读不到？）——部署命令会被拒绝，其余功能不受影响",
       );
     }
-    const deploys: DeployCommandPort = githubSettings
+    const deployService = githubSettings
       ? new DeployService({
           deliveries: { load: (deliveryId) => deliveries.show(deliveryId) },
           repositories: stores.repositories,
@@ -339,8 +339,20 @@ export class HarnessRuntime {
           }),
           events: stores.events,
           branchPrefix: githubSettings.testBranchPrefix,
+          ...(envSeconds("AI_DEPLOY_WATCH_INTERVAL_SECONDS", 30) * 1000
+            ? { watchIntervalMs: envSeconds("AI_DEPLOY_WATCH_INTERVAL_SECONDS", 30) * 1000 }
+            : {}),
+          ...(envMinutes("AI_DEPLOY_WATCH_TTL_MINUTES", 30) * 60_000
+            ? { watchTtlMs: envMinutes("AI_DEPLOY_WATCH_TTL_MINUTES", 30) * 60_000 }
+            : {}),
         })
-      : githubNotConfigured();
+      : undefined;
+    const deploys: DeployCommandPort = deployService ?? githubNotConfigured();
+    // TASK-1231: off by config → the loop never polls (only `部署状态` works).
+    const deployWatcher =
+      deployService && (process.env.AI_DEPLOY_WATCH ?? "on").toLowerCase() !== "off"
+        ? deployService
+        : undefined;
 
     const dispatcher = new CommandDispatcher({
       handlers: {
@@ -502,12 +514,51 @@ export class HarnessRuntime {
         deliveries,
         notifier: deliveryNotifier,
       }),
+      deployWatcher,
     });
+
+    // TASK-1231: deployment feedback goes to the same place delivery
+    // notifications do — the bound conversation when there is one, else the
+    // configured default chat.
+    const deployChatId = config.feishu.defaultChatId;
+    const notifyDeployTransitions = async (transitions: unknown[]): Promise<void> => {
+      if (!deployChatId || transitions.length === 0) {
+        return;
+      }
+      const rows = transitions as { deliveryId: string; state: string; run?: { url?: string } }[];
+      for (const row of rows) {
+        const label =
+          row.state === "succeeded"
+            ? "✅ 测试环境就绪"
+            : row.state === "failed"
+              ? "❌ 部署失败"
+              : row.state === "stale"
+                ? "⏳ 部署超时，仍在进行"
+                : "🔄 部署中";
+        try {
+          await sendToTarget(
+            {
+              conversationId: `deploy-${row.deliveryId}`,
+              receiveId: deployChatId,
+              receiveIdType: "chat_id",
+            },
+            {
+              conversationId: row.deliveryId,
+              text: `${label}：${row.deliveryId}${row.run?.url ? `\n${row.run.url}` : ""}`,
+              metadata: { receiveId: deployChatId, receiveIdType: "chat_id" },
+            },
+          );
+        } catch (error) {
+          this.log(`部署通知发送失败：${describe(error)}`);
+        }
+      }
+    };
 
     this.daemon = new LoopDaemon({
       loop,
       intervalMs: config.loopIntervalMs,
-      afterTick: async () => {
+      afterTick: async (report) => {
+        await notifyDeployTransitions(report.deployTransitions);
         await notifier.flush();
       },
       log: (message) => this.log(message),
@@ -709,6 +760,16 @@ function truncate(value: string, limit: number): string {
 
 function describe(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/** Positive-number env override, else the default (used by TASK-1231 knobs). */
+function envSeconds(name: string, fallback: number): number {
+  const value = Number(process.env[name]);
+  return Number.isFinite(value) && value > 0 ? value : fallback;
+}
+
+function envMinutes(name: string, fallback: number): number {
+  return envSeconds(name, fallback);
 }
 
 /**
