@@ -103,24 +103,26 @@ export class GitBranchPublisher implements TestBranchPublisher {
       // Check for work *before* committing: git prints "nothing to commit" on
       // stdout, which a stderr-only error check would misread as a real failure.
       const dirty = await this.run([...trusted, "status", "--porcelain"], input.workspacePath, env);
-      if (!dirty.trim()) {
-        return { pushed: false, reason: "工作区没有改动，没有可测试的内容" };
+      if (dirty.trim()) {
+        await this.run([...trusted, "add", "-A"], input.workspacePath, env);
+        await this.run(
+          [
+            ...trusted,
+            "-c",
+            `user.name=${this.authorName}`,
+            "-c",
+            `user.email=${this.authorEmail}`,
+            "commit",
+            "-m",
+            input.message,
+          ],
+          input.workspacePath,
+          env,
+        );
       }
-      await this.run([...trusted, "add", "-A"], input.workspacePath, env);
-      await this.run(
-        [
-          ...trusted,
-          "-c",
-          `user.name=${this.authorName}`,
-          "-c",
-          `user.email=${this.authorEmail}`,
-          "commit",
-          "-m",
-          input.message,
-        ],
-        input.workspacePath,
-        env,
-      );
+      // A clean tree is not an error: on a re-run the changes are already the
+      // branch's content, so we still push (idempotent) and let the flow
+      // continue to the PR and the deployment watch.
     } catch (error) {
       return {
         pushed: false,
