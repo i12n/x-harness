@@ -7,6 +7,7 @@ import { createTaskRunCommandHandlers } from "../src/command/handlers/taskRun.js
 import { InMemoryIdempotencyStore } from "../src/command/idempotency.js";
 import type { IntentEngine, IntentInput, IntentResult } from "../src/command/types.js";
 import { ConversationService } from "../src/conversation/service.js";
+import { HarnessError } from "../src/errors.js";
 import { ScriptedProblemAnalyzer } from "../src/problem/application/analyzer.js";
 import { ProblemService } from "../src/problem/application/service.js";
 import { ConfirmationLoop } from "../src/problem/confirmationLoop.js";
@@ -15,6 +16,7 @@ import { RunService } from "../src/run/application/runService.js";
 import { TaskRunService } from "../src/run/application/taskRunService.js";
 import type { ChatTarget, RunChatNotifier } from "../src/server/notifications.js";
 import { ChatSession } from "../src/server/session.js";
+import type { SpecificationBootstrap } from "../src/server/specificationBootstrap.js";
 import { InMemoryConversationStore } from "../src/store/inMemoryConversationStore.js";
 import { InMemoryEventStore } from "../src/store/inMemoryEventStore.js";
 import { InMemoryProblemStore } from "../src/store/inMemoryProblemStore.js";
@@ -50,7 +52,11 @@ function event(messageId: string, text: string, openId = "ou_dev"): Record<strin
   };
 }
 
-async function buildSession(intent: IntentEngine, allowedUserIds = ["ou_dev"]) {
+async function buildSession(
+  intent: IntentEngine,
+  allowedUserIds = ["ou_dev"],
+  extra: Partial<ConstructorParameters<typeof ChatSession>[0]> = {},
+) {
   const problems = new InMemoryProblemStore();
   const tasks = new InMemoryTaskStore();
   const runs = new InMemoryRunStore();
@@ -94,6 +100,7 @@ async function buildSession(intent: IntentEngine, allowedUserIds = ["ou_dev"]) {
   const sent: { target: ChatTarget; message: OutgoingMessage }[] = [];
   const bound: string[] = [];
   const session = new ChatSession({
+    ...extra,
     conversations,
     intent,
     dispatcher,
@@ -114,6 +121,33 @@ const textOf = (message: OutgoingMessage): string =>
   [message.text ?? "", ...(message.blocks ?? []).map((block) => JSON.stringify(block))].join("\n");
 
 describe("ChatSession", () => {
+  it("blames the model, not the repositories, when specification derivation fails", async () => {
+    const intent = new StubIntentEngine({
+      command: { type: "problem.confirm", payload: { problemId: "prob-stuck" } },
+    });
+    const { session, sent, problems } = await buildSession(intent, ["ou_dev"], {
+      specificationBootstrap: {
+        bootstrap: async () => {
+          throw new HarnessError("chat completion returned empty content");
+        },
+      } as unknown as SpecificationBootstrap,
+    });
+    await problems.createProblem({
+      id: "prob-stuck",
+      title: "面包屑间距",
+      statement: "分隔符前后各 16px",
+      repositoryId: "repo-x",
+    });
+    await problems.updateProblemStatus("prob-stuck", "CONFIRMED");
+
+    await session.handleEvent(event("om-boot", "确认"));
+
+    const reply = textOf(sent.at(-1)!.message);
+    expect(reply).toContain("无法生成规格");
+    expect(reply).toContain("模型调用失败");
+    expect(reply).not.toContain("没有可用的目标仓库");
+  });
+
   it("turns a chat message into a command and replies with the business card", async () => {
     const intent = new StubIntentEngine({
       command: { type: "problem.create", payload: { title: "空状态", statement: "首页太空" } },

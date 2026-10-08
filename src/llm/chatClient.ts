@@ -3,7 +3,9 @@ import { HarnessError } from "../errors.js";
 /**
  * Minimal OpenAI-compatible chat client used by the control plane (intent
  * parsing, problem analysis). It is deliberately transport-only: no prompt,
- * no retry policy, no Harness vocabulary.
+ * no Harness vocabulary. The one policy it owns is the token-budget escalation
+ * below, because that failure is a transport-level artefact of reasoning
+ * models — callers cannot tell it apart from "the model had nothing to say".
  */
 
 export interface ChatMessage {
@@ -55,6 +57,25 @@ const DEFAULT_TIMEOUT_MS = 60_000;
 const DEFAULT_MAX_TOKENS = 2048;
 const DEFAULT_TEMPERATURE = 0;
 
+/**
+ * Reasoning providers (DeepSeek's reasoning models) charge their hidden
+ * `reasoning_content` against `max_tokens`. When the reasoning alone exhausts
+ * the budget, the API still answers HTTP 200 — with `content: ""` and
+ * `finish_reason: "length"` — which is indistinguishable from a model that
+ * deliberately said nothing. One escalation to this ceiling yields the answer
+ * in practice, so `complete()` spends a single extra call instead of handing an
+ * empty answer to a caller whose only option is to report failure.
+ */
+const MAX_ESCALATED_TOKENS = 8192;
+
+/** The parts of `choices[0]` the client cares about. */
+export interface CompletionParse {
+  content: string;
+  finishReason?: string;
+  /** Output tokens the provider spent on hidden reasoning (reasoning models). */
+  reasoningTokens?: number;
+}
+
 /** `https://host`, `https://host/v1` and `.../v1/chat/completions` all work. */
 export function chatCompletionsUrl(baseUrl: string): string {
   const trimmed = baseUrl.trim().replace(/\/+$/, "");
@@ -93,11 +114,31 @@ export class HttpChatClient implements ChatClient {
   }
 
   async complete(request: ChatCompletionRequest): Promise<string> {
+    const requested = request.maxTokens ?? this.maxTokens;
+    const first = await this.sendOnce(request, requested);
+    if (first.content.trim()) {
+      return first.content;
+    }
+    const retryBudget = escalateBudget(requested);
+    if (retryBudget === undefined) {
+      throw emptyContentError(first, requested);
+    }
+    const retried = await this.sendOnce(request, retryBudget);
+    if (retried.content.trim()) {
+      return retried.content;
+    }
+    throw emptyContentError(retried, retryBudget);
+  }
+
+  private async sendOnce(
+    request: ChatCompletionRequest,
+    maxTokens: number,
+  ): Promise<CompletionParse> {
     const body: Record<string, unknown> = {
       model: this.model,
       messages: request.messages,
       temperature: request.temperature ?? this.temperature,
-      max_tokens: request.maxTokens ?? this.maxTokens,
+      max_tokens: maxTokens,
     };
     if (request.json) {
       body.response_format = { type: "json_object" };
@@ -129,12 +170,43 @@ export class HttpChatClient implements ChatClient {
         `chat completion failed with status ${response.status}: ${text.slice(0, 500)}`,
       );
     }
-    return extractContent(text);
+    return parseCompletion(text);
   }
 }
 
-/** Reads `choices[0].message.content`; tolerant of provider-specific extras. */
-export function extractContent(raw: string): string {
+/**
+ * Doubles the output budget until {@link MAX_ESCALATED_TOKENS}; `undefined`
+ * means the request already asked for the ceiling, so a retry cannot help.
+ */
+function escalateBudget(current: number): number | undefined {
+  if (!Number.isFinite(current) || current >= MAX_ESCALATED_TOKENS) {
+    return undefined;
+  }
+  return Math.min(current * 2, MAX_ESCALATED_TOKENS);
+}
+
+function emptyContentError(parse: CompletionParse, budget?: number): HarnessError {
+  if (parse.finishReason === "length") {
+    const spent =
+      budget !== undefined ? `the whole ${budget}-token output budget` : "its output budget";
+    const reasoning =
+      parse.reasoningTokens !== undefined
+        ? ` (${parse.reasoningTokens} of them reasoning)`
+        : "";
+    return new HarnessError(
+      "chat completion returned empty content: finish_reason=length — " +
+        `the model spent ${spent}${reasoning} before writing an answer; ` +
+        "raise the token budget or use a non-reasoning model",
+    );
+  }
+  return new HarnessError("chat completion returned empty content");
+}
+
+/**
+ * Reads `choices[0]`; tolerant of provider-specific extras like
+ * `reasoning_content`, which reasoning models emit alongside `content`.
+ */
+export function parseCompletion(raw: string): CompletionParse {
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
@@ -147,11 +219,28 @@ export function extractContent(raw: string): string {
   if (!Array.isArray(choices) || choices.length === 0) {
     throw new HarnessError("chat completion returned no choices");
   }
-  const content = asRecord(asRecord(choices[0])?.message)?.content;
-  if (typeof content !== "string" || !content.trim()) {
-    throw new HarnessError("chat completion returned empty content");
+  const choice = asRecord(choices[0]);
+  const content = asRecord(choice?.message)?.content;
+  const details = asRecord(
+    asRecord(asRecord(parsed)?.usage)?.completion_tokens_details,
+  );
+  const reasoningTokens = details?.reasoning_tokens;
+  return {
+    content: typeof content === "string" ? content : "",
+    finishReason:
+      typeof choice?.finish_reason === "string" ? choice.finish_reason : undefined,
+    reasoningTokens:
+      typeof reasoningTokens === "number" ? reasoningTokens : undefined,
+  };
+}
+
+/** Reads `choices[0].message.content`, rejecting an empty answer. */
+export function extractContent(raw: string): string {
+  const parsed = parseCompletion(raw);
+  if (!parsed.content.trim()) {
+    throw emptyContentError(parsed);
   }
-  return content;
+  return parsed.content;
 }
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {

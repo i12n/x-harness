@@ -545,7 +545,7 @@ export class ChatSession {
         conversationId: target.conversationId,
         text:
           `⚠️ 问题已确认，但无法生成规格：${describeError(error)}\n` +
-          "（通常是因为没有可用的目标仓库；请用 `AI_DEFAULT_REPOSITORY_ID` 或先在 CLI 注册仓库）",
+          specificationFailureHint(error),
       });
     }
   }
@@ -734,6 +734,23 @@ function describeError(error: unknown): string {
     return error.message;
   }
   return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * The ⚠️ that follows a failed specification derivation must name the real
+ * cause. A model/transport failure (empty answer, bad JSON, HTTP error) has
+ * nothing to do with the repository list, and the old copy sent the operator
+ * looking for a repository that was already registered.
+ */
+function specificationFailureHint(error: unknown): string {
+  if (/chat completion|model output|no JSON/i.test(describeError(error))) {
+    return (
+      "（这是模型调用失败，不是仓库问题：可直接重试；" +
+      "若反复出现，检查 AI_LLM_BASE_URL / AI_LLM_MODEL / AI_LLM_API_KEY，" +
+      "以及该模型是否把输出额度耗在推理上）"
+    );
+  }
+  return "（通常是因为没有可用的目标仓库；请在对话里点名要改的仓库，或先用 CLI 注册仓库）";
 }
 
 /**

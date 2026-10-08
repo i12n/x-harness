@@ -112,7 +112,6 @@ ai repository update repo-x-music \
 | `DATABASE_URL` | 默认 `postgres://ai:ai@127.0.0.1:55432/ai_harness` |
 | `FEISHU_ALLOWED_OPEN_IDS` | 白名单；**留空 = 拒绝所有人**（见下一节） |
 | `AI_EXECUTION_DRIVER` | `docker`（真机隔离执行）或 `local` |
-| `AI_DEFAULT_REPOSITORY_ID` | 用户没点名仓库时默认开发哪个 |
 
 完整清单见 `deploy/ai-harness.env.example`。
 
@@ -148,6 +147,11 @@ ai repository update repo-x-music \
 结论：`approve` 且所有验收标准都有可执行证明 → 自动 DONE（**不推送**）；
 `request_changes` → 自动返工；`needs_human` / 有 unverifiable 标准 → 停在 REVIEW 交给人。
 `AI_REVIEWER=off|shadow|on`（默认 on）控制这个环节。
+
+**TASK-1233 之后**：规格推导失败时，⚠️ 文案会指明真实原因。若模型是**推理模型**
+（先产隐藏 reasoning 再产正文，reasoning 也计入 `max_tokens`），推理可能把输出额度
+吃光，接口仍返回 200 但正文为空——`ChatClient` 会自动把额度翻倍重试一次
+（上限 8192），仍失败才回话并标明是模型问题（不是"没注册仓库"）。
 
 ```text
 这是要我开工，还是只想了解情况？
@@ -200,7 +204,6 @@ ai repository update repo-x-music \
 | 执行 | `AI_DOCKER_BIN` / `AI_PROXY_IMAGE` | 字符串 | docker 客户端与 allow-list 代理镜像 |
 | 存储 | `DATABASE_URL` / `AI_STORAGE` | 连接串 / 枚举 | `postgres` 或 `memory` |
 | 存储 | `AI_LOOP_INTERVAL_MS` / `AI_WORKER_ID` / `AI_CONFIG_PATH` | 整数 / 字符串 | 调度循环与进程标识 |
-| 行为 | `AI_DEFAULT_REPOSITORY_ID` | 字符串 | 用户没点名仓库时的默认目标 |
 | 行为 | `AI_AUTO_BOOTSTRAP_SPECIFICATION` | 布尔 | 问题确认后自动推导规格 + 拆任务 |
 | 行为 | `AI_INTENT_NOTES` | 文本 | 追加给意图模型的部署说明 |
 | 机器人 | `AI_ENV_FILE` | 路径 | 机器人写配置时落盘的文件（默认 `deploy/ai-harness.env`） |
@@ -316,7 +319,10 @@ node dist/cli/index.js repository create \
 node dist/cli/index.js repository show repo-xmusic
 ```
 
-`AI_DEFAULT_REPOSITORY_ID` 指向它之后，群里说“首页太空了”就会自动落到该仓库。
+注册之后，目标仓库不再靠环境变量写死，而是由意图模型从**对话上下文**里判断：
+用户当前点名（`xmusic` 或 `repo-xmusic`）、同一会话里此前谈到的仓库，或只有
+一个已注册仓库时的那一个。判断不出目标时机器人会先问，不会瞎猜；一个仓库都
+没注册时，规格推导会失败并提示先在 CLI 注册仓库。
 
 ### 5.1 GitHub：取代码与推送
 
@@ -460,3 +466,4 @@ node dist/cli/index.js workspace cleanup
 | 运行态看板在聊天里 | 无 Web UI（v0.1 明确不做） |
 | 通知绑定在事件表 | Run→会话绑定持久化在 `events`，重启不丢也不重复；未被绑定（CLI 触发）的 Run 默认静默 |
 | 意图模型非确定性 | 模型可能把模糊消息判成“无命令”，此时机器人回帮助卡片；命令层仍会做严格校验与授权 |
+| 推理模型的输出额度 | reasoning 计入 `max_tokens`；额度用尽时接口返回 200 但正文为空。客户端翻倍重试一次（上限 8192），超出则报错而不是当成仓库缺失（TASK-1233） |

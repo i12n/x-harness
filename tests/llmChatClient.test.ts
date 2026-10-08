@@ -82,6 +82,62 @@ describe("HttpChatClient", () => {
     await expect(client.complete({ messages: [] })).rejects.toThrow(HarnessError);
   });
 
+  it("retries once with a doubled budget when the model only reasoned", async () => {
+    const calls: { url: string; init: Parameters<ChatFetchLike>[1] }[] = [];
+    // A reasoning model answers 200 with content:"" and finish_reason:"length"
+    // when its hidden reasoning ate the whole max_tokens budget.
+    const reasoningOnly = {
+      choices: [
+        {
+          message: { role: "assistant", content: "", reasoning_content: "thinking…" },
+          finish_reason: "length",
+        },
+      ],
+      usage: { completion_tokens: 2048, completion_tokens_details: { reasoning_tokens: 2048 } },
+    };
+    const fetchImpl: ChatFetchLike = async (url, init) => {
+      calls.push({ url, init });
+      return calls.length === 1
+        ? response(200, reasoningOnly)
+        : response(200, { choices: [{ message: { content: '{"ok":true}' } }] });
+    };
+    const client = new HttpChatClient({
+      baseUrl: "https://api.example.com",
+      apiKey: "secret",
+      model: "model-x",
+      fetchImpl,
+    });
+
+    await expect(client.complete({ messages: [], json: true })).resolves.toBe('{"ok":true}');
+
+    expect(calls).toHaveLength(2);
+    const first = JSON.parse(calls[0]!.init.body ?? "{}") as { max_tokens: number };
+    const second = JSON.parse(calls[1]!.init.body ?? "{}") as { max_tokens: number };
+    expect(first.max_tokens).toBe(2048);
+    expect(second.max_tokens).toBe(4096);
+  });
+
+  it("names the token budget instead of retrying at the ceiling", async () => {
+    let calls = 0;
+    const client = new HttpChatClient({
+      baseUrl: "https://api.example.com",
+      apiKey: "secret",
+      model: "model-x",
+      fetchImpl: async () => {
+        calls += 1;
+        return response(200, {
+          choices: [{ message: { content: "" }, finish_reason: "length" }],
+          usage: { completion_tokens_details: { reasoning_tokens: 8192 } },
+        });
+      },
+    });
+
+    await expect(
+      client.complete({ messages: [], maxTokens: 8192 }),
+    ).rejects.toThrowError(/finish_reason=length[\s\S]*8192[\s\S]*reasoning/);
+    expect(calls).toBe(1);
+  });
+
   it("requires an api key", () => {
     expect(
       () => new HttpChatClient({ baseUrl: "https://x", apiKey: "  ", model: "m" }),
@@ -92,5 +148,16 @@ describe("HttpChatClient", () => {
 describe("extractContent", () => {
   it("rejects non-JSON provider output", () => {
     expect(() => extractContent("<html>oops</html>")).toThrowError(/no JSON/);
+  });
+
+  it("explains an empty answer that ran out of output budget", () => {
+    expect(() =>
+      extractContent(
+        JSON.stringify({
+          choices: [{ message: { content: "" }, finish_reason: "length" }],
+          usage: { completion_tokens_details: { reasoning_tokens: 2048 } },
+        }),
+      ),
+    ).toThrowError(/empty content: finish_reason=length/);
   });
 });
