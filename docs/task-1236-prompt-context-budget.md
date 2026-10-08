@@ -65,11 +65,13 @@ TASK-1237   prompt_bytes =   2,685   （指令交给 agent CLI 加载 + 契约�
 端到端对比（同一条任务 `task-spec-e13a0f2517-0`）：
 
 ```text
-attempt 6（260KB prompt）  2,608,949 in /  243s / 10 files
-attempt 8（2.7KB prompt）    511,259 in /  255s /  3 files
+attempt 6（260KB prompt）  2,608,949 in / 11,051 out / 243s / 10 files（7 篇文档）
+attempt 8（2.7KB prompt）    511,259 in / 12,663 out / 255s /  3 files
+attempt 9（同配置重跑）      835,044 in / 11,690 out / 322s /  3 files
 ```
 
-即输入 token 降 **5.1×**，改动文件从 10（其中 7 篇文档）降到 3（代码 + 测试 + package.json）。
+两个样本的平均值：**~673k input（对 2.61M 是 3.9×，对 5.09M 是 7.6×）**，改动文件从 10
+（其中 7 篇文档）稳定降到 3（代码 + 测试 + package.json 那行多余脚本）。
 用时没有同步下降，因为**验证阶段（`npm ci` + `prisma generate` + `next build`，~135s）成了新的地板**。
 
 ## 5. 不做
