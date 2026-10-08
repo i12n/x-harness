@@ -137,6 +137,20 @@ export const COMMAND_SCHEMAS: Record<CommandType, CommandSchema> = {
     fields: { deliveryId: { type: "string", required: true } },
     roles: OPERATORS,
   },
+  // TASK-1230: deployment is owned by each repository's GitHub Actions; these
+  // commands only push the test branch, read run state and merge after review.
+  "deploy.test": {
+    fields: { deliveryId: { type: "string", required: true } },
+    roles: REVIEWERS,
+  },
+  "deploy.status": {
+    fields: { deliveryId: { type: "string", required: true } },
+    roles: OPERATORS,
+  },
+  "deploy.promote": {
+    fields: { deliveryId: { type: "string", required: true } },
+    roles: REVIEWERS,
+  },
   // Deployment configuration is admin-only: the same fields the config page
   // writes (see docs/deployment-feishu.md §3.1).
   "config.show": {

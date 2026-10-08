@@ -67,6 +67,12 @@ import { TokenBudget } from "../loop/budget.js";
 import { PreviewService } from "../preview/application/previewService.js";
 import { previewSettingsFromEnv } from "../preview/application/previewSettings.js";
 import { createPreviewCommandHandlers } from "../command/handlers/preview.js";
+import { githubSettingsFromEnv } from "../github/githubSettings.js";
+import { HttpGitHubClient } from "../github/httpGithubClient.js";
+import { DeployService } from "../deploy/application/deployService.js";
+import { GitBranchPublisher } from "../deploy/infrastructure/gitBranchPublisher.js";
+import { createDeployCommandHandlers } from "../command/handlers/deploy.js";
+import type { DeployCommandPort } from "../command/handlers/deploy.js";
 import {
   detectCommandsFromDirectory,
   mergeDetectedCommands,
@@ -231,11 +237,12 @@ export class HarnessRuntime {
         analyzer: new LlmProblemAnalyzer(chat),
       }),
     );
+    const gitService = new GitService();
     const gitPublish = new GitPublishService({
       tasks: stores.tasks,
       runs: stores.runs,
       repositories: stores.repositories,
-      git: new GitService(),
+      git: gitService,
       events: stores.events,
     });
     const runs = new RunService({ runs: stores.runs, tasks: stores.tasks, events: stores.events });
@@ -299,6 +306,26 @@ export class HarnessRuntime {
       cpus: previewSettings.cpus,
     });
 
+    // TASK-1230: deployment is the repository's GitHub Actions' job. The harness
+    // pushes the test branch, reads run state and merges after acceptance — it
+    // never deploys and never holds a deployment credential. Off unless a
+    // GitHub credential is configured (AI_GITHUB_APP_* or AI_GITHUB_TOKEN).
+    const githubSettings = githubSettingsFromEnv(process.env);
+    const deploys: DeployCommandPort = githubSettings
+      ? new DeployService({
+          deliveries: { load: (deliveryId) => deliveries.show(deliveryId) },
+          repositories: stores.repositories,
+          runs: stores.runs,
+          git: new GitBranchPublisher({ git: gitService }),
+          github: new HttpGitHubClient({
+            tokenProvider: githubSettings.provider,
+            ...(githubSettings.apiBase ? { apiBase: githubSettings.apiBase } : {}),
+          }),
+          events: stores.events,
+          branchPrefix: githubSettings.testBranchPrefix,
+        })
+      : githubNotConfigured();
+
     const dispatcher = new CommandDispatcher({
       handlers: {
         ...createProblemCommandHandlers({ problems, conversations }),
@@ -316,6 +343,7 @@ export class HarnessRuntime {
         ...createPreviewCommandHandlers({
           preview: previewService,
         }),
+        ...createDeployCommandHandlers({ deploys }),
         ...createConfigCommandHandlers({
           config: createConfigAdminPort({
             envFile: config.configFile,
@@ -665,4 +693,22 @@ function truncate(value: string, limit: number): string {
 
 function describe(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * TASK-1230: with no GitHub credential the deployment commands still exist, but
+ * they say exactly what is missing instead of failing as an unknown command.
+ */
+function githubNotConfigured(): DeployCommandPort {
+  const refusal = (): never => {
+    throw new Error(
+      "GitHub 未配置：请设置 AI_GITHUB_APP_ID + AI_GITHUB_APP_PRIVATE_KEY_PATH" +
+        "（或回退用 AI_GITHUB_TOKEN），测试部署才能推送分支并读取 workflow 状态",
+    );
+  };
+  return {
+    deployTest: refusal as DeployCommandPort["deployTest"],
+    status: refusal as DeployCommandPort["status"],
+    promote: refusal as DeployCommandPort["promote"],
+  };
 }
