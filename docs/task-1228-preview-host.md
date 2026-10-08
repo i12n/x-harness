@@ -1,5 +1,10 @@
 # TASK-1228 预览主机（live preview）
 
+> ⛔ **已废弃（2026-10-08）**：部署改由 GitHub Actions 负责，harness 不再构建/推送/运行
+> 测试环境。See [test-environment-deployment-plan.md](test-environment-deployment-plan.md)。
+> 本文仅作为历史设计保留：预览主机、`docker save | ssh docker load`、端口/TTL 与
+> `deploy/preview-host/install.sh` 均已移除。
+
 > 上级设计：[preview-environment-design.md](preview-environment-design.md) §6。
 > 前置：TASK-1226 证据式预览（构建证据 + 截图钩子）已上线。
 > 本文只做设计；实现前需要一处外部确认（见 §7）。
