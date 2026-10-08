@@ -29,6 +29,20 @@ export interface DeployServiceDeps {
   events?: EventStore;
   /** Test branches are `<prefix><deliveryId>`; default `test/`. */
   branchPrefix?: string;
+  /** TASK-1231: how often a watched deployment is polled; default 30s. */
+  watchIntervalMs?: number;
+  /** TASK-1231: give up watching after this long; default 30min. */
+  watchTtlMs?: number;
+  now?: () => Date;
+}
+
+/** TASK-1231: one observed change while watching a deployment. */
+export interface DeployTransition {
+  deliveryId: string;
+  state: TestDeployStatus["state"] | "stale";
+  run?: GitHubWorkflowRun;
+  /** Terminal states stop the watch. */
+  terminal: boolean;
 }
 
 export interface TestDeployStart {
@@ -63,9 +77,79 @@ export interface PromoteOutcome {
  */
 export class DeployService {
   private readonly branchPrefix: string;
+  private readonly watchIntervalMs: number;
+  private readonly watchTtlMs: number;
+  private readonly now: () => Date;
+  /** TASK-1231: deliveries being watched → last state seen and next check time. */
+  private readonly watching = new Map<string, { last: string; startedAt: number; nextAt: number }>();
 
   constructor(private readonly deps: DeployServiceDeps) {
     this.branchPrefix = deps.branchPrefix ?? "test/";
+    this.watchIntervalMs = deps.watchIntervalMs ?? 30_000;
+    this.watchTtlMs = deps.watchTtlMs ?? 30 * 60_000;
+    this.now = deps.now ?? (() => new Date());
+  }
+
+  /** TASK-1231: start watching a deployment (called when the branch is pushed). */
+  watch(deliveryId: string): void {
+    const at = this.now().getTime();
+    this.watching.set(deliveryId, { last: "unknown", startedAt: at, nextAt: at });
+  }
+
+  watched(): string[] {
+    return [...this.watching.keys()];
+  }
+
+  /**
+   * TASK-1231: poll the watched deployments and report only *changes*, so the
+   * caller can notify once per state instead of every tick. Read-only: it never
+   * deploys anything, and it never re-notifies an unchanged state.
+   */
+  async poll(): Promise<DeployTransition[]> {
+    const transitions: DeployTransition[] = [];
+    const at = this.now().getTime();
+    for (const [deliveryId, entry] of [...this.watching]) {
+      if (at < entry.nextAt) {
+        continue;
+      }
+      entry.nextAt = at + this.watchIntervalMs;
+      if (at - entry.startedAt > this.watchTtlMs) {
+        this.watching.delete(deliveryId);
+        transitions.push({ deliveryId, state: "stale", terminal: true });
+        await this.record("TestDeployStale", { deliveryId });
+        continue;
+      }
+      let status: TestDeployStatus;
+      try {
+        status = await this.status(deliveryId);
+      } catch (error) {
+        // A failed lookup is not a failed deployment: keep watching, say nothing.
+        continue;
+      }
+      if (status.state === entry.last) {
+        continue;
+      }
+      entry.last = status.state;
+      const terminal = status.state === "succeeded" || status.state === "failed";
+      if (terminal) {
+        this.watching.delete(deliveryId);
+      }
+      transitions.push({
+        deliveryId,
+        state: status.state,
+        ...(status.run ? { run: status.run } : {}),
+        terminal,
+      });
+      await this.record(
+        status.state === "succeeded"
+          ? "TestDeploySucceeded"
+          : status.state === "failed"
+            ? "TestDeployFailed"
+            : "TestDeployProgress",
+        { deliveryId, state: status.state, run: status.run?.url },
+      );
+    }
+    return transitions;
   }
 
   branchName(deliveryId: string): string {
@@ -113,12 +197,16 @@ export class DeployService {
       pullRequest: pullRequest.number,
       url: pullRequest.url,
     });
+    // TASK-1231: from here the loop watches the repository's own deployment.
+    this.watch(deliveryId);
     return { deliveryId, repositoryId: repository.id, branch, pullRequest };
   }
 
   /** Observe the repository's own deployment: we only read the runs. */
   async status(deliveryId: string): Promise<TestDeployStatus> {
-    const { repository } = await this.resolve(deliveryId);
+    // Only the repository is needed here — requiring a succeeded Run (and its
+    // worktree) would make a deployment unobservable exactly when it matters.
+    const repository = await this.resolveRepository(deliveryId);
     const branch = this.branchName(deliveryId);
     const runs = await this.deps.github.listWorkflowRuns({
       repo: githubSlug(repository),
@@ -134,7 +222,7 @@ export class DeployService {
 
   /** Called only after a human accepted: merge so production deploys. */
   async promote(deliveryId: string): Promise<PromoteOutcome> {
-    const { repository } = await this.resolve(deliveryId);
+    const repository = await this.resolveRepository(deliveryId);
     const repo = githubSlug(repository);
     const branch = this.branchName(deliveryId);
     const pullRequest = await this.deps.github.findPullRequest({
@@ -156,6 +244,16 @@ export class DeployService {
       url: merged.url,
     });
     return { deliveryId, merged: merged.merged, pullRequest: merged };
+  }
+
+  /** Delivery → its repository, without demanding a worktree. */
+  private async resolveRepository(deliveryId: string): Promise<Repository> {
+    const { tasks } = await this.deps.deliveries.load(deliveryId);
+    const task = tasks[0];
+    if (!task) {
+      throw new Error(`交付 ${deliveryId} 没有任务，无法定位仓库`);
+    }
+    return this.deps.repositories.findRepository(task.repositoryId);
   }
 
   /** Delivery → its repository and the worktree a Run left behind. */

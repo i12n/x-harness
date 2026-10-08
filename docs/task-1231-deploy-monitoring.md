@@ -19,6 +19,7 @@
 | D5 | watch 列表**内存 + 事件**：`deploy.test` 成功即登记；启动时从最近的 `TestDeployWatching` 事件恢复 | 复用 events 表，不新增表；重启不丢在跟的部署 |
 | D6 | 监控在 loop 的**独立阶段**里跑（沿用 `runPhase` 隔离） | 一个交付查失败不能影响调度与执行 |
 | D7 | 开关 `AI_DEPLOY_WATCH=on|off`（默认 on） | 一键回滚到"只能用 `部署状态` 手动查" |
+| D8 | 反馈**沿用现有 notifier**：发到该交付绑定的会话；没有绑定时发 `FEISHU_DEFAULT_CHAT_ID` | 与交付通知同一条路，不新增通知配置，也不新增"往哪发"的规则 |
 
 ## 3. 流转
 
