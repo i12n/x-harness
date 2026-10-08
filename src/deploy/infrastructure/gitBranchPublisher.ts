@@ -82,13 +82,17 @@ export class GitBranchPublisher implements TestBranchPublisher {
       // delivery's own changes are carried over via stash.
       await this.run([...trusted, "fetch", "origin", base], input.workspacePath, env);
       let stashed = false;
+      // `git stash push` exits 0 even when it saves nothing ("No local changes
+      // to save"), so compare the stash list to know whether a pop is owed.
+      const stashBefore = await this.run([...trusted, "stash", "list"], input.workspacePath, env);
       try {
         await this.run(
           [...trusted, "stash", "push", "-u", "-m", "harness test-branch"],
           input.workspacePath,
           env,
         );
-        stashed = true;
+        const stashAfter = await this.run([...trusted, "stash", "list"], input.workspacePath, env);
+        stashed = stashAfter.trim() !== stashBefore.trim();
       } catch {
         // Nothing to save (already clean) — fine, there is just nothing to ship.
       }
