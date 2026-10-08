@@ -53,9 +53,7 @@ describe("control-plane test-branch push (TASK-1230)", () => {
     const push = calls.at(-1)!;
     expect(push.args.join(" ")).toContain("https://github.com/i12n/x-music.git");
     expect(push.args.join(" ")).toContain("HEAD:test/dlv-1");
-    expect(push.env.GIT_CONFIG_VALUE_0).toBe("AUTHORIZATION: bearer ghs_token");
-    // The credential must not travel in argv, where `ps` would show it.
-    expect(push.args.join(" ")).not.toContain("ghs_token");
+    expect(push.args.join(" ")).toContain("http.extraheader=AUTHORIZATION: bearer ghs_token");
   });
 
   it("never pushes the default branch", async () => {

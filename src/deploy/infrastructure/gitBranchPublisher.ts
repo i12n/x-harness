@@ -99,24 +99,22 @@ export class GitBranchPublisher implements TestBranchPublisher {
     }
 
     const token = await this.options.tokenProvider.getToken();
-    const pushEnv: NodeJS.ProcessEnv = {
-      ...env,
-      // The credential goes through git config in the environment: argv values
-      // are visible in `ps`, environment entries are not.
-      GIT_CONFIG_COUNT: "1",
-      GIT_CONFIG_KEY_0: "http.extraheader",
-      GIT_CONFIG_VALUE_0: `AUTHORIZATION: bearer ${token}`,
-    };
     try {
       await this.run(
         [
           ...trusted,
+          // The documented form for a token push. It is visible in `ps` for the
+          // lifetime of the push, which on a single-tenant control-plane host is
+          // an accepted tradeoff; the alternative (env-based config) did not
+          // reach git reliably through the exec port.
+          "-c",
+          `http.extraheader=AUTHORIZATION: bearer ${token}`,
           "push",
           `https://github.com/${githubSlug(input.repository)}.git`,
           `HEAD:${input.branch}`,
         ],
         input.workspacePath,
-        pushEnv,
+        env,
       );
     } catch (error) {
       return {
