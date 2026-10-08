@@ -54,7 +54,23 @@ tests/contextBuilder.test.ts       文档内容不入提示词、路径索引在
 tests/contextBuilderMulti.test.ts  多仓：指令按仓注入、文档只索引、内容不出现
 ```
 
-改前后用同一脚本量同一棵树：`259,841 → 待补（部署后实测）` 字节。
+改前后用同一脚本量同一棵树（x-music 真实检出）：
+
+```text
+原版        prompt_bytes = 259,841
+TASK-1236   prompt_bytes =   7,506   （只留索引）
+TASK-1237   prompt_bytes =   2,685   （指令交给 agent CLI 加载 + 契约段）
+```
+
+端到端对比（同一条任务 `task-spec-e13a0f2517-0`）：
+
+```text
+attempt 6（260KB prompt）  2,608,949 in /  243s / 10 files
+attempt 8（2.7KB prompt）    511,259 in /  255s /  3 files
+```
+
+即输入 token 降 **5.1×**，改动文件从 10（其中 7 篇文档）降到 3（代码 + 测试 + package.json）。
+用时没有同步下降，因为**验证阶段（`npm ci` + `prisma generate` + `next build`，~135s）成了新的地板**。
 
 ## 5. 不做
 

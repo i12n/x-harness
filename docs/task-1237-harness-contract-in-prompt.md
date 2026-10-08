@@ -46,5 +46,18 @@ tests/contextBuilderMulti.test.ts  · 主仓用指针行、从仓仍注入自己
                                    · 超限仍有截断标记，offending 文件在从仓
 ```
 
-改前后用同一脚本量同一棵树（x-music）：`7,506 → 待补（部署后实测）` 字节；并重跑同一条
-任务对比 `inputTokens` / 调用次数 / 时长 / 改动文件数。
+同一棵树（x-music 真实检出）：`7,506 → 2,685` 字节。端到端（同一条任务）：
+
+```text
+                      in_tokens   calls  agent_s  verify_s  total_s  files
+attempt 6（260KB）    2,608,949     29      90       152      243     10（7 篇文档）
+attempt 7（只留索引） 5,086,610     25     667       123      791     10（7 篇文档）
+attempt 8（本任务）     511,259     32     118       135      255      3（代码+测试+json）
+```
+
+结论：契约段把"agent 按仓库 AGENTS.md 做文档流程"这条最贵的路径掐断了——输入 token
+降 5~10×，agent 时间 667s → 118s，改动回到最小集。**剩余时间是验证的硬成本**
+（干净工作区里 `npm ci` 33s + `prisma generate` + `next build` ≈ 135s），提示词已无多少空间。
+
+遗留：agent 仍会在 `package.json` 里加一行 `"test": "playwright test"`（契约明说了不要），
+属模型不服从，后续可在评审/校验层拦（例如 diff 里出现 package.json scripts 改动即强制人评审）。
