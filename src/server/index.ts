@@ -311,6 +311,11 @@ export class HarnessRuntime {
     // never deploys and never holds a deployment credential. Off unless a
     // GitHub credential is configured (AI_GITHUB_APP_* or AI_GITHUB_TOKEN).
     const githubSettings = githubSettingsFromEnv(process.env);
+    if (!githubSettings && (process.env.AI_GITHUB_APP_ID || process.env.AI_GITHUB_TOKEN)) {
+      this.log(
+        "GitHub 凭证已配置但不可用（App 私钥读不到？）——部署命令会被拒绝，其余功能不受影响",
+      );
+    }
     const deploys: DeployCommandPort = githubSettings
       ? new DeployService({
           deliveries: { load: (deliveryId) => deliveries.show(deliveryId) },

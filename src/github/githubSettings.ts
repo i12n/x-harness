@@ -35,10 +35,11 @@ export function githubSettingsFromEnv(
     let privateKeyPem: string;
     try {
       privateKeyPem = read(keyPath);
-    } catch (error) {
-      throw new Error(
-        `无法读取 GitHub App 私钥 ${keyPath}：${error instanceof Error ? error.message : String(error)}`,
-      );
+    } catch {
+      // A missing/unreadable key must not take down the whole harness (it still
+      // runs Feishu, tasks and reviews). Deployment is disabled instead, and the
+      // caller logs why — turning a broken key into a crash loop helped nobody.
+      return undefined;
     }
     return {
       provider: new AppTokenProvider({

@@ -30,6 +30,7 @@ rsync -az --delete \
   --exclude .git \
   --exclude artifacts \
   --exclude 'deploy/ai-harness.env' \
+  --exclude 'deploy/*.pem' \
   -e "ssh -i $KEY -o BatchMode=yes" \
   ./ "$HOST:$REMOTE_DIR/"
 
