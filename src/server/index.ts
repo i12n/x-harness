@@ -521,6 +521,9 @@ export class HarnessRuntime {
     // notifications do — the bound conversation when there is one, else the
     // configured default chat.
     const deployChatId = config.feishu.defaultChatId;
+    // TASK-1231: where the test environment lives. GitHub owns the deploy, so
+    // the harness cannot discover the URL by itself — it is configured once.
+    const deployTestUrl = process.env.AI_DEPLOY_TEST_URL?.trim();
     const notifyDeployTransitions = async (transitions: unknown[]): Promise<void> => {
       if (!deployChatId || transitions.length === 0) {
         return;
@@ -544,7 +547,16 @@ export class HarnessRuntime {
             },
             {
               conversationId: row.deliveryId,
-              text: `${label}：${row.deliveryId}${row.run?.url ? `\n${row.run.url}` : ""}`,
+              text: [
+                `${label}：${row.deliveryId}`,
+                deployTestUrl ? `🧪 测试环境：${deployTestUrl}` : "",
+                deployTestUrl
+                  ? "打开链接即可验收（HTTP + IP + 端口，暂无鉴权）；数据为测试库，随部署更新。"
+                  : "",
+                row.run?.url ? `Workflow：${row.run.url}` : "",
+              ]
+                .filter(Boolean)
+                .join("\n"),
               metadata: { receiveId: deployChatId, receiveIdType: "chat_id" },
             },
           );
