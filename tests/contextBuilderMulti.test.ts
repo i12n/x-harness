@@ -149,8 +149,12 @@ describe("Multi-repository Context Builder (TASK-1007)", () => {
     });
 
     expect(context.prompt).toContain("## Project Context");
-    for (const marker of ["A-INSTRUCTIONS", "A-DOC-ONLY", "B-INSTRUCTIONS", "B-DOC-ONLY"]) {
+    // TASK-1236: instructions are injected, documents are only indexed.
+    for (const marker of ["A-INSTRUCTIONS", "B-INSTRUCTIONS", "docs/a.md", "docs/b.md"]) {
       expect(context.prompt).toContain(marker);
+    }
+    for (const content of ["A-DOC-ONLY", "B-DOC-ONLY"]) {
+      expect(context.prompt).not.toContain(content);
     }
     // A's instructions appear under A's heading, before B's heading.
     const headingA = context.prompt.indexOf("### rehelu (tgt-a)");

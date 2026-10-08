@@ -6,8 +6,21 @@ import { ValidationError } from "../errors.js";
 import type { AgentContext } from "./types.js";
 
 const ROOT_INSTRUCTION_FILES = ["AGENTS.md", "PROJECT.md", "README.md"];
-const MAX_INSTRUCTION_BYTES = 256 * 1024;
-const MAX_INSTRUCTION_BYTES_PER_TARGET = 96 * 1024;
+/**
+ * TASK-1236: root instruction files are injected verbatim, the `docs/` tree
+ * only as a path index.
+ *
+ * Injecting every `docs/**` markdown file made the base prompt ~260 KB
+ * (~87k tokens) for a repository with a real documentation tree, and the agent
+ * re-sends that prompt on every model call — a live Run spent 29 calls and
+ * 2.6M input tokens on a one-line CSS change, with the task itself worth a few
+ * thousand tokens. The agent has a shell in the worktree, so it can read the
+ * documents it actually needs instead of carrying all of them forever.
+ */
+const MAX_INSTRUCTION_BYTES = 32 * 1024;
+const MAX_INSTRUCTION_BYTES_PER_TARGET = 16 * 1024;
+/** Path-only index of `docs/**` (cheap, keeps the documents discoverable). */
+const MAX_DOC_INDEX_BYTES = 4 * 1024;
 
 /** One repository the agent must work in, with its workspace and workdir. */
 export interface ContextTarget {
@@ -37,6 +50,14 @@ interface InstructionFile {
   content: string;
 }
 
+/** What the harness tells the agent about a repository's own documentation. */
+interface ProjectContext {
+  /** Root instruction files, injected verbatim. */
+  instructions: InstructionFile[];
+  /** Relative paths of `docs/**` markdown, for the agent to read on demand. */
+  docIndex: string[];
+}
+
 /**
  * Context Builder (plan section 十七): Task + Repository Context +
  * Project Instructions + Acceptance Criteria -> AgentContext.
@@ -52,7 +73,7 @@ export async function buildAgentContext(
 
   if (targets.length === 1) {
     // Single-repository prompt stays byte-for-byte compatible with Phase 1–9.
-    const instructions = await collectProjectInstructions(
+    const context = await collectProjectContext(
       primary.hostWorkspacePath,
       MAX_INSTRUCTION_BYTES,
     );
@@ -61,20 +82,20 @@ export async function buildAgentContext(
       task: params.task,
       repository: primary.repository,
       workspacePath: primary.hostWorkspacePath,
-      prompt: composePrompt(params.task, primary.repository, instructions),
+      prompt: composePrompt(params.task, primary.repository, context),
     };
   }
 
-  const instructionsPerTarget = new Map<string, InstructionFile[]>();
+  const contextsPerTarget = new Map<string, ProjectContext>();
   let remainingBytes = MAX_INSTRUCTION_BYTES;
   for (const target of targets) {
     const budget = Math.min(MAX_INSTRUCTION_BYTES_PER_TARGET, remainingBytes);
-    const instructions = await collectProjectInstructions(
+    const context = await collectProjectContext(
       target.hostWorkspacePath,
       budget,
     );
-    instructionsPerTarget.set(target.targetId, instructions);
-    remainingBytes -= instructions.reduce(
+    contextsPerTarget.set(target.targetId, context);
+    remainingBytes -= context.instructions.reduce(
       (total, file) => total + Buffer.byteLength(file.content),
       0,
     );
@@ -92,7 +113,7 @@ export async function buildAgentContext(
       params.task,
       targets,
       primary.targetId,
-      instructionsPerTarget,
+      contextsPerTarget,
     ),
   };
 }
@@ -125,7 +146,7 @@ function composeMultiRepositoryPrompt(
   task: Task,
   targets: ContextTarget[],
   primaryTargetId: string,
-  instructionsPerTarget: Map<string, InstructionFile[]>,
+  contextsPerTarget: Map<string, ProjectContext>,
 ): string {
   const sections: string[] = [];
   sections.push(
@@ -164,13 +185,17 @@ function composeMultiRepositoryPrompt(
   ];
   for (const target of targets) {
     contextLines.push(`### ${target.repository.name} (${target.targetId})`);
-    const files = instructionsPerTarget.get(target.targetId) ?? [];
-    if (files.length === 0) {
+    const context = contextsPerTarget.get(target.targetId);
+    const files = context?.instructions ?? [];
+    if (files.length === 0 && (context?.docIndex.length ?? 0) === 0) {
       contextLines.push("(no instruction files found)");
       continue;
     }
     for (const file of files) {
       contextLines.push(`[${file.path}]\n${file.content.trim()}`);
+    }
+    if (context && context.docIndex.length > 0) {
+      contextLines.push(docIndexSection(context.docIndex));
     }
   }
   sections.push(contextLines.join("\n\n"));
@@ -186,7 +211,7 @@ function composeMultiRepositoryPrompt(
 function composePrompt(
   task: Task,
   repository: Repository,
-  instructions: InstructionFile[],
+  context: ProjectContext,
 ): string {
   const sections: string[] = [];
   sections.push(`You are executing a coding task inside a dedicated git worktree.`);
@@ -201,14 +226,17 @@ function composePrompt(
   if (Object.keys(task.constraints).length > 0) {
     sections.push(`Constraints: ${JSON.stringify(task.constraints)}`);
   }
-  if (instructions.length > 0) {
-    const blocks = instructions
+  if (context.instructions.length > 0) {
+    const blocks = context.instructions
       .map(
         (file) =>
           `[${file.path}]\n${file.content.trim()}`,
       )
       .join("\n\n");
     sections.push(`Project instructions:\n${blocks}`);
+  }
+  if (context.docIndex.length > 0) {
+    sections.push(docIndexSection(context.docIndex));
   }
   sections.push(
     "Make the code changes required by the task inside this workspace only. " +
@@ -218,42 +246,56 @@ function composePrompt(
   return sections.join("\n\n");
 }
 
-async function collectProjectInstructions(
+/**
+ * The documents exist for the agent, not in the prompt: shipping their contents
+ * cost ~87k tokens per model call (TASK-1236), so the harness ships the *list*
+ * and lets the agent open the one or two files it needs.
+ */
+function docIndexSection(docIndex: string[]): string {
+  return [
+    "Project docs — read only the files you need (do not cat whole documents):",
+    ...docIndex.map((path) => `- ${path}`),
+  ].join("\n");
+}
+
+async function collectProjectContext(
   workspacePath: string,
   maxBytes = MAX_INSTRUCTION_BYTES,
-): Promise<InstructionFile[]> {
-  const found = new Map<string, string>();
-
+): Promise<ProjectContext> {
+  const instructions: InstructionFile[] = [];
+  let totalBytes = 0;
   for (const name of ROOT_INSTRUCTION_FILES) {
     const content = await tryRead(join(workspacePath, name));
-    if (content !== undefined) {
-      found.set(name, content);
+    if (content === undefined) {
+      continue;
     }
-  }
-
-  const docsDir = join(workspacePath, "docs");
-  for (const file of await listMarkdownFiles(docsDir)) {
-    const content = await tryRead(file);
-    if (content !== undefined) {
-      found.set(relative(workspacePath, file), content);
-    }
-  }
-
-  const result: InstructionFile[] = [];
-  let totalBytes = 0;
-  for (const [path, content] of [...found.entries()].sort()) {
     const size = Buffer.byteLength(content);
     if (totalBytes + size > maxBytes) {
-      result.push({
+      instructions.push({
         path: "(truncated)",
         content: "[additional instruction files omitted due to size limit]",
       });
       break;
     }
     totalBytes += size;
-    result.push({ path, content });
+    instructions.push({ path: name, content });
   }
-  return result;
+
+  const docIndex: string[] = [];
+  let indexBytes = 0;
+  const docsDir = join(workspacePath, "docs");
+  for (const file of await listMarkdownFiles(docsDir)) {
+    const path = relative(workspacePath, file);
+    const size = Buffer.byteLength(path) + 3;
+    if (indexBytes + size > MAX_DOC_INDEX_BYTES) {
+      docIndex.push("…(more documents omitted)");
+      break;
+    }
+    indexBytes += size;
+    docIndex.push(path);
+  }
+
+  return { instructions, docIndex };
 }
 
 async function tryRead(path: string): Promise<string | undefined> {

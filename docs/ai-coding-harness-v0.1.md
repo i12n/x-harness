@@ -844,7 +844,10 @@ PROJECT.md
 docs/
 ```
 
-Harness 负责把相关内容组装进去。
+Harness 负责把相关内容组装进去。**TASK-1236**：`AGENTS.md` / `PROJECT.md` /
+`README.md` 原文注入（总预算 32 KB），`docs/**/*.md` 只注入**路径索引**（≤4 KB）——
+agent 在工作区里有 shell，按需自己读；早期把整个 `docs/` 全文塞进每次调用，实测一条
+一行 CSS 的任务要 260 万输入 token。
 
 ---
 
