@@ -161,3 +161,24 @@ harness 服务用飞书长连接，**没有 HTTP server、没有公网回调**�
 
 - 每个仓库可单独关闭"测试分支自动推送"（回到纯人工）。
 - 关闭 GitHub 驱动部署即回到旧行为：`AI_PREVIEW_MODE` 与预览主机路径仍在，可临时作为证据通道。
+
+## 11. 适用范围：x-harness 自身除外（直接部署）
+
+本方案适用于**被 harness 驱动的项目仓库**（例如 x-music）：推测试分支 → GitHub Actions
+部署测试环境 → 验收后合并 main 触发上线。
+
+**x-harness 自己不走这条路**，直接部署：
+
+```bash
+AI_DEPLOY_HOST=root@<部署主机> deploy/deploy.sh
+```
+
+理由：harness 是自己的控制面，没有"再经一层 GitHub App 推分支 + 等 workflow"的必要；
+它也不在 App 的安装范围内（`repository_selection: selected`）。直接部署链路
+（typecheck + 测试 → build → rsync → npm ci → migrate → 重启）已经是它自己的发布流程。
+
+因此：
+
+- **不要**把 `i12n/x-harness` 加进 GitHub App 的安装范围；
+- x-harness 不需要 `test/**` 分支，也不需要 `TEST_*` secrets；
+- harness 内部的 `DeployService` 只对**已注册并被驱动的项目仓库**生效，控制面自身不注册为被驱动仓库。
