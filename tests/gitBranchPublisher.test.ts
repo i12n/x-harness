@@ -73,7 +73,9 @@ describe("control-plane test-branch push (TASK-1230)", () => {
     const push = calls.filter((call) => call.args.includes("push")).at(-1)!;
     expect(push.args.join(" ")).toContain("@github.com/i12n/x-music.git");
     expect(push.args.join(" ")).toContain("HEAD:refs/heads/test/dlv-1");
-    expect(push.args).toContain("--force-with-lease");
+    // The scratch worktree has no local ref for a lease, and the branch is a
+    // derived artefact, so the rebuild pushes with plain --force.
+    expect(push.args).toContain("--force");
     expect(push.args.join(" ")).toContain("x-access-token:ghs_token@");
   });
 

@@ -162,8 +162,11 @@ export class GitBranchPublisher implements TestBranchPublisher {
           //
           // Force-with-lease: the test branch is rebuilt from the default branch
           // on every publish, so re-deploying a delivery moves it forward *or*
-          // rebases it. It is a derived branch owned by the control plane.
-          "--force-with-lease",
+          // rebases it. Plain `--force` (not `--force-with-lease`): the push
+          // comes from a detached scratch worktree with no local ref to lease
+          // against, and this branch is a derived artefact the control plane
+          // owns outright.
+          "--force",
           `HEAD:refs/heads/${input.branch}`,
         ],
         scratch,
