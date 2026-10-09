@@ -155,6 +155,11 @@ export function deriveStage(
   if (deliveryStatus === "READY_FOR_RELEASE") {
     return "awaiting_release";
   }
+  // TASK-1254: a task waiting for a human verdict *is* the acceptance stage —
+  // showing "开发中" there made the card say the opposite of the truth.
+  if (tasks.some((task) => task.status === "REVIEW")) {
+    return "awaiting_acceptance";
+  }
   if (tasks.length > 0 && tasks.every((task) => task.status === "DONE")) {
     return "awaiting_acceptance";
   }

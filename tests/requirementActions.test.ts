@@ -252,6 +252,36 @@ describe("action → command mapping (TASK-1244)", () => {
     expect(outcome.commands).toHaveLength(0);
     expect(outcome.advance).toBe(true);
   });
+
+  // TASK-1254: "通过 / 可以了" — the stage decides what is being accepted.
+  it("通过 accepts a task waiting for review", async () => {
+    const { view } = await harness({
+      tasks: [{ id: "task-spec-1-0", status: "REVIEW" }],
+      delivery: "IN_PROGRESS",
+    });
+    const outcome = commandsForRequirementAction({ type: "approve" }, view);
+    expect(outcome.commands).toEqual([
+      { type: "review.approve", payload: { taskId: "task-spec-1-0" } },
+    ]);
+  });
+
+  it("通过 publishes an accepted delivery", async () => {
+    const { view } = await harness();
+    const outcome = commandsForRequirementAction({ type: "approve" }, view);
+    expect(outcome.commands).toEqual([
+      { type: "deploy.promote", payload: { deliveryId: "dlv-1" } },
+    ]);
+  });
+
+  it("通过 says what is actually waiting when nothing is", async () => {
+    const { view } = await harness({
+      tasks: [{ id: "task-spec-1-0", status: "RUNNING" }],
+      delivery: "IN_PROGRESS",
+    });
+    const outcome = commandsForRequirementAction({ type: "approve" }, view);
+    expect(outcome.commands).toHaveLength(0);
+    expect(outcome.ask).toContain("还在开发中");
+  });
 });
 
 describe("intent normalisation (TASK-1244)", () => {

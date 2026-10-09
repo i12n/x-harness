@@ -56,7 +56,8 @@ export function availableActions(view: RequirementView): string[] {
     case "developing":
       return ["看看进展", "重跑"];
     case "awaiting_acceptance":
-      return ["测试部署", "看看进展"];
+      // TASK-1254: this is the moment the human accepts the work in words.
+      return ["通过", "打回并说明问题", "看看进展"];
     case "awaiting_release":
       return ["发布", "打回并说明问题", "测试部署"];
     case "released":

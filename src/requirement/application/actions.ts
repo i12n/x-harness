@@ -62,6 +62,40 @@ export function commandsForRequirementAction(
       }
       return { commands: [], showCard: true };
 
+    case "approve": {
+      // TASK-1254: "通过 / 可以了 / 没问题" — the stage decides what is being
+      // accepted. A task waiting for review is accepted (task → DONE); an
+      // accepted delivery is published.
+      if (!view) {
+        return { commands: [], ask: NO_REQUIREMENT_ASK };
+      }
+      const reviewable = view.tasks.filter((task) => task.status === "REVIEW");
+      if (reviewable.length === 1) {
+        return {
+          commands: [{ type: "review.approve", payload: { taskId: reviewable[0]!.id } }],
+        };
+      }
+      if (reviewable.length > 1) {
+        const options = reviewable.map((task) => task.title.slice(0, 20));
+        return {
+          commands: [],
+          ask: `这项需求有 ${reviewable.length} 个开发点等你验收，通过哪些？[${options.join("] [")}] [全部]`,
+        };
+      }
+      if (view.delivery?.status === "READY_FOR_RELEASE") {
+        return {
+          commands: [{ type: "deploy.promote", payload: { deliveryId: view.delivery.id } }],
+        };
+      }
+      return {
+        commands: [],
+        ask:
+          view.stage === "released"
+            ? "这份需求已经上线了。"
+            : "现在没有等你验收的东西——还在开发中，等跑完我会通知你。",
+      };
+    }
+
     case "reject": {
       if (!view) {
         return { commands: [], ask: NO_REQUIREMENT_ASK };

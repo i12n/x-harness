@@ -76,6 +76,7 @@ export type CommandStatus = "succeeded" | "failed" | "rejected";
  */
 export const REQUIREMENT_ACTIONS = [
   "show",
+  "approve",
   "reject",
   "deploy",
   "publish",
