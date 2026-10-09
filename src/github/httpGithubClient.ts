@@ -131,6 +131,7 @@ function toPullRequest(raw: unknown): GitHubPullRequest {
     url: String(record.html_url ?? record.url ?? ""),
     state: record.state === "closed" ? "closed" : "open",
     merged: record.merged === true || record.merged_at != null,
+    ...(typeof record.merged_at === "string" ? { mergedAt: record.merged_at } : {}),
     head: String((record.head as Record<string, unknown> | undefined)?.ref ?? ""),
     base: String((record.base as Record<string, unknown> | undefined)?.ref ?? ""),
   };

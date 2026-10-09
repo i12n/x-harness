@@ -12,6 +12,12 @@ export interface GitHubPullRequest {
   url: string;
   state: "open" | "closed";
   merged: boolean;
+  /**
+   * TASK-1255: when the PR was merged. A production run only counts as the
+   * evidence for *this* merge when it was created at/after this moment, so a
+   * merge without a timestamp cannot be attributed to a run.
+   */
+  mergedAt?: string;
   head: string;
   base: string;
 }

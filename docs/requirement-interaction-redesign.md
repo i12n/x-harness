@@ -193,6 +193,20 @@ requirement.reject(意见)
 
 守卫：交付 `RELEASED` → 拒绝并引导开新需求；Task 已是 READY/RUNNING → 拒绝并说明状态。
 
+**发布语义（TASK-1255）**：`发布` 只负责"合并 PR + 开始盯生产部署"，**RELEASED 由生产部署确认成功写入**，不由合并写入：
+
+```text
+requirement.publish
+  → PR 未合并 → squash 合并；已合并 → 跳过（重复「发布」或重启后补做，不再调 merge 接口）
+  → 监听默认分支的部署 workflow（kind = production）
+  → 生产 run 成功 → 记 release（交付 RELEASED，事件 release.created）
+  → 生产 run 失败 → 交付留在 READY_FOR_RELEASE，提示「线上部署失败」，仍可打回
+```
+
+两条触发路径互为兜底：监听在 transition 变 `succeeded` 时写 release；再次 `发布` 时按需核对（PR 已合并 + 生产 run 成功）也写 release。后者保证服务重启丢掉内存 watch、或 `AI_DEPLOY_WATCH=off` 时不会永久卡在「待发布」。
+
+为什么不在合并时写 release：合并成功 ≠ 上线成功，而 RELEASED 是冻结点（`requestChanges` 会拒绝已发布交付）。一旦合并即冻结，部署失败就只能开新需求，无法带意见打回。
+
 ### 7.6 意图处理（本方案的核心）
 
 **给模型的上下文**（不是给用户的）：

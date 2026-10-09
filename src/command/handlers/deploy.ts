@@ -9,7 +9,10 @@ import type { CommandHandler, CommandType } from "../types.js";
 export interface DeployCommandPort {
   deployTest(deliveryId: string): ReturnType<DeployService["deployTest"]>;
   status(deliveryId: string): ReturnType<DeployService["status"]>;
-  promote(deliveryId: string): ReturnType<DeployService["promote"]>;
+  promote(
+    deliveryId: string,
+    actor?: { channel: string; userId: string },
+  ): ReturnType<DeployService["promote"]>;
 }
 
 /**
@@ -31,9 +34,14 @@ export function createDeployCommandHandlers(deps: {
       const status = await deps.deploys.status(deliveryId);
       return { ...status, message: renderDeployStatusMessage(status, { conversationId: deliveryId }) };
     },
-    "deploy.promote": async (payload) => {
+    "deploy.promote": async (payload, command) => {
       const deliveryId = String(payload.deliveryId).trim();
-      const outcome = await deps.deploys.promote(deliveryId);
+      // TASK-1255: the release this may record is attributed to whoever said
+      // 发布, so the audit trail names the human rather than the deploy watcher.
+      const outcome = await deps.deploys.promote(deliveryId, {
+        channel: command.actor.channel,
+        userId: command.actor.userId,
+      });
       return { ...outcome, message: renderPromotedMessage(outcome, { conversationId: deliveryId }) };
     },
   };

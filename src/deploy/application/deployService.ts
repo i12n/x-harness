@@ -20,12 +20,27 @@ export interface DeployDeliveryPort {
   load(deliveryId: string): Promise<{ delivery: Delivery; tasks: Task[] }>;
 }
 
+/**
+ * TASK-1255: the one write the deploy path performs on a Delivery. It is only
+ * called once the *production* deploy is confirmed — never when the PR merely
+ * merges — because RELEASED is the freeze point for the delivery.
+ */
+export interface DeployReleasePort {
+  /** Records the release; idempotent for a delivery that is already RELEASED. */
+  release(
+    deliveryId: string,
+    actor: { channel: string; userId: string },
+  ): Promise<unknown>;
+}
+
 export interface DeployServiceDeps {
   deliveries: DeployDeliveryPort;
   repositories: { findRepository(id: string): Promise<Repository> };
   runs: { listRuns(filter: { taskId: string }): Promise<Run[]> };
   git: TestBranchPublisher;
   github: GitHubClient;
+  /** TASK-1255: records the release once production is confirmed. */
+  release?: DeployReleasePort;
   events?: EventStore;
   /** Test branches are `<prefix><deliveryId>`; default `test/`. */
   branchPrefix?: string;
@@ -67,7 +82,32 @@ export interface PromoteOutcome {
   deliveryId: string;
   merged: boolean;
   pullRequest: GitHubPullRequest;
+  /** TASK-1255: the PR was already merged (a repeat 发布, or after a restart). */
+  alreadyMerged?: boolean;
+  /** TASK-1255: this call confirmed the production deploy and recorded the release. */
+  released?: boolean;
+  /** Latest production run state when it could be attributed to this merge. */
+  productionState?: TestDeployStatus["state"];
 }
+
+/** TASK-1255: what the repository's own production workflow is doing. */
+export interface ProductionStatus {
+  deliveryId: string;
+  /** The test PR has been merged into the default branch. */
+  merged: boolean;
+  /** `none` also means "not attributable yet" — see `mergedAt`. */
+  state: TestDeployStatus["state"];
+  run?: GitHubWorkflowRun;
+  pullRequest?: GitHubPullRequest;
+}
+
+export interface ReleaseConfirmation extends ProductionStatus {
+  /** True when this call wrote the release. */
+  released: boolean;
+}
+
+/** The release written by the deployment itself has no human behind it. */
+const DEPLOY_ACTOR = { channel: "system", userId: "deploy-watch" };
 
 /**
  * TASK-1230: the harness's whole role in deployment.
@@ -103,7 +143,10 @@ export class DeployService {
   }
 
   /** TASK-1231: start watching a deployment (called when the branch is pushed). */
-  watch(deliveryId: string, options: { branch?: string; kind?: "test" | "production" } = {}): void {
+  watch(
+    deliveryId: string,
+    options: { branch?: string; kind?: "test" | "production"; sinceMs?: number } = {},
+  ): void {
     const at = this.now().getTime();
     this.watching.set(deliveryId, {
       last: "unknown",
@@ -112,7 +155,9 @@ export class DeployService {
       branch: options.branch ?? this.branchName(deliveryId),
       // Only runs created *after* the watch started count: otherwise a branch
       // that was already deployed reports "succeeded" from its old run.
-      sinceMs: at,
+      // TASK-1255: the merge time wins when we know it — a repeat 发布 of an
+      // already-merged PR must still see the deploy that merge triggered.
+      sinceMs: options.sinceMs ?? at,
       kind: options.kind ?? "test",
     });
   }
@@ -123,8 +168,10 @@ export class DeployService {
 
   /**
    * TASK-1231: poll the watched deployments and report only *changes*, so the
-   * caller can notify once per state instead of every tick. Read-only: it never
-   * deploys anything, and it never re-notifies an unchanged state.
+   * caller can notify once per state instead of every tick. The only write it
+   * performs is TASK-1255's release, and only when a *production* deploy
+   * succeeded; it never deploys anything and never re-notifies an unchanged
+   * state.
    */
   async poll(): Promise<DeployTransition[]> {
     const transitions: DeployTransition[] = [];
@@ -170,6 +217,13 @@ export class DeployService {
             : "TestDeployProgress",
         { deliveryId, state: status.state, run: status.run?.url },
       );
+      // TASK-1255: the production deploy is what "上线" means, so it — not the
+      // PR merge — writes the release. Leaving the delivery at
+      // READY_FOR_RELEASE here was the bug this closes; releasing on merge
+      // instead would freeze a delivery whose deploy then failed.
+      if (entry.kind === "production" && status.state === "succeeded") {
+        await this.recordRelease(deliveryId, DEPLOY_ACTOR, status.run);
+      }
     }
     return transitions;
   }
@@ -254,8 +308,19 @@ export class DeployService {
     return { deliveryId, branch, run, state: summarize(run) };
   }
 
-  /** Called only after a human accepted: merge so production deploys. */
-  async promote(deliveryId: string): Promise<PromoteOutcome> {
+  /**
+   * Called only after a human accepted: merge so production deploys.
+   *
+   * TASK-1255: idempotent, because 发布 is a human action that must be safe to
+   * repeat — GitHub answers a second merge of the same PR with 405. When the PR
+   * is already merged (a repeat, or a restart that lost the watch) we skip the
+   * merge and confirm the production deploy on demand, which is also the
+   * fallback for `AI_DEPLOY_WATCH=off`.
+   */
+  async promote(
+    deliveryId: string,
+    actor: { channel: string; userId: string } = DEPLOY_ACTOR,
+  ): Promise<PromoteOutcome> {
     const repository = await this.resolveRepository(deliveryId);
     const repo = githubSlug(repository);
     const branch = this.branchName(deliveryId);
@@ -267,20 +332,129 @@ export class DeployService {
     if (!pullRequest) {
       throw new Error(`没有找到 ${branch} 的 PR，先执行「测试部署 ${deliveryId}」`);
     }
-    const merged = await this.deps.github.mergePullRequest({
-      repo,
-      number: pullRequest.number,
-    });
-    await this.record("TestMerged", {
-      deliveryId,
-      repositoryId: repository.id,
-      pullRequest: merged.number,
-      url: merged.url,
-    });
+    const alreadyMerged = pullRequest.merged;
+    const merged = alreadyMerged
+      ? pullRequest
+      : await this.deps.github.mergePullRequest({
+          repo,
+          number: pullRequest.number,
+        });
+    if (!alreadyMerged) {
+      await this.record("TestMerged", {
+        deliveryId,
+        repositoryId: repository.id,
+        pullRequest: merged.number,
+        url: merged.url,
+      });
+    }
     // TASK-1231: the merge itself triggers the repository's production workflow.
     // Watch the default branch from this moment so the上线 result is reported.
-    this.watch(deliveryId, { branch: repository.defaultBranch, kind: "production" });
-    return { deliveryId, merged: merged.merged, pullRequest: merged };
+    const mergedAtMs = merged.mergedAt ? Date.parse(merged.mergedAt) : Number.NaN;
+    this.watch(deliveryId, {
+      branch: repository.defaultBranch,
+      kind: "production",
+      ...(Number.isFinite(mergedAtMs) ? { sinceMs: mergedAtMs } : {}),
+    });
+    // TASK-1255: also confirm now, so the release does not depend on a watch
+    // that a restart (or AI_DEPLOY_WATCH=off) may never deliver.
+    const confirmed = await this.confirmRelease(deliveryId, actor);
+    return {
+      deliveryId,
+      merged: alreadyMerged || merged.merged,
+      pullRequest: merged,
+      alreadyMerged,
+      released: confirmed.released,
+      productionState: confirmed.state,
+    };
+  }
+
+  /**
+   * TASK-1255: the repository's production view of a Delivery — has the test PR
+   * been merged, and what did the default-branch run created at/after that
+   * merge conclude?
+   *
+   * Without a merge timestamp no run can be attributed to *this* merge, so the
+   * state stays `none` rather than picking the newest run on the branch (which
+   * could belong to an earlier deploy).
+   */
+  async productionStatus(deliveryId: string): Promise<ProductionStatus> {
+    const repository = await this.resolveRepository(deliveryId);
+    const repo = githubSlug(repository);
+    const pullRequest = await this.deps.github.findPullRequest({
+      repo,
+      head: this.branchName(deliveryId),
+      base: repository.defaultBranch,
+    });
+    if (!pullRequest?.merged) {
+      return {
+        deliveryId,
+        merged: false,
+        state: "none",
+        ...(pullRequest ? { pullRequest } : {}),
+      };
+    }
+    const since = pullRequest.mergedAt ? Date.parse(pullRequest.mergedAt) : Number.NaN;
+    if (!Number.isFinite(since)) {
+      return { deliveryId, merged: true, state: "none", pullRequest };
+    }
+    const runs = await this.deps.github.listWorkflowRuns({
+      repo,
+      branch: repository.defaultBranch,
+      limit: 5,
+    });
+    const run = runs.find((candidate) => Date.parse(candidate.createdAt) >= since);
+    return {
+      deliveryId,
+      merged: true,
+      state: run ? summarize(run) : "none",
+      ...(run ? { run } : {}),
+      pullRequest,
+    };
+  }
+
+  /**
+   * TASK-1255: record the release iff the production deploy is confirmed.
+   * `release()` upstream refuses anything that is not READY_FOR_RELEASE and is
+   * idempotent, so this is safe to call repeatedly (repeat 发布, watch, restart).
+   */
+  async confirmRelease(
+    deliveryId: string,
+    actor: { channel: string; userId: string } = DEPLOY_ACTOR,
+  ): Promise<ReleaseConfirmation> {
+    const status = await this.productionStatus(deliveryId);
+    const released =
+      status.merged && status.state === "succeeded"
+        ? await this.recordRelease(deliveryId, actor, status.run)
+        : false;
+    return { ...status, released };
+  }
+
+  /**
+   * The single release write. Failures are recorded, never thrown: this runs
+   * inside the watch loop and must not take the service down.
+   */
+  private async recordRelease(
+    deliveryId: string,
+    actor: { channel: string; userId: string },
+    run?: GitHubWorkflowRun,
+  ): Promise<boolean> {
+    if (!this.deps.release) {
+      return false;
+    }
+    try {
+      await this.deps.release.release(deliveryId, actor);
+    } catch (error) {
+      await this.record("ReleaseConfirmFailed", {
+        deliveryId,
+        reason: describeError(error),
+      });
+      return false;
+    }
+    await this.record("ReleaseConfirmed", {
+      deliveryId,
+      ...(run?.url ? { run: run.url } : {}),
+    });
+    return true;
   }
 
   /** Delivery → its repository, without demanding a worktree. */
@@ -325,6 +499,11 @@ function summarize(run: GitHubWorkflowRun): TestDeployStatus["state"] {
     return "pending";
   }
   return run.conclusion === "success" ? "succeeded" : "failed";
+}
+
+/** A short reason for the event log; release failures must not be silent. */
+function describeError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 /** `owner/name` from the repository's remote URL. */

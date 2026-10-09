@@ -51,12 +51,21 @@ export function renderPromotedMessage(
   outcome: PromoteOutcome,
   options: { conversationId?: string } = {},
 ): OutgoingMessage {
+  // TASK-1255: 发布 merges the PR, but the delivery is only 已上线 once the
+  // production deploy is confirmed — say which of the two happened.
+  const detail = outcome.released
+    ? "线上部署已确认，交付已标记为已上线"
+    : outcome.productionState === "failed"
+      ? "PR 已合并，但线上部署失败——交付仍是待发布，可以打回"
+      : outcome.alreadyMerged
+        ? "PR 已合并，正在等线上部署结果"
+        : "线上发布由该仓库的 GitHub Actions 触发，部署成功后交付自动标记为已上线";
   return {
     conversationId: options.conversationId ?? outcome.deliveryId,
     blocks: [
       sectionBlock(
-        `已合并到主分支 ${outcome.deliveryId}`,
-        outcome.merged ? "线上发布由该仓库的 GitHub Actions 触发" : "PR 尚未合并",
+        `${outcome.alreadyMerged ? "PR 已合并" : "已合并到主分支"} ${outcome.deliveryId}`,
+        detail,
       ),
       markdownBlock(`- PR：${outcome.pullRequest.url}`),
     ],

@@ -359,6 +359,11 @@ export class HarnessRuntime {
             tokenProvider: githubSettings.provider,
             ...(githubSettings.apiBase ? { apiBase: githubSettings.apiBase } : {}),
           }),
+          // TASK-1255: RELEASED is written when the production deploy is
+          // confirmed (watch transition or an on-demand 发布), never on merge.
+          release: {
+            release: (deliveryId, actor) => deliveries.release(deliveryId, actor),
+          },
           events: stores.events,
           branchPrefix: githubSettings.testBranchPrefix,
           ...(envSeconds("AI_DEPLOY_WATCH_INTERVAL_SECONDS", 30) * 1000

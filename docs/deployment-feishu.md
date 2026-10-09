@@ -154,6 +154,12 @@ ai repository update repo-x-music \
 `request_changes` → 自动返工；`needs_human` / 有 unverifiable 标准 → 停在 REVIEW 交给人。
 `AI_REVIEWER=off|shadow|on`（默认 on）控制这个环节。
 
+**TASK-1255 之后**：`发布` 会把测试 PR 合并进主分支并开始盯该仓库的生产部署
+（`deploy.promote`，可重复执行——已合并的 PR 不再重复调用 merge 接口）。交付只有在
+**生产部署确认成功**时才变成 `RELEASED`（事件 `release.created`）：部署失败会留在
+`READY_FOR_RELEASE` 并提示可以打回，所以"合并了但上线炸了"不会冻结这份交付。
+`AI_DEPLOY_WATCH=off` 或服务重启导致监听丢失时，再说一次「发布」即可按需核对并补记发布。
+
 **TASK-1233 之后**：规格推导失败时，⚠️ 文案会指明真实原因。若模型是**推理模型**
 （先产隐藏 reasoning 再产正文，reasoning 也计入 `max_tokens`），推理可能把输出额度
 吃光，接口仍返回 200 但正文为空——`ChatClient` 会自动把额度翻倍重试一次

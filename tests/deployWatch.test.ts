@@ -30,7 +30,7 @@ function run(status: GitHubWorkflowRun["status"], conclusion?: GitHubWorkflowRun
 }
 
 /** TASK-1231: the watcher, with a mutable run list and a controllable clock. */
-function watcher(runs: GitHubWorkflowRun[]) {
+function watcher(runs: GitHubWorkflowRun[], released: string[] = []) {
   let nowMs = Date.parse("2026-10-08T00:00:00Z");
   let lookups = 0;
   const github = {
@@ -61,6 +61,11 @@ function watcher(runs: GitHubWorkflowRun[]) {
     runs: { async listRuns() { return []; } },
     git: { async publish() { return { pushed: true }; } },
     github,
+    release: {
+      async release(deliveryId) {
+        released.push(deliveryId);
+      },
+    },
     events: new InMemoryEventStore(),
     watchIntervalMs: 30_000,
     watchTtlMs: 30 * 60_000,
@@ -139,5 +144,46 @@ describe("deployment watching (TASK-1231)", () => {
     service.watch("dlv-1");
     expect(await service.poll()).toEqual([]);
     expect(service.watched()).toEqual(["dlv-1"]);
+  });
+
+  // TASK-1255: the production deploy succeeding is what makes a delivery
+  // RELEASED — the PR merge alone must not (a failed deploy would freeze it).
+  it("records the release when the production deploy succeeds", async () => {
+    const released: string[] = [];
+    const w = watcher([run("completed", "success")], released);
+    w.service.watch("dlv-1", { branch: "main", kind: "production" });
+
+    const transitions = await w.service.poll();
+
+    expect(transitions).toEqual([
+      {
+        deliveryId: "dlv-1",
+        state: "succeeded",
+        kind: "production",
+        run: run("completed", "success"),
+        terminal: true,
+      },
+    ]);
+    expect(released).toEqual(["dlv-1"]);
+  });
+
+  it("does not release a delivery when only its test deploy succeeded", async () => {
+    const released: string[] = [];
+    const w = watcher([run("completed", "success")], released);
+    w.service.watch("dlv-1");
+
+    await w.service.poll();
+
+    expect(released).toEqual([]);
+  });
+
+  it("does not release a delivery whose production deploy failed", async () => {
+    const released: string[] = [];
+    const w = watcher([run("completed", "failure")], released);
+    w.service.watch("dlv-1", { branch: "main", kind: "production" });
+
+    await w.service.poll();
+
+    expect(released).toEqual([]);
   });
 });
