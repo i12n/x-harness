@@ -66,7 +66,7 @@ describe("control-plane test-branch push (TASK-1230)", () => {
     expect(calls.some((call) => call.args.includes("checkout"))).toBe(false);
     const push = calls.filter((call) => call.args.includes("push")).at(-1)!;
     expect(push.args.join(" ")).toContain("@github.com/i12n/x-music.git");
-    expect(push.args.join(" ")).toContain("HEAD:test/dlv-1");
+    expect(push.args.join(" ")).toContain("HEAD:refs/heads/test/dlv-1");
     expect(push.args.join(" ")).toContain("x-access-token:ghs_token@");
   });
 

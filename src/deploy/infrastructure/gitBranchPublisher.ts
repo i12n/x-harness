@@ -147,7 +147,10 @@ export class GitBranchPublisher implements TestBranchPublisher {
           // is visible in `ps` for the lifetime of the push, which on a
           // single-tenant control-plane host is an accepted tradeoff.
           `https://x-access-token:${token}@github.com/${githubSlug(input.repository)}.git`,
-          `HEAD:${input.branch}`,
+          // Fully qualified: the scratch worktree is on a detached HEAD, so an
+          // unqualified destination ("test/dlv-x") is ambiguous and git refuses
+          // with "The <src> part of the refspec is a commit object".
+          `HEAD:refs/heads/${input.branch}`,
         ],
         scratch,
         env,
