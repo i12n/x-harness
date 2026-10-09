@@ -127,22 +127,30 @@ describe("LlmIntentEngine", () => {
     expect(result.command?.payload.repositoryId).toBeUndefined();
   });
 
-  it("lists every command type in the prompt", () => {
+  // TASK-1244: the prompt describes user-level actions and refuses to teach the
+  // model any id or layer vocabulary — the harness resolves the target itself.
+  it("describes the user-level actions and none of the internal ids", () => {
     const prompt = intentSystemPrompt();
-    for (const type of [
-      "problem.create",
-      "problem.confirm",
-      "problem.clarification.answer",
-      "task.run",
-      "run.cancel",
-      "review.approve",
-      "spec.create",
-      "spec.update",
-      "spec.ready",
-      "spec.plan",
-      "delivery.release",
+    for (const action of [
+      "show",
+      "reject",
+      "deploy",
+      "publish",
+      "rerun",
+      "create",
+      "chat",
+      "clarify",
     ]) {
-      expect(prompt).toContain(type);
+      expect(prompt).toContain(action);
+    }
+    // The six decision rules that made the phrasing evaluation safe.
+    expect(prompt).toContain("Questions first");
+    expect(prompt).toContain("Bare short replies");
+    expect(prompt).toContain("irreversible");
+    expect(prompt).toContain("Stage decides meaning");
+    // No internal ids or layer names are taught any more.
+    for (const forbidden of ["prob-", "task-", "spec-", "dlv-", "review.approve"]) {
+      expect(prompt).not.toContain(forbidden);
     }
   });
 });

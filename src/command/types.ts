@@ -67,6 +67,38 @@ export interface Command {
 
 export type CommandStatus = "succeeded" | "failed" | "rejected";
 
+/**
+ * TASK-1244: what the *user* meant, with no ids and no layer names.
+ *
+ * The chat surface speaks these; the harness resolves which internal objects
+ * they apply to (see `src/requirement/application/resolver.ts`). Model output
+ * never contains a task/delivery/spec id — the user never has to know one.
+ */
+export const REQUIREMENT_ACTIONS = [
+  "show",
+  "reject",
+  "deploy",
+  "publish",
+  "rerun",
+  "create",
+  "chat",
+  "clarify",
+] as const;
+
+export type RequirementActionType = (typeof REQUIREMENT_ACTIONS)[number];
+
+export interface IntentAction {
+  type: RequirementActionType;
+  payload?: Record<string, unknown>;
+}
+
+export function isRequirementAction(value: unknown): value is RequirementActionType {
+  return (
+    typeof value === "string" &&
+    (REQUIREMENT_ACTIONS as readonly string[]).includes(value)
+  );
+}
+
 export interface CommandResult {
   commandId: string;
   type: CommandType | "unknown";
@@ -98,6 +130,12 @@ export interface IntentInput {
 export interface IntentResult {
   /** Unvalidated command shape produced by an IntentEngine. */
   command: unknown;
+  /**
+   * TASK-1244: the user-level action (preferred). Exactly one of `command` /
+   * `action` is set — `command` remains for deterministic rules and scripted
+   * engines, `action` is what the language model produces.
+   */
+  action?: IntentAction;
   confidence?: number;
   /**
    * Triage classification (TASK: intent triage). "query" = read-only question,

@@ -89,6 +89,7 @@ import { collectProfileIssues } from "../execution/profileGate.js";
 import { RunChatNotifier, type ChatTarget } from "./notifications.js";
 import { ChatSession } from "./session.js";
 import { createIntentTriage } from "./intentTriage.js";
+import { createRequirementResolver } from "../requirement/application/resolver.js";
 import { SpecificationBootstrap } from "./specificationBootstrap.js";
 import { describeConversationSubject } from "./subjectContext.js";
 import { createConfigAdminPort } from "./deployment/configPort.js";
@@ -463,6 +464,17 @@ export class HarnessRuntime {
       conversations,
       intent,
       triage: createIntentTriage({ engine: intent }),
+      // TASK-1244: the chat resolves a user-level action against "what this
+      // conversation is about" instead of asking the user for ids.
+      requirements: createRequirementResolver({
+        conversations: stores.conversations,
+        problems: stores.problems,
+        specifications: stores.specifications,
+        deliveries: stores.deliveries,
+        plans: stores.specificationPlans,
+        runs: stores.runs,
+        tasks: stores.tasks,
+      }),
       dispatcher,
       access: config.access,
       botOpenId,

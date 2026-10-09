@@ -1,0 +1,141 @@
+import type { CommandType, IntentAction } from "../../command/types.js";
+import type { RequirementView } from "./resolver.js";
+
+/**
+ * TASK-1244: user-level action → internal commands.
+ *
+ * This is the only place that knows which machine objects an action touches, so
+ * the language model never has to (and never gets to) name them. An action that
+ * cannot be carried out as asked returns `ask` — a sentence for the user — so
+ * the bot answers instead of guessing.
+ */
+export interface ResolvedRequirementCommand {
+  type: CommandType;
+  payload: Record<string, unknown>;
+}
+
+export interface RequirementActionOutcome {
+  commands: ResolvedRequirementCommand[];
+  /** Reply with this instead of executing (the action does not fit the stage). */
+  ask?: string;
+  /** True when the caller should render the requirement card instead of a command. */
+  showCard?: boolean;
+}
+
+export function commandsForRequirementAction(
+  action: IntentAction,
+  view: RequirementView,
+): RequirementActionOutcome {
+  switch (action.type) {
+    case "show":
+      return { commands: [], showCard: true };
+
+    case "reject": {
+      if (view.stage === "released") {
+        // Shipped code is the freeze point: this is a new requirement, not a rework.
+        return {
+          commands: [],
+          ask: "这份需求已经上线了，改不动了——直接说要改成什么，我开一个新需求。",
+        };
+      }
+      const feedback = asText(action.payload?.feedback);
+      const targets = view.tasks.filter((task) => task.status === "DONE");
+      if (targets.length === 0) {
+        return {
+          commands: [],
+          ask: "现在还没有做完的开发点可以打回；你要是想改需求，直接说要改成什么。",
+        };
+      }
+      if (targets.length > 1) {
+        // Precision beats guessing: ask which deliverable to redo, by title.
+        const options = targets.map((task) => task.title.slice(0, 24));
+        return {
+          commands: [],
+          ask: `这项需求有 ${targets.length} 个开发点，重做哪些？[${options.join("] [")}] [全部]`,
+        };
+      }
+      return {
+        commands: [
+          {
+            type: "review.request_changes",
+            payload: {
+              taskId: targets[0]!.id,
+              ...(feedback ? { feedback } : {}),
+            },
+          },
+        ],
+      };
+    }
+
+    case "deploy": {
+      if (!view.delivery) {
+        return { commands: [], ask: "这次改动还没有形成交付，等开发完成我再推测试环境。" };
+      }
+      return { commands: [{ type: "deploy.test", payload: { deliveryId: view.delivery.id } }] };
+    }
+
+    case "publish": {
+      if (!view.delivery) {
+        return { commands: [], ask: "现在还没有可发布的东西。" };
+      }
+      if (view.delivery.status !== "READY_FOR_RELEASE") {
+        return {
+          commands: [],
+          ask:
+            view.delivery.status === "RELEASED"
+              ? "这份需求已经上线了。"
+              : "测试环境还没验收通过，先「测试部署」看一下效果吧。",
+        };
+      }
+      return {
+        commands: [{ type: "deploy.promote", payload: { deliveryId: view.delivery.id } }],
+      };
+    }
+
+    case "rerun": {
+      const target =
+        view.boundTask ??
+        view.tasks.find((task) => task.status !== "DONE") ??
+        view.tasks[0];
+      if (!target) {
+        return { commands: [], ask: "这项需求还没有可重跑的开发点。" };
+      }
+      return { commands: [{ type: "task.run", payload: { taskId: target.id } }] };
+    }
+
+    case "create": {
+      const statement = asText(action.payload?.statement);
+      if (!statement) {
+        return { commands: [], ask: "请把要做的事说清楚一点，我好开单。" };
+      }
+      const repositoryId = asText(action.payload?.repositoryId);
+      return {
+        commands: [
+          {
+            type: "problem.create",
+            payload: {
+              title: titleFromStatement(statement),
+              statement,
+              ...(repositoryId ? { repositoryId } : {}),
+            },
+          },
+        ],
+      };
+    }
+
+    case "chat":
+    case "clarify":
+      return { commands: [] };
+  }
+}
+
+/** First line, trimmed to something short enough for a card title. */
+export function titleFromStatement(statement: string): string {
+  const firstLine = statement.split(/\r?\n/)[0]?.trim() ?? "";
+  const title = firstLine || statement.trim();
+  return title.length <= 60 ? title : `${title.slice(0, 59)}…`;
+}
+
+function asText(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}

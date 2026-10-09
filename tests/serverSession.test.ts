@@ -100,7 +100,6 @@ async function buildSession(
   const sent: { target: ChatTarget; message: OutgoingMessage }[] = [];
   const bound: string[] = [];
   const session = new ChatSession({
-    ...extra,
     conversations,
     intent,
     dispatcher,
@@ -113,6 +112,8 @@ async function buildSession(
         bound.push(runId);
       },
     } as unknown as RunChatNotifier,
+    // Caller overrides win (access, requirements, bootstrap…).
+    ...extra,
   });
   return { session, sent, bound, problems, tasks, runs, conversations };
 }
@@ -190,6 +191,76 @@ describe("ChatSession", () => {
     expect(metadata[0]?.replyInThread).toBe(true);
     // The second reply does NOT anchor to om-2: same requirement, same topic.
     expect(metadata[1]?.replyToMessageId).toBe("om-1");
+  });
+
+  // TASK-1244: a user-level action is resolved against the conversation's
+  // requirement — the user never names a task or a delivery.
+  it("answers 看进展 with the requirement card, without ids", async () => {
+    const intent = new StubIntentEngine({ command: undefined, action: { type: "show" } });
+    const { session, sent } = await buildSession(intent, ["ou_dev"], {
+      requirements: {
+        resolve: async () => ({
+          problemId: "prob-1",
+          title: "面包屑分隔符间距",
+          stage: "awaiting_release" as const,
+          tasks: [],
+        }),
+      },
+    });
+
+    await session.handleEvent(event("om-1", "现在到哪一步了"));
+
+    const reply = textOf(sent.at(-1)!.message);
+    expect(reply).toContain("面包屑分隔符间距");
+    expect(reply).toContain("待发布");
+    expect(reply).not.toContain("dlv-");
+    expect(reply).not.toContain("task-");
+  });
+
+  it("打回 reworks the finished deliverable and ignores a pasted id", async () => {
+    const intent = new StubIntentEngine({
+      command: undefined,
+      action: { type: "reject", payload: { feedback: "间距应该是 24px" } },
+    });
+    const { session, sent, tasks } = await buildSession(intent, ["ou_dev"], {
+      // 打回 is reviewer/admin work — the role check is unchanged.
+      access: { allowedUserIds: ["ou_dev"], roleMap: { ou_dev: "admin" }, defaultRole: "developer" },
+      requirements: {
+        resolve: async () => ({
+          title: "面包屑分隔符间距",
+          stage: "awaiting_release" as const,
+          tasks: [
+            {
+              id: "task-spec-1-0",
+              repositoryId: "repo-1",
+              targets: [],
+              title: "给 sep 加 16px",
+              description: "",
+              status: "DONE",
+              priority: 50,
+              acceptance: [],
+              constraints: {},
+              maxAttempts: 3,
+              createdAt: "",
+              updatedAt: "",
+            },
+          ],
+        }),
+      },
+    });
+    await tasks.createTask({
+      id: "task-spec-1-0",
+      repositoryId: "repo-1",
+      title: "给 sep 加 16px",
+      status: "DONE",
+    });
+
+    await session.handleEvent(event("om-9", "打回 task-spec-1-0，间距应该是 24px"));
+
+    const task = await tasks.findTask("task-spec-1-0");
+    expect(task.status).toBe("READY");
+    const reply = textOf(sent.at(-1)!.message);
+    expect(reply).toContain("编号我忽略了");
   });
 
   it("refuses senders outside the allow-list", async () => {

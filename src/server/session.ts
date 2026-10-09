@@ -6,7 +6,17 @@ import {
 import { parseFeishuEvent } from "../channel/feishu/events.js";
 import { prepareCommand } from "../command/engine.js";
 import type { CommandDispatcher } from "../command/dispatcher.js";
-import type { CommandResult, IntentEngine, IntentInput, Role } from "../command/types.js";
+import type {
+  CommandResult,
+  IntentAction,
+  IntentEngine,
+  IntentInput,
+  Role,
+} from "../command/types.js";
+import type { IncomingMessage } from "../channel/message.js";
+import { commandsForRequirementAction } from "../requirement/application/actions.js";
+import type { RequirementResolver } from "../requirement/application/resolver.js";
+import { renderRequirementCard } from "../channel/rendering/requirement.js";
 import type { ConversationService } from "../conversation/service.js";
 import type { Problem } from "../domain/problem.js";
 import type { Task } from "../domain/task.js";
@@ -29,6 +39,8 @@ export interface ChatSessionDeps {
   intent: IntentEngine;
   /** Optional triage: classify (query/act/work/chat) before dispatching. */
   triage?: IntentTriage;
+  /** TASK-1244: resolves "what is this conversation about" for user actions. */
+  requirements?: RequirementResolver;
   dispatcher: CommandDispatcher;
   access: AccessConfig;
   /**
@@ -286,6 +298,22 @@ export class ChatSession {
       return;
     }
     if (decision.kind === "chat" || !decision.command) {
+      // TASK-1244: user-level actions (show/reject/deploy/publish/rerun/create)
+      // have no command — they are resolved against the requirement this
+      // conversation is about.
+      if (decision.action) {
+        const handled = await this.handleRequirementAction(
+          target,
+          message,
+          input,
+          roles,
+          decision.action,
+          routing,
+        );
+        if (handled) {
+          return;
+        }
+      }
       await this.reply(
         target,
         renderChatFallbackMessage({ conversationId: target.conversationId }),
@@ -560,6 +588,109 @@ export class ChatSession {
     }
   }
 
+  /**
+   * TASK-1244: carry out a user-level action against the requirement this
+   * conversation is about. `chat` returns false so the caller can answer with
+   * the help card; everything else is handled here (and answered) — the user
+   * never has to know which internal object an action maps to.
+   */
+  private async handleRequirementAction(
+    target: ChatTarget,
+    message: IncomingMessage,
+    input: IntentInput,
+    roles: Role[],
+    action: IntentAction,
+    routing: ReplyRouting | undefined,
+  ): Promise<boolean> {
+    if (action.type === "chat" || !this.deps.requirements) {
+      return false;
+    }
+    const view = await this.deps.requirements
+      .resolve(target.conversationId)
+      .catch(() => undefined);
+    // Pasted ids are ignored on purpose; say so once instead of failing.
+    const hint = pastedIdHint(message.text);
+    if (!view) {
+      await this.reply(
+        target,
+        {
+          conversationId: target.conversationId,
+          text: [
+            hint,
+            "我还不知道你说的是哪件事——直接描述要做的改动，我就开单。",
+          ]
+            .filter(Boolean)
+            .join("\n"),
+        },
+        routing,
+      );
+      return true;
+    }
+    if (action.type === "clarify") {
+      const question =
+        asTrimmedString(action.payload?.question) ?? "你是想做什么？";
+      const options = Array.isArray(action.payload?.options)
+        ? action.payload.options.filter(
+            (entry): entry is string => typeof entry === "string" && entry.trim().length > 0,
+          )
+        : [];
+      await this.reply(
+        target,
+        {
+          conversationId: target.conversationId,
+          text: [hint, question, options.length > 0 ? `[${options.join("] [")}]` : undefined]
+            .filter(Boolean)
+            .join("\n"),
+        },
+        routing,
+      );
+      return true;
+    }
+
+    const outcome = commandsForRequirementAction(action, view);
+    if (outcome.ask) {
+      await this.reply(
+        target,
+        {
+          conversationId: target.conversationId,
+          text: [hint, outcome.ask].filter(Boolean).join("\n"),
+        },
+        routing,
+      );
+      return true;
+    }
+    if (outcome.showCard || outcome.commands.length === 0) {
+      const card = renderRequirementCard(view, {
+        conversationId: target.conversationId,
+      });
+      await this.reply(
+        target,
+        hint ? { ...card, text: `${hint}\n${card.text ?? ""}` } : card,
+        routing,
+      );
+      return true;
+    }
+
+    let first = true;
+    for (const command of outcome.commands) {
+      const result = await this.deps.dispatcher.dispatch(
+        prepareCommand(input, command),
+        { channel: message.channel, userId: message.senderId, roles },
+      );
+      const rendered = renderCommandResult(result, target.conversationId);
+      await this.reply(
+        target,
+        hint && first ? { ...rendered, text: `${hint}\n${rendered.text ?? ""}` } : rendered,
+        routing,
+      );
+      first = false;
+      if (result.status === "succeeded") {
+        await this.afterSuccess(target, result.type, result.data);
+      }
+    }
+    return true;
+  }
+
   private async reply(
     target: ChatTarget,
     message: OutgoingMessage,
@@ -744,6 +875,21 @@ function describeError(error: unknown): string {
     return error.message;
   }
   return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * TASK-1244: the user does not need ids any more. If one is pasted anyway, the
+ * action still runs against the current requirement — and one short line says
+ * so, instead of silently ignoring what they typed.
+ */
+function pastedIdHint(text: string): string | undefined {
+  return /\b(?:prob|spec|task|run|dlv)-[A-Za-z0-9_-]{4,}/.test(text)
+    ? "（编号我忽略了——直接说就行，我知道你说的是哪件事）"
+    : undefined;
+}
+
+function asTrimmedString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
 /**

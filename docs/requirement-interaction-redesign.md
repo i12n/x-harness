@@ -1,6 +1,8 @@
 # 需求交互重设计：一个对象、一个话题、随便怎么说
 
-> 状态：**设计稿**（先定稿，再编码）。
+> 状态：**P1 + P2 已实现（未部署）** —— 见 §8 的分期表与文末「已落地清单」。
+> 编码：`review.requestChanges` 接受 DONE（TASK-1242）、话题锚点（TASK-1243）、
+> 能力型意图 + 需求解析层 + 动作映射（TASK-1244）。
 > 取代：[conversational-interface.md](conversational-interface.md) 里"命令按层划分"的交互约定。
 > 关联：[autonomy-redesign.md](autonomy-redesign.md)（自动开发链路）、[task-1223-delivery-acceptance.md](task-1223-delivery-acceptance.md)（交付验收）、[task-1231-deploy-monitoring.md](task-1231-deploy-monitoring.md)（测试环境与部署）、TASK-1239/1240/1241（发布策略与测试分支）。
 
@@ -319,3 +321,22 @@ schema migration       013 幂等
 3. **"新需求"入口**：已上线后再改，直接描述即可自动开新需求，还是要求显式 `新需求：…`？（建议：直接描述）
 
 > 原先第 4 条"动词收敛为 5 个"已作废：改为**不限定动词**，由 LLM 理解意图（D5 / §7.6）。
+
+## 13. 已落地清单（截至 2026-10-09，**未部署**）
+
+| 决策 | 实现 | 位置 |
+| --- | --- | --- |
+| D6 打回支持 DONE、人工不受 attempts 限制 | ✅ | `src/review/application/reviewService.ts` |
+| D6 RELEASED 冻结 | ✅（`deliveryStatusForTask` 端口，服务端 + CLI 接线） | 同上、`src/domain/specificationPlan.ts` |
+| D7 最近意见单独成段 / Constraints 去 reviews | ✅ | `src/agent/contextBuilder.ts` |
+| D2 需求 = 话题（锚点） | ✅（迁移 013 + 会话/通知出站统一 reply-in-thread） | `migrations/013_conversation_anchor.sql`、`src/conversation/service.ts`、`src/server/session.ts`、`src/server/index.ts` |
+| D5 不限定动词（能力型意图） | ✅（8 个动作 + §7.6 六条规则；提示词不含任何 id） | `src/command/llmIntentEngine.ts`、`src/server/intentTriage.ts` |
+| D5 需求解析层 | ✅ | `src/requirement/application/resolver.ts` |
+| 动作 → 内部命令映射（阶段门禁 + 反问） | ✅（`reject` 多开发点先问、`publish` 只在待发布、RELEASED 引导开新需求） | `src/requirement/application/actions.ts` |
+| D8 卡片去 id | ✅（需求卡主文案只有标题 + 阶段 + 动作；id 仅在 `includeIds` 详情行） | `src/channel/rendering/requirement.ts` |
+| D4 旧命令不再面向用户 | ✅（模型不再产出 id 命令；用户粘 id 时忽略并回一句引导） | `src/server/session.ts`（`pastedIdHint`） |
+| 语料回归资产 | ✅（33 条 fixture + 离线测试 + 联网评估脚本；**未跑联网版**） | `tests/fixtures/intentPhrasings.json`、`tests/requirementIntent.test.ts`、`scripts/eval-intent.mjs` |
+
+**部署前还要做的**：跑一次 `node scripts/eval-intent.mjs`（需要 `npm run build` 与线上同源的
+`AI_LLM_*`），确认命中率 ≥ 90% 且危险误判 = 0——这是 §10 的放行条件。命令层仍保留机器命令
+（卡片按钮、CLI、脚本都在用），只是不再出现在用户面前。

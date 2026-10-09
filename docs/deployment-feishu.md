@@ -138,8 +138,9 @@ ai repository update repo-x-music \
 
 > 📌 本文档 §3 的命令表与"带 id 的说话方式"正在被
 > [requirement-interaction-redesign.md](requirement-interaction-redesign.md) 取代
-> （需求 = 话题、五个无 id 动词、聊天面不再接受 `task-…`/`dlv-…`）。改动落地前，
-> 以本文档为准。
+> （需求 = 话题、不限定说法由 LLM 理解意图、聊天面不再要求 `task-…`/`dlv-…`）。
+> 该改造**已实现但尚未部署**；部署后以那份设计为准，本节的带 id 命令将退化为
+> 兼容入口（用户粘 id 时会被忽略并得到一句引导）。
 
 **TASK-1219 之后**：需求确认（`确认`）就是唯一的一次「开始」授权——
 规格推导 → 拆解 → 自动过 Task Intake → **任务 READY，调度器直接开跑**。

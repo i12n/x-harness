@@ -1,5 +1,9 @@
 import type { IntentEngine, IntentInput, IntentResult } from "../command/types.js";
-import { COMMAND_TYPES, type CommandType } from "../command/types.js";
+import {
+  COMMAND_TYPES,
+  type CommandType,
+  type IntentAction,
+} from "../command/types.js";
 
 export type IntentKind = "query" | "act" | "work" | "chat";
 
@@ -7,6 +11,8 @@ export interface TriageDecision {
   kind: IntentKind;
   /** Candidate command; absent for `chat`. */
   command?: unknown;
+  /** TASK-1244: user-level action; absent when the engine produced a command. */
+  action?: IntentAction;
   confidence: number;
   /** Where the decision came from — deterministic rules or the model. */
   stage: "rule" | "model";
@@ -126,6 +132,9 @@ export function decideFromIntentResult(
   threshold = DEFAULT_CONFIRM_THRESHOLD,
   stage: "rule" | "model" = "model",
 ): TriageDecision {
+  if (intent.action) {
+    return decideFromAction(intent, threshold, stage);
+  }
   const commandType = commandTypeOf(intent.command);
   const kind: IntentKind = intent.kind ?? (commandType ? commandKind(intent.command) : "chat");
   const confidence = typeof intent.confidence === "number" ? intent.confidence : 0.7;
@@ -157,6 +166,36 @@ export function decideFromIntentResult(
     stage,
     reason: intent.reason ?? `映射到 ${commandType}`,
     needsConfirmation: kind === "work" && confidence < threshold,
+  };
+}
+
+/**
+ * TASK-1244: one user-level action at a time. `create` is new work, so a
+ * low-confidence one keeps the confirmation step; everything else is explicit
+ * enough to act on (the irreversible ones are confirmed upstream).
+ */
+function decideFromAction(
+  intent: IntentResult,
+  threshold: number,
+  stage: "rule" | "model",
+): TriageDecision {
+  const action = intent.action!;
+  const confidence = typeof intent.confidence === "number" ? intent.confidence : 0.7;
+  const kind: IntentKind =
+    action.type === "show"
+      ? "query"
+      : action.type === "create"
+        ? "work"
+        : action.type === "chat" || action.type === "clarify"
+          ? "chat"
+          : "act";
+  return {
+    kind,
+    action,
+    confidence,
+    stage,
+    reason: intent.reason ?? `识别为 ${action.type}`,
+    needsConfirmation: action.type === "create" && confidence < threshold,
   };
 }
 
