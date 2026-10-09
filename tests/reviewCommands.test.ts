@@ -10,6 +10,7 @@ import {
 } from "../src/cli/commands/reviewCommands.js";
 import { HarnessError } from "../src/errors.js";
 import { readTaskReviews } from "../src/domain/task.js";
+import { ReviewService } from "../src/review/application/reviewService.js";
 import { InMemoryRepositoryStore } from "../src/store/inMemoryRepositoryStore.js";
 import { InMemoryRunStore } from "../src/store/inMemoryRunStore.js";
 import { InMemoryTaskStore } from "../src/store/inMemoryTaskStore.js";
@@ -152,6 +153,42 @@ describe("Review and human approval (v0.2)", () => {
 
     const blocked = await rejectTaskCommand(tasks, runs, "task-001", "not good enough");
     expect(blocked.status).toBe("BLOCKED");
+  });
+
+  // TASK-1242: the test environment is reviewed *after* the task is DONE, so a
+  // human has to be able to reopen finished work with feedback.
+  it("reopens a DONE task with the acceptance feedback", async () => {
+    const { tasks, runs, reviewer } = await reviewedTask(1);
+    await reviewer();
+    await approveTaskCommand(tasks, "task-001", "looks good");
+
+    const reopened = await rejectTaskCommand(
+      tasks,
+      runs,
+      "task-001",
+      "测试环境：间距应该是 24px，不是 16px",
+    );
+
+    expect(reopened.status).toBe("READY");
+    const reviews = readTaskReviews(reopened);
+    expect(reviews.at(-1)?.text).toContain("间距应该是 24px");
+    // The attempt budget does not cap a human reopening finished work.
+    expect(reopened.status).not.toBe("BLOCKED");
+  });
+
+  // TASK-1242: RELEASED is the freeze point — shipped code is not reopened.
+  it("refuses to reopen a task whose delivery is already released", async () => {
+    const { tasks, runs } = await reviewedTask(1);
+    await approveTaskCommand(tasks, "task-001", "looks good");
+    const reviews = new ReviewService({
+      tasks,
+      runs,
+      deliveryStatusForTask: async () => "RELEASED",
+    });
+
+    await expect(
+      reviews.requestChanges("task-001", { channel: "feishu", userId: "ou_admin" }, "还要改"),
+    ).rejects.toThrowError(/已发布/);
   });
 
   it("refuses to approve a task that is not in REVIEW", async () => {

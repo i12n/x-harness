@@ -518,8 +518,15 @@ task
   .description("reject a REVIEW task -> READY/BLOCKED with feedback")
   .option("--feedback <text>", "feedback for the next attempt")
   .action(async (id: string, options: { feedback?: string }) => {
-    await withStores(async ({ tasks, runs, events }) => {
-      const updated = await rejectTaskCommand(tasks, runs, id, options.feedback, events);
+    await withStores(async ({ tasks, runs, events, deliveries }) => {
+      const updated = await rejectTaskCommand(
+        tasks,
+        runs,
+        id,
+        options.feedback,
+        events,
+        deliveries,
+      );
       console.log(`${updated.id} -> ${updated.status}`);
     });
   });

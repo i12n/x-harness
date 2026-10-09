@@ -1,6 +1,7 @@
 import { readFile, readdir } from "node:fs/promises";
 import { join, relative } from "node:path";
 import type { Repository } from "../domain/repository.js";
+import { readTaskReviews } from "../domain/task.js";
 import type { Task } from "../domain/task.js";
 import { ValidationError } from "../errors.js";
 import type { AgentContext } from "./types.js";
@@ -177,8 +178,9 @@ function composeMultiRepositoryPrompt(
       `Acceptance criteria:\n${task.acceptance.map((item) => `- ${item}`).join("\n")}`,
     );
   }
-  if (Object.keys(task.constraints).length > 0) {
-    sections.push(`Constraints: ${JSON.stringify(task.constraints)}`);
+  const constraints = constraintsSection(task);
+  if (constraints) {
+    sections.push(constraints);
   }
 
   const contextLines: string[] = [
@@ -236,8 +238,13 @@ function composePrompt(
       `Acceptance criteria:\n${task.acceptance.map((item) => `- ${item}`).join("\n")}`,
     );
   }
-  if (Object.keys(task.constraints).length > 0) {
-    sections.push(`Constraints: ${JSON.stringify(task.constraints)}`);
+  const constraints = constraintsSection(task);
+  if (constraints) {
+    sections.push(constraints);
+  }
+  const review = latestReviewSection(task);
+  if (review) {
+    sections.push(review);
   }
   if (context.instructions.length > 0) {
     const blocks = context.instructions
@@ -265,6 +272,33 @@ function docIndexSection(docIndex: string[]): string {
     "Project docs — read only the files you need (do not cat whole documents):",
     ...docIndex.map((path) => `- ${path}`),
   ].join("\n");
+}
+
+/**
+ * TASK-1242: a reopened task must know what the reviewer/human objected to.
+ *
+ * Feedback lives in `task.constraints.reviews`, which reaches the prompt only as
+ * a JSON blob among the constraints. Stating the latest one as its own section is
+ * what makes the "打回 → 带着意见重跑" loop actually work.
+ */
+function latestReviewSection(task: Task): string | undefined {
+  const reviews = readTaskReviews(task);
+  const latest = reviews[reviews.length - 1];
+  const text = latest?.text.trim();
+  if (!text) {
+    return undefined;
+  }
+  return `Latest review feedback (the reason this run exists — address it):\n${text}`;
+}
+
+/**
+ * Constraints reach the prompt as JSON, but the reviews array does not belong in
+ * it: every past review would be re-sent forever, and the latest one is stated
+ * separately above. Reviews are already rendered by `latestReviewSection`.
+ */
+function constraintsSection(task: Task): string | undefined {
+  const { reviews: _reviews, ...rest } = task.constraints;
+  return Object.keys(rest).length > 0 ? `Constraints: ${JSON.stringify(rest)}` : undefined;
 }
 
 /**

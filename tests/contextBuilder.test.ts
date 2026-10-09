@@ -101,6 +101,35 @@ describe("ContextBuilder", () => {
     expect(context.prompt).toContain("Do not update task boards, changelogs");
   });
 
+  // TASK-1242: the loop "打回 → 带着意见重跑" only works if the agent is told
+  // what the reviewer objected to — and not just as raw JSON among constraints.
+  it("states the latest review feedback as its own section", async () => {
+    const workspace = mkdtempSync(join(tmpdir(), "ai-harness-workspace-"));
+    const context = await buildAgentContext({
+      runId: "run-004",
+      task: {
+        ...task(),
+        status: "READY",
+        constraints: {
+          reviews: [
+            { at: "2026-10-09T00:00:00.000Z", runId: "human-rejection", text: "旧的意见" },
+            {
+              at: "2026-10-09T01:00:00.000Z",
+              runId: "human-rejection",
+              text: "CHANGES REQUESTED: 间距应该是 24px，不是 16px",
+            },
+          ],
+        },
+      },
+      repository: repository(),
+      workspacePath: workspace,
+    });
+
+    expect(context.prompt).toContain("Latest review feedback");
+    expect(context.prompt).toContain("间距应该是 24px");
+    expect(context.prompt).not.toContain("旧的意见");
+  });
+
   it("keeps a large documentation tree out of the prompt (TASK-1236)", async () => {
     const workspace = mkdtempSync(join(tmpdir(), "ai-harness-workspace-"));
     writeFileSync(join(workspace, "AGENTS.md"), "Keep it small.");

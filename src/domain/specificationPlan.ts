@@ -69,3 +69,22 @@ export function planItemId(specificationId: string, position: number): string {
 export function plannedTaskId(specificationId: string, position: number): string {
   return `task-${specificationId}-${position}`;
 }
+
+/**
+ * Reverse of {@link plannedTaskId}: the Specification a planned Task came from.
+ * Returns `undefined` for Tasks that were not produced by planning (hand-made or
+ * demo ids), so callers treat "unknown" as "no owning Specification".
+ */
+export function specificationIdOfTask(taskId: string): string | undefined {
+  const prefix = "task-";
+  const marker = "spec-";
+  if (!taskId.startsWith(`${prefix}${marker}`)) {
+    return undefined;
+  }
+  const separator = taskId.lastIndexOf("-");
+  if (separator <= `${prefix}${marker}`.length) {
+    return undefined;
+  }
+  const specificationId = taskId.slice(prefix.length, separator);
+  return specificationId.startsWith(marker) ? specificationId : undefined;
+}

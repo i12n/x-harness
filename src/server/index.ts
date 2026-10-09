@@ -52,7 +52,7 @@ import { Loop } from "../loop/loop.js";
 import { LlmProblemAnalyzer } from "../problem/application/llmAnalyzer.js";
 import { ProblemService } from "../problem/application/service.js";
 import { ConfirmationLoop } from "../problem/confirmationLoop.js";
-import { ReviewService } from "../review/application/reviewService.js";
+import { ReviewService, deliveryStatusForTask } from "../review/application/reviewService.js";
 import { RunService } from "../run/application/runService.js";
 import { TaskRunService } from "../run/application/taskRunService.js";
 import { Scheduler } from "../scheduler/scheduler.js";
@@ -148,6 +148,8 @@ export class HarnessRuntime {
       tasks: stores.tasks,
       runs: stores.runs,
       events: stores.events,
+      // TASK-1242: reopening finished work stops at a released delivery.
+      deliveryStatusForTask: deliveryStatusForTask(stores.deliveries),
     });
     const worker = new Worker({
       runStore: stores.runs,

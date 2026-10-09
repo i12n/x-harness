@@ -4,12 +4,16 @@ import type { Run } from "../../domain/run.js";
 import type { Task, TaskReview } from "../../domain/task.js";
 import { HarnessError } from "../../errors.js";
 import type { RepositoryStore } from "../../store/repositoryStore.js";
+import type { DeliveryStore } from "../../store/deliveryStore.js";
 import type { EventStore } from "../../store/eventStore.js";
 import type { RunStore } from "../../store/runStore.js";
 import type { TaskStore } from "../../store/taskStore.js";
 import type { WorkspaceManager } from "../../workspace/manager.js";
 import { extractWorkspaceInfo } from "../../workspace/info.js";
-import { ReviewService } from "../../review/application/reviewService.js";
+import {
+  ReviewService,
+  deliveryStatusForTask,
+} from "../../review/application/reviewService.js";
 
 export interface ReviewRunParams {
   tasks: TaskStore;
@@ -101,8 +105,14 @@ export async function rejectTaskCommand(
   taskId: string,
   feedback?: string,
   events?: EventStore,
+  deliveries?: Pick<DeliveryStore, "findDeliveryBySpecification">,
 ): Promise<Task> {
-  return new ReviewService({ tasks, runs, events }).requestChanges(
+  return new ReviewService({
+    tasks,
+    runs,
+    events,
+    ...(deliveries ? { deliveryStatusForTask: deliveryStatusForTask(deliveries) } : {}),
+  }).requestChanges(
     taskId,
     { channel: "cli", userId: "cli" },
     feedback,
