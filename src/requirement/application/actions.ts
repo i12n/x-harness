@@ -39,16 +39,36 @@ export function commandsForRequirementAction(
         };
       }
       const feedback = asText(action.payload?.feedback);
-      const targets = view.tasks.filter((task) => task.status === "DONE");
+      // TASK-1249: anything that has stopped moving can be sent back — waiting
+      // for review, finished, or stuck after exhausting its attempts. Only the
+      // classic "reject a REVIEW task" case used to work, which is exactly the
+      // moment a human most often wants to reject.
+      const eligible = view.tasks.filter(
+        (task) =>
+          task.status === "REVIEW" || task.status === "DONE" || task.status === "BLOCKED",
+      );
+      const bound =
+        view.boundTask && eligible.some((task) => task.id === view.boundTask!.id)
+          ? [eligible.find((task) => task.id === view.boundTask!.id)!]
+          : [];
+      const targets = bound.length > 0 ? bound : eligible;
       if (targets.length === 0) {
+        const running = view.tasks.filter(
+          (task) => task.status === "RUNNING" || task.status === "VERIFYING",
+        );
         return {
           commands: [],
-          ask: "现在还没有做完的开发点可以打回；你要是想改需求，直接说要改成什么。",
+          ask:
+            running.length > 0
+              ? "这项还在跑，等它跑完再打回（或者先说要停）。"
+              : "现在还没有可打回的开发点；你要是想改需求，直接说要改成什么。",
         };
       }
       if (targets.length > 1) {
         // Precision beats guessing: ask which deliverable to redo, by title.
-        const options = targets.map((task) => task.title.slice(0, 24));
+        const options = targets.map(
+          (task) => `${task.title.slice(0, 20)}（${statusLabel(task.status)}）`,
+        );
         return {
           commands: [],
           ask: `这项需求有 ${targets.length} 个开发点，重做哪些？[${options.join("] [")}] [全部]`,
@@ -93,10 +113,7 @@ export function commandsForRequirementAction(
     }
 
     case "rerun": {
-      const target =
-        view.boundTask ??
-        view.tasks.find((task) => task.status !== "DONE") ??
-        view.tasks[0];
+      const target = view.currentTask ?? view.tasks[0];
       if (!target) {
         return { commands: [], ask: "这项需求还没有可重跑的开发点。" };
       }
@@ -138,4 +155,21 @@ export function titleFromStatement(statement: string): string {
 
 function asText(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function statusLabel(status: string): string {
+  switch (status) {
+    case "REVIEW":
+      return "等人验收";
+    case "DONE":
+      return "已完成";
+    case "BLOCKED":
+      return "已阻塞";
+    case "RUNNING":
+      return "执行中";
+    case "QUEUED":
+      return "排队中";
+    default:
+      return status;
+  }
 }

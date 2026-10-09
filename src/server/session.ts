@@ -653,7 +653,10 @@ export class ChatSession {
         target,
         {
           conversationId: target.conversationId,
-          text: [hint, outcome.ask].filter(Boolean).join("\n"),
+          // TASK-1249: name the requirement the bot acted on. When a chat has
+          // more than one similar requirement, this is what shows the operator
+          // that the answer belongs to a different one than they meant.
+          text: [hint, `「${view.title}」：${outcome.ask}`].filter(Boolean).join("\n"),
         },
         routing,
       );

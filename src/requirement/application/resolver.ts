@@ -35,8 +35,16 @@ export interface RequirementView {
   specification?: Specification;
   delivery?: Delivery;
   tasks: Task[];
-  /** The task this conversation is currently bound to, when any. */
+  /**
+   * The task this conversation is explicitly bound to (`subject_type=task|run`).
+   * Absent when the conversation is bound to the requirement itself.
+   */
   boundTask?: Task;
+  /**
+   * The task an action should default to: the explicit binding, else the one
+   * still moving, else the newest. Convenience, not a binding.
+   */
+  currentTask?: Task;
 }
 
 export interface RequirementResolver {
@@ -110,9 +118,12 @@ export function createRequirementResolver(
             .catch(() => undefined)
         : undefined;
       const tasks = specification ? await tasksOfSpecification(deps, specification.id) : [];
-      if (!boundTask && tasks.length > 0) {
-        boundTask = tasks.find((task) => task.status !== "DONE") ?? tasks[tasks.length - 1];
-      }
+      const explicitBound = boundTask;
+      const currentTask =
+        explicitBound ??
+        (tasks.length > 0
+          ? (tasks.find((task) => task.status !== "DONE") ?? tasks[tasks.length - 1])
+          : undefined);
 
       return {
         ...(problem ? { problemId: problem.id, problem } : {}),
@@ -121,7 +132,8 @@ export function createRequirementResolver(
         ...(specification ? { specification } : {}),
         ...(delivery ? { delivery } : {}),
         tasks,
-        ...(boundTask ? { boundTask } : {}),
+        ...(explicitBound ? { boundTask: explicitBound } : {}),
+        ...(currentTask ? { currentTask } : {}),
       };
     },
   };

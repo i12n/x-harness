@@ -15,7 +15,14 @@ import { InMemoryTaskStore } from "../src/store/inMemoryTaskStore.js";
  * TASK-1244: the chat speaks user-level actions; the harness maps them onto
  * whichever internal object the conversation is about.
  */
-async function harness(options: { tasks?: { id: string; status: string }[]; delivery?: string } = {}) {
+async function harness(
+  options: {
+    tasks?: { id: string; status: string }[];
+    delivery?: string;
+    /** Bind the conversation to the problem instead of its first task. */
+    bound?: "task" | "problem";
+  } = {},
+) {
   const tasks = new InMemoryTaskStore();
   const specifications = new InMemorySpecificationStore();
   const plans = new InMemorySpecificationPlanStore();
@@ -66,8 +73,8 @@ async function harness(options: { tasks?: { id: string; status: string }[]; deli
     id: "conv-1",
     channel: "feishu",
     externalChatId: "chat-1",
-    subjectType: "task",
-    subjectId: taskSpecs[0]!.id,
+    subjectType: options.bound === "problem" ? "problem" : "task",
+    subjectId: options.bound === "problem" ? "prob-1" : taskSpecs[0]!.id,
   });
 
   const resolver = createRequirementResolver({
@@ -132,16 +139,51 @@ describe("action → command mapping (TASK-1244)", () => {
     ]);
   });
 
+  // TASK-1249: the review stage is the classic moment to reject, and a task that
+  // ran out of attempts is reopenable by a human too.
+  it("打回 also targets a deliverable waiting for review", async () => {
+    const { view } = await harness({
+      tasks: [
+        { id: "task-spec-1-0", status: "REVIEW" },
+        { id: "task-spec-1-1", status: "BLOCKED" },
+      ],
+      delivery: "IN_PROGRESS",
+    });
+    const outcome = commandsForRequirementAction(
+      { type: "reject", payload: { feedback: "还是 8px 不对" } },
+      view,
+    );
+
+    expect(outcome.commands).toEqual([
+      {
+        type: "review.request_changes",
+        payload: { taskId: "task-spec-1-0", feedback: "还是 8px 不对" },
+      },
+    ]);
+  });
+
+  it("says it is still running instead of pretending it cannot be rejected", async () => {
+    const { view } = await harness({
+      tasks: [{ id: "task-spec-1-0", status: "RUNNING" }],
+      delivery: "IN_PROGRESS",
+    });
+    const outcome = commandsForRequirementAction({ type: "reject" }, view);
+    expect(outcome.commands).toHaveLength(0);
+    expect(outcome.ask).toContain("还在跑");
+  });
+
   it("asks which deliverable to redo when the requirement has several", async () => {
     const { view } = await harness({
       tasks: [
         { id: "task-spec-1-0", status: "DONE" },
         { id: "task-spec-1-1", status: "DONE" },
       ],
+      bound: "problem",
     });
     const outcome = commandsForRequirementAction({ type: "reject" }, view);
     expect(outcome.commands).toHaveLength(0);
     expect(outcome.ask).toContain("开发点 1");
+    expect(outcome.ask).toContain("已完成");
   });
 
   it("deploy / publish only fire when the stage allows it", async () => {

@@ -65,7 +65,7 @@ export function availableActions(view: RequirementView): string[] {
 }
 
 function latestReviewText(view: RequirementView): string | undefined {
-  const tasks = view.boundTask ? [view.boundTask, ...view.tasks] : view.tasks;
+  const tasks = view.currentTask ? [view.currentTask, ...view.tasks] : view.tasks;
   for (const task of tasks) {
     const reviews = readTaskReviews(task);
     const latest = reviews[reviews.length - 1];

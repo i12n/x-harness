@@ -91,19 +91,23 @@ export class ReviewService {
     feedback?: string,
   ): Promise<Task> {
     const task = await this.deps.tasks.findTask(taskId);
-    // TASK-1242: acceptance keeps happening after the task is DONE — the test
-    // environment is reviewed later, and "that is not what I wanted" has to have
-    // an entrance. DONE is therefore reopenable by a human; RELEASED deliveries
-    // are the real freeze point, and the release record is untouched here.
-    if (task.status !== "REVIEW" && task.status !== "DONE") {
+    // TASK-1242/1249: acceptance keeps happening after the machine is done — the
+    // review step, the test environment, even a task that ran out of attempts.
+    // All three are reopenable by a human; a RELEASED delivery is the real
+    // freeze point, and the release record is untouched here.
+    if (
+      task.status !== "REVIEW" &&
+      task.status !== "DONE" &&
+      task.status !== "BLOCKED"
+    ) {
       throw new HarnessError(
-        `task ${taskId} must be REVIEW or DONE to request changes (status is ${task.status})`,
+        `task ${taskId} must be REVIEW, DONE or BLOCKED to request changes (status is ${task.status})`,
       );
     }
     if (!this.deps.runs) {
       throw new HarnessError("requestChanges requires a run store");
     }
-    if (task.status === "DONE" && this.deps.deliveryStatusForTask) {
+    if (task.status !== "REVIEW" && this.deps.deliveryStatusForTask) {
       const status = await this.deps.deliveryStatusForTask(taskId);
       if (status === "RELEASED") {
         throw new HarnessError(
@@ -115,7 +119,7 @@ export class ReviewService {
     // the attempt budget — the budget exists to stop the *machine* from looping.
     const attempts = (await this.deps.runs.listRuns({ taskId })).length;
     const next: Task["status"] =
-      task.status === "DONE" || attempts < task.maxAttempts ? "READY" : "BLOCKED";
+      task.status === "REVIEW" && attempts >= task.maxAttempts ? "BLOCKED" : "READY";
     const actorLabel = `${actor.channel}:${actor.userId}`;
     let updated = await this.deps.tasks.updateTaskStatus(taskId, next);
     updated = await this.deps.tasks.appendTaskReview(taskId, {
