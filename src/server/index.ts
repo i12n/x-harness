@@ -168,6 +168,8 @@ export class HarnessRuntime {
       reviews,
       // TASK-1245: cut every worktree from the freshest `origin/<branch>`.
       baseRefs: gitService,
+      // TASK-1247: let the agent repair a failed verification in-session.
+      repairRounds: config.repairRounds,
     });
 
     const dependencies = new TaskDependencyService({

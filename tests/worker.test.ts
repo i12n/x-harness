@@ -1,9 +1,11 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { CodexEngine } from "../src/agent/codexEngine.js";
+import type { AgentContext, AgentEngine, AgentResult } from "../src/agent/types.js";
+import { readTaskReviews } from "../src/domain/task.js";
 import { InMemoryRepositoryStore } from "../src/store/inMemoryRepositoryStore.js";
 import { InMemoryRunStore } from "../src/store/inMemoryRunStore.js";
 import { InMemoryTaskStore } from "../src/store/inMemoryTaskStore.js";
@@ -73,7 +75,6 @@ describe("Worker", () => {
       maxAttempts: attempts,
     });
     const worker = new Worker({
-      ...extra,
       runStore: runs,
       taskStore: tasks,
       repositoryStore: repositories,
@@ -92,6 +93,8 @@ describe("Worker", () => {
       workerId: "worker-test",
       heartbeatMs: 50,
       leaseSeconds: 1,
+      // Caller overrides win (agentEngine, repairRounds, baseRefs…).
+      ...extra,
     });
     return { fixture, repositories, tasks, runs, events, worker };
   }
@@ -128,6 +131,121 @@ describe("Worker", () => {
       sha: "deadbeef",
       fetched: true,
     });
+  });
+
+  /**
+   * TASK-1247: an agent that can continue its own session gets one (or more)
+   * repair turn(s) before the Run is called failed.
+   */
+  class RepairingEngine implements AgentEngine {
+    readonly model = "stub";
+    readonly continuations: { prompt: string; sessionId?: string }[] = [];
+    constructor(
+      private readonly firstPass: (workspace: string) => void,
+      private readonly repair: (workspace: string) => void,
+    ) {}
+    async execute(context: AgentContext): Promise<AgentResult> {
+      this.firstPass(context.workspacePath);
+      return result(context.runId, "session-1");
+    }
+    async continue(
+      context: AgentContext,
+      prompt: string,
+      options: { sessionId?: string } = {},
+    ): Promise<AgentResult> {
+      this.continuations.push({ prompt, ...options });
+      this.repair(context.workspacePath);
+      return result(context.runId, options.sessionId);
+    }
+    async cancel(): Promise<void> {}
+  }
+
+  const result = (runId: string, sessionId?: string): AgentResult => ({
+    runId,
+    exitCode: 0,
+    signal: undefined,
+    stdout: sessionId
+      ? `{"type":"thread.started","thread_id":"${sessionId}"}`
+      : "",
+    stderr: "",
+    startedAt: new Date().toISOString(),
+    finishedAt: new Date().toISOString(),
+    ...(sessionId ? { sessionId } : {}),
+  });
+
+  it("repairs a failed verification in the same session instead of giving up", async () => {
+    const engine = new RepairingEngine(
+      () => {},
+      (workspace) => writeFileSync(join(workspace, "solution.txt"), "fixed\n"),
+    );
+    const { runs, worker, events } = await setup(IDLE_CODE, 3, { agentEngine: engine });
+    await runs.createRun({
+      id: "run-001",
+      taskId: "task-001",
+      attempt: 1,
+      agent: "codex",
+      engine: "codex",
+    });
+
+    const outcome = await worker.executeRun("run-001");
+
+    expect(outcome.run.status).toBe("SUCCEEDED");
+    expect(engine.continuations).toHaveLength(1);
+    // Same session, and the brief names the command that failed.
+    expect(engine.continuations[0]!.sessionId).toBe("session-1");
+    expect(engine.continuations[0]!.prompt).toContain("验证失败");
+    expect(engine.continuations[0]!.prompt).toContain("sh checks.sh");
+    const repairs = (await runs.findRun("run-001")).result?.repairs as
+      | { round: number; passed: boolean }[]
+      | undefined;
+    expect(repairs).toEqual([{ round: 1, commands: ["sh checks.sh"], exitCode: 0, passed: true }]);
+    const started = await events.listEvents({ type: "RepairStarted" });
+    expect(started).toHaveLength(1);
+  });
+
+  it("does not burn repair turns on an environmental failure", async () => {
+    const engine = new RepairingEngine(
+      () => {},
+      (workspace) => writeFileSync(join(workspace, "solution.txt"), "fixed\n"),
+    );
+    const { fixture, runs, worker, events } = await setup(IDLE_CODE, 3, {
+      agentEngine: engine,
+    });
+    // A missing binary is not something the agent can fix by editing files.
+    writeFileSync(join(fixture.path, "checks.sh"), "definitely-not-a-command\n");
+    commitFile(fixture.path, "checks.sh", "definitely-not-a-command\n");
+    await runs.createRun({
+      id: "run-001",
+      taskId: "task-001",
+      attempt: 1,
+      agent: "codex",
+      engine: "codex",
+    });
+
+    const outcome = await worker.executeRun("run-001");
+
+    expect(outcome.run.status).toBe("FAILED");
+    expect(engine.continuations).toHaveLength(0);
+    expect(await events.listEvents({ type: "RepairSkipped" })).toHaveLength(1);
+  });
+
+  it("writes the failure onto the task so the next attempt knows what broke", async () => {
+    const { tasks, runs, worker } = await setup(IDLE_CODE);
+    await runs.createRun({
+      id: "run-001",
+      taskId: "task-001",
+      attempt: 1,
+      agent: "codex",
+      engine: "codex",
+    });
+
+    await worker.executeRun("run-001");
+
+    const task = await tasks.findTask("task-001");
+    expect(task.status).toBe("READY");
+    const reviews = readTaskReviews(task);
+    expect(reviews.at(-1)?.text).toContain("VERIFICATION FAILED");
+    expect(reviews.at(-1)?.text).toContain("sh checks.sh");
   });
 
   it("claims, executes, verifies and completes a successful run", async () => {

@@ -1,3 +1,4 @@
+import { looksEnvironmental } from "../agent/types.js";
 import type { AgentEngine, AgentResult } from "../agent/types.js";
 import { buildAgentContext } from "../agent/contextBuilder.js";
 import type { Repository } from "../domain/repository.js";
@@ -21,7 +22,7 @@ import { assessChangeRisk } from "../reviewer/domain/risk.js";
 import type { ChangeRisk } from "../reviewer/domain/risk.js";
 import { assessTestEvidence, describeTestEvidence } from "../reviewer/domain/testEvidence.js";
 import type { TestEvidence } from "../reviewer/domain/testEvidence.js";
-import { parseAgentUsage } from "../agent/usage.js";
+import { parseAgentUsage, type AgentUsage } from "../agent/usage.js";
 import type { ReviewService } from "../review/application/reviewService.js";
 
 /** TASK-1219: default Run cap; `AI_RUN_TIMEOUT_MS=0` disables it. */
@@ -76,6 +77,8 @@ export interface WorkerOptions {
    * `origin/<branch>`). Absent keeps the pre-1245 behaviour (local branch).
    */
   baseRefs?: BaseRefResolver;
+  /** TASK-1247: in-session repair turns after a failed verification (default 2). */
+  repairRounds?: number;
 }
 
 /** Narrow port so the worker never depends on git plumbing details. */
@@ -120,6 +123,10 @@ export class Worker {
   private readonly reviewerMode: ReviewerMode;
   private readonly reviews: ReviewService | undefined;
   private readonly baseRefs: BaseRefResolver | undefined;
+  /** TASK-1247: how many in-session repair turns a failed verification may use. */
+  private readonly repairRounds: number;
+  /** Per-run usage totals (a repair turn adds to, not replaces, the total). */
+  private readonly usageTotals = new Map<string, AgentUsage>();
 
   constructor(options: WorkerOptions) {
     this.runStore = options.runStore;
@@ -145,6 +152,8 @@ export class Worker {
     this.reviewerMode = options.reviewerMode ?? "off";
     this.reviews = options.reviews;
     this.baseRefs = options.baseRefs;
+    this.repairRounds =
+      options.repairRounds ?? Number(process.env.AI_REPAIR_ROUNDS ?? 2);
   }
 
   async executeRun(
@@ -337,13 +346,13 @@ export class Worker {
           taskId: task.id,
           runId,
         });
-        await this.recoverTask(task, claimed.attempt);
+        await this.recoverTask(task, claimed, undefined, `agent ${agentOutcome}`);
         await this.cleanupRunWorkspaces(runId, task.id, runWorkspaces, runTargets);
         throw new WorkerExecutionError(
           `run ${runId} ${agentOutcome.toLowerCase()}`,
         );
       }
-      const agentResult = agentOutcome;
+      let agentResult = agentOutcome;
       await this.emit("AgentFinished", {
         taskId: task.id,
         runId,
@@ -353,20 +362,69 @@ export class Worker {
       await this.runStore.updateRunStatus(runId, "VERIFYING");
       await this.taskStore.updateTaskStatus(task.id, "VERIFYING");
       await this.emit("VerificationStarted", { taskId: task.id, runId });
-      const targetResults = await this.targetVerifier.verifyTargets(
-        orderedTargets.map(({ target, repository }) => ({
-          targetId: target.id,
-          repositoryId: repository.id,
-          repositoryName: repository.name,
-          role: target.role,
-          workdir: execution.workdirs?.[target.id] ?? execution.workdir,
-          commands: repository.verificationCommands,
-          // TASK-1220: the Task's own checks (from its work item) run too.
-          acceptanceChecks: acceptanceChecksOf(task.constraints),
-          exec,
-        })),
-      );
-      const verification = aggregateVerification(targetResults);
+      const verifyTargets = async (): Promise<TargetVerificationResult[]> =>
+        this.targetVerifier.verifyTargets(
+          orderedTargets.map(({ target, repository }) => ({
+            targetId: target.id,
+            repositoryId: repository.id,
+            repositoryName: repository.name,
+            role: target.role,
+            workdir: execution.workdirs?.[target.id] ?? execution.workdir,
+            commands: repository.verificationCommands,
+            // TASK-1220: the Task's own checks (from its work item) run too.
+            acceptanceChecks: acceptanceChecksOf(task.constraints),
+            exec,
+          })),
+        );
+      let targetResults = await verifyTargets();
+      let verification = aggregateVerification(targetResults);
+
+      // TASK-1247: a failed verification is not the end while the agent can
+      // still fix it *in the same session* — same conversation, same workspace,
+      // same context (the follow-up turn reuses the provider's prompt cache).
+      // Environmental failures (missing binary, permissions) are not repair
+      // material: retrying them only burns attempts.
+      const repairs: RepairRecord[] = [];
+      for (let round = 1; round <= this.repairRounds && !verification.passed; round += 1) {
+        const brief = repairBrief(targetResults);
+        if (!brief) {
+          break;
+        }
+        if (looksEnvironmental(brief.text)) {
+          await this.emit("RepairSkipped", {
+            taskId: task.id,
+            runId,
+            payload: { round, reason: "environmental", detail: truncate(brief.text, 400) },
+          });
+          break;
+        }
+        if (!this.agentEngine.continue) {
+          break;
+        }
+        await this.emit("RepairStarted", {
+          taskId: task.id,
+          runId,
+          payload: { round, commands: brief.commands },
+        });
+        const repaired = await this.agentEngine.continue(context, brief.prompt, {
+          ...(agentResult.sessionId ? { sessionId: agentResult.sessionId } : {}),
+        });
+        await this.collectUsage(task.id, runId, repaired.stdout);
+        agentResult = repaired;
+        targetResults = await verifyTargets();
+        verification = aggregateVerification(targetResults);
+        repairs.push({
+          round,
+          commands: brief.commands,
+          exitCode: repaired.exitCode,
+          passed: verification.passed,
+        });
+        await this.emit("RepairFinished", {
+          taskId: task.id,
+          runId,
+          payload: { round, passed: verification.passed, exitCode: repaired.exitCode },
+        });
+      }
       const acceptance = buildAcceptanceEvidence(
         task.acceptance,
         acceptanceChecksOf(task.constraints),
@@ -391,14 +449,7 @@ export class Worker {
         runId,
       );
       // TASK-1215 (①): keep the usage codex reported, so cost is answerable.
-      const usage = parseAgentUsage(agentResult.stdout);
-      if (usage) {
-        await this.emit("RunUsage", {
-          taskId: task.id,
-          runId,
-          payload: usage,
-        });
-      }
+      const usage = await this.collectUsage(task.id, runId, agentResult.stdout);
       await this.emit(
         verification.passed ? "VerificationPassed" : "VerificationFailed",
         {
@@ -443,6 +494,7 @@ export class Worker {
             diff,
             review,
             risk,
+            ...(repairs.length > 0 ? { repairs } : {}),
             ...(usage ? { usage } : {}),
           },
           finishedAt,
@@ -469,6 +521,7 @@ export class Worker {
           workspaces,
           targetResults,
           finishedAt,
+          repairs,
         );
         await this.emit("RunFailed", {
           taskId: task.id,
@@ -509,7 +562,7 @@ export class Worker {
           runId,
           payload: { reason: message },
         });
-        await this.recoverTask(task, claimed.attempt);
+        await this.recoverTask(task, claimed, undefined, message);
         await this.cleanupRunWorkspaces(runId, claimed.taskId, runWorkspaces, runTargets);
       } catch {
         // Persisting the failure must not hide the original error.
@@ -525,6 +578,8 @@ export class Worker {
         }
       }
       clearInterval(heartbeat);
+      // TASK-1247: the usage total belongs to this Run only.
+      this.usageTotals.delete(runId);
     }
   }
 
@@ -636,6 +691,7 @@ export class Worker {
     workspaces: ManagedWorkspace[],
     targets: TargetVerificationResult[],
     finishedAt: string,
+    repairs: RepairRecord[] = [],
   ): Promise<void> {
     await this.runStore.completeRun(runId, {
       status: "FAILED",
@@ -650,6 +706,7 @@ export class Worker {
         targets,
         agentStdout: truncate(agentResult.stdout, 100_000),
         agentStderr: truncate(agentResult.stderr, 100_000),
+        ...(repairs.length > 0 ? { repairs } : {}),
       },
       error: {
         verification: verification.checks.map((check) => ({
@@ -675,13 +732,60 @@ export class Worker {
       },
       finishedAt,
     });
-    await this.recoverTask(task, run.attempt);
+    await this.recoverTask(task, run, targets);
   }
 
-  /** FAILED -> READY while attempts remain, otherwise -> BLOCKED. */
-  private async recoverTask(task: Task, attempt: number): Promise<void> {
+  /**
+   * FAILED -> READY while attempts remain, otherwise -> BLOCKED.
+   *
+   * TASK-1246: the failure itself is written onto the Task, so a *fresh* attempt
+   * (new Run, new worktree) still knows which command failed and why — the
+   * context builder renders the newest review entry into the prompt.
+   */
+  private async recoverTask(
+    task: Task,
+    run: Run,
+    targets?: TargetVerificationResult[],
+    fallback?: string,
+  ): Promise<void> {
+    const attempt = run.attempt;
     const next: Task["status"] = attempt >= task.maxAttempts ? "BLOCKED" : "READY";
     await this.taskStore.updateTaskStatus(task.id, next);
+    const brief = targets ? repairBrief(targets) : undefined;
+    const detail = brief?.text ?? fallback?.trim();
+    if (detail) {
+      try {
+        await this.taskStore.appendTaskReview(task.id, {
+          at: new Date().toISOString(),
+          runId: run.id,
+          text: `VERIFICATION FAILED (attempt ${attempt}/${task.maxAttempts})\n${truncate(detail, 2_000)}`,
+        });
+      } catch {
+        // The failure record must never mask the run status already persisted.
+      }
+    }
+  }
+
+  /**
+   * TASK-1215: usage is reported per turn; a repair turn adds to the Run's total
+   * instead of replacing it.
+   */
+  private async collectUsage(
+    taskId: string,
+    runId: string,
+    stdout: string | undefined,
+  ): Promise<AgentUsage | undefined> {
+    const usage = parseAgentUsage(stdout);
+    if (!usage) {
+      return undefined;
+    }
+    this.usageTotals.set(
+      runId,
+      addUsage(this.usageTotals.get(runId), usage),
+    );
+    const total = this.usageTotals.get(runId)!;
+    await this.emit("RunUsage", { taskId, runId, payload: total });
+    return total;
   }
 
   private startHeartbeat(runId: string, onCancel?: () => void): NodeJS.Timeout {
@@ -855,4 +959,68 @@ function aggregateVerification(
       0,
     ),
   };
+}
+
+/** TASK-1247: one in-session repair turn, recorded on the Run result. */
+export interface RepairRecord {
+  round: number;
+  /** The failing commands the agent was asked to fix. */
+  commands: string[];
+  exitCode: number | null;
+  passed: boolean;
+}
+
+/**
+ * TASK-1247: what to tell the agent after a failed verification.
+ *
+ * Short on purpose: the repair turn re-sends the whole accumulated session, so
+ * the brief carries the failing commands and a trimmed tail of their output —
+ * enough to fix, not a second copy of the build log.
+ */
+export function repairBrief(targets: TargetVerificationResult[]): {
+  commands: string[];
+  text: string;
+  prompt: string;
+} | undefined {
+  const failing = targets.flatMap((target) =>
+    target.checks
+      .filter((check) => check.status !== "passed")
+      .map((check) => ({
+        command: check.command || "(no command configured)",
+        exitCode: check.exitCode,
+        output: check.output ?? "",
+      })),
+  );
+  if (failing.length === 0) {
+    return undefined;
+  }
+  const shown = failing.slice(0, 5);
+  const text = shown
+    .map((check) => `${check.command} → exit ${check.exitCode ?? "?"}\n${check.output}`)
+    .join("\n\n");
+  const prompt = [
+    "验证失败。请修复下面这个失败，然后停下；不要改动与它无关的文件。",
+    "",
+    ...shown.map(
+      (check) =>
+        `- \`${check.command}\` → exit ${check.exitCode ?? "?"}\n${truncate(
+          check.output.trim(),
+          1_200,
+        )}`,
+    ),
+  ].join("\n");
+  return { commands: shown.map((check) => check.command), text, prompt };
+}
+
+/** TASK-1215: sum the usage of every turn in one Run. */
+export function addUsage(
+  current: AgentUsage | undefined,
+  next: AgentUsage,
+): AgentUsage {
+  if (!current) {
+    return next;
+  }
+  const inputTokens = current.inputTokens + next.inputTokens;
+  const outputTokens = current.outputTokens + next.outputTokens;
+  return { inputTokens, outputTokens, totalTokens: inputTokens + outputTokens };
 }

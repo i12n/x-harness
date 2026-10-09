@@ -116,11 +116,45 @@ export class CodexEngine implements AgentEngine {
   }
 
   execute(context: AgentContext): Promise<AgentResult> {
+    return this.runCodex(context, this.spawnArgs(context), context.prompt);
+  }
+
+  /**
+   * TASK-1247: continue the same session after a failed verification.
+   *
+   * `codex exec resume --last` reuses the recorded thread — same conversation,
+   * same workspace, and the provider's context cache still applies (verified in
+   * the run image: a follow-up turn cost 8.6k input tokens, 7.7k of them cached).
+   * `--last` is deliberate: the harness runs one agent per container, so the
+   * newest session is by construction this run's own.
+   */
+  continue(
+    context: AgentContext,
+    prompt: string,
+    options: { sessionId?: string } = {},
+  ): Promise<AgentResult> {
+    const args = [
+      "exec",
+      ...this.configArgs,
+      "--sandbox",
+      this.sandbox,
+      "--json",
+      "resume",
+      ...(options.sessionId ? [options.sessionId] : ["--last"]),
+      "-",
+    ];
+    return this.runCodex(context, args, prompt);
+  }
+
+  private runCodex(
+    context: AgentContext,
+    args: string[],
+    prompt: string,
+  ): Promise<AgentResult> {
     if (context.execution?.exec) {
-      return this.executeViaDriver(context, context.execution.exec);
+      return this.executeViaDriver(context, context.execution.exec, args, prompt);
     }
     return new Promise<AgentResult>((resolve, reject) => {
-      const args = this.spawnArgs(context);
       const startedAt = new Date().toISOString();
       let child: ChildProcess;
       try {
@@ -165,10 +199,11 @@ export class CodexEngine implements AgentEngine {
           stderr,
           startedAt,
           finishedAt: new Date().toISOString(),
+          ...sessionIdOf(stdout),
         });
       });
 
-      child.stdin?.end(context.prompt);
+      child.stdin?.end(prompt);
     });
   }
 
@@ -198,17 +233,19 @@ export class CodexEngine implements AgentEngine {
   private async executeViaDriver(
     context: AgentContext,
     exec: NonNullable<AgentContext["execution"]>["exec"],
+    args: string[] = this.spawnArgs(context),
+    prompt: string = context.prompt,
   ): Promise<AgentResult> {
     const startedAt = new Date().toISOString();
     const controller = new AbortController();
     this.activeExec.set(context.runId, controller);
     try {
       const result = await exec!(
-        [this.executable, ...this.spawnArgs(context)],
+        [this.executable, ...args],
         {
           cwd: context.execution?.workdir,
           env: { ...this.env },
-          stdin: context.prompt,
+          stdin: prompt,
           signal: controller.signal,
         },
       );
@@ -220,6 +257,7 @@ export class CodexEngine implements AgentEngine {
         stderr: result.stderr,
         startedAt,
         finishedAt: new Date().toISOString(),
+        ...sessionIdOf(result.stdout),
       };
     } catch (error) {
       throw new AgentExecutionError(
@@ -234,4 +272,33 @@ export class CodexEngine implements AgentEngine {
 interface ActiveChild {
   child: ChildProcess;
   forceKill: NodeJS.Timeout | undefined;
+}
+
+/**
+ * TASK-1247: the CLI announces its session on the first JSONL line:
+ * `{"type":"thread.started","thread_id":"…"}`. Parsing is tolerant — a stream
+ * that does not carry one simply yields no session id (and no repair turns).
+ */
+export function sessionIdOf(stdout: string | undefined): { sessionId?: string } {
+  if (!stdout) {
+    return {};
+  }
+  for (const line of stdout.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed.startsWith("{")) {
+      continue;
+    }
+    try {
+      const record = JSON.parse(trimmed) as { type?: unknown; thread_id?: unknown };
+      if (record.type === "thread.started" && typeof record.thread_id === "string") {
+        const sessionId = record.thread_id.trim();
+        if (sessionId) {
+          return { sessionId };
+        }
+      }
+    } catch {
+      // Not JSON or not ours; keep scanning.
+    }
+  }
+  return {};
 }

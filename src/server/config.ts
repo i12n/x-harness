@@ -56,6 +56,8 @@ export interface ServerConfig {
    * picked up by the Scheduler without a human `运行 task-x` per task.
    */
   autoStart: boolean;
+  /** TASK-1247: in-session repair turns after a failed verification. */
+  repairRounds: number;
   /**
    * TASK-1221: `off` = human review only, `shadow` = record the reviewer's
    * verdict without acting on it, `on` = approve automatically when safe.
@@ -119,6 +121,10 @@ export function loadServerConfig(env: EnvLike = process.env): ServerConfig {
     executionDriver: parseDriver(env.AI_EXECUTION_DRIVER),
     autoBootstrapSpecification: envFlag(env.AI_AUTO_BOOTSTRAP_SPECIFICATION, true),
     autoStart: envFlag(env.AI_AUTO_START, true),
+    // TASK-1247: 0 disables in-session repair; unset means the default (2).
+    repairRounds: env.AI_REPAIR_ROUNDS?.trim()
+      ? nonNegativeInt(env.AI_REPAIR_ROUNDS, "AI_REPAIR_ROUNDS")
+      : 2,
     reviewer: parseReviewerMode(env.AI_REVIEWER),
     dailyTokenBudget: nonNegativeInt(env.AI_TOKEN_BUDGET_PER_DAY, "AI_TOKEN_BUDGET_PER_DAY"),
     intentNotes: optional(env, "AI_INTENT_NOTES"),

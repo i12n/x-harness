@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { CodexEngine } from "../src/agent/codexEngine.js";
+import { sessionIdOf } from "../src/agent/codexEngine.js";
 import type { AgentContext } from "../src/agent/types.js";
 
 const FAKE_WRITE_CODE = [
@@ -48,6 +49,61 @@ function context(runId: string, workspacePath: string): AgentContext {
 }
 
 describe("CodexEngine", () => {
+  // TASK-1247: the session id is what lets a failed verification be repaired in
+  // the same conversation instead of starting over.
+  it("reads the session id out of the JSONL stream", () => {
+    const stdout = [
+      "Reading additional input from stdin...",
+      '{"type":"thread.started","thread_id":"01a11eda-478f-7271-9b8c-1064638824dd"}',
+      '{"type":"turn.started"}',
+    ].join("\n");
+
+    expect(sessionIdOf(stdout)).toEqual({
+      sessionId: "01a11eda-478f-7271-9b8c-1064638824dd",
+    });
+    expect(sessionIdOf("no json here")).toEqual({});
+    expect(sessionIdOf(undefined)).toEqual({});
+  });
+
+  it("resumes the session with `resume --last` and keeps the sandbox config", async () => {
+    const calls: string[][] = [];
+    const engine = new CodexEngine({ sandbox: "workspace-write" });
+    const runId = "run-301";
+    await engine.continue(
+      {
+        ...context(runId, "/tmp"),
+        execution: {
+          runId,
+          executionId: "exec-1",
+          workspacePath: "/tmp",
+          workdir: "/workspace",
+          driver: "docker",
+          exec: async (command: string[]) => {
+            calls.push(command);
+            return {
+              exitCode: 0,
+              signal: undefined,
+              stdout: '{"type":"thread.started","thread_id":"resumed-id"}',
+              stderr: "",
+            };
+          },
+        },
+      },
+      "验证失败：请修复",
+    );
+
+    expect(calls[0]).toEqual([
+      "codex",
+      "exec",
+      "--sandbox",
+      "workspace-write",
+      "--json",
+      "resume",
+      "--last",
+      "-",
+    ]);
+  });
+
   it("spawns the engine in the workspace and streams the prompt on stdin", async () => {
     const workspace = mkdtempSync(join(tmpdir(), "ai-harness-agent-"));
     const engine = new CodexEngine({

@@ -40,6 +40,10 @@ export const EVENT_TYPES = [
   // TASK-1245: which commit a Run's worktrees were cut from (staleness audit).
   "WorkspaceBaseResolved",
   "WorkspaceBaseUnresolved",
+  // TASK-1247: in-session repair turns after a failed verification.
+  "RepairStarted",
+  "RepairFinished",
+  "RepairSkipped",
 ] as const;
 
 export type EventType = (typeof EVENT_TYPES)[number];
