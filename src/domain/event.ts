@@ -37,6 +37,9 @@ export const EVENT_TYPES = [
   "TaskApproved",
   "TaskRejected",
   "TaskDone",
+  // TASK-1245: which commit a Run's worktrees were cut from (staleness audit).
+  "WorkspaceBaseResolved",
+  "WorkspaceBaseUnresolved",
 ] as const;
 
 export type EventType = (typeof EVENT_TYPES)[number];

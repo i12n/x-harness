@@ -190,6 +190,58 @@ describe("GitService.publishWorkspace", () => {
   });
 });
 
+/**
+ * TASK-1245: Runs used to start from whatever the local base checkout last
+ * fetched — `/srv/repos/x-music` sat at `beecba7` while `origin/main` was at
+ * `aebca08`, and a test branch even "reverted" the newer commits. The base ref
+ * resolver fetches and prefers `origin/<branch>`.
+ */
+describe("GitService.prepareBaseRef", () => {
+  it("fetches and prefers origin/<default branch> over the stale local branch", async () => {
+    // Someone else pushes while our checkout stays behind.
+    const other = join(dir, "other");
+    execFileSync("git", ["clone", "-q", origin, other], { stdio: "ignore" });
+    writeFileSync(join(other, "app.txt"), "two\n");
+    git(["add", "-A"], other);
+    git(["commit", "-m", "upstream moved on"], other);
+    execFileSync("git", ["push", "-q", "origin", "main"], { cwd: other, stdio: "ignore" });
+    const localHead = git(["rev-parse", "HEAD"], base).trim();
+    const remoteHead = git(["rev-parse", "origin/main"], other).trim();
+    expect(remoteHead).not.toBe(localHead);
+
+    const outcome = await new GitService().prepareBaseRef(makeRepository());
+
+    expect(outcome.fetched).toBe(true);
+    expect(outcome.ref).toBe("origin/main");
+    expect(outcome.sha).toBe(remoteHead);
+    // The local branch was *not* touched — worktrees just start from the remote tip.
+    expect(git(["rev-parse", "HEAD"], base).trim()).toBe(localHead);
+  });
+
+  it("falls back to the local branch when there is no remote", async () => {
+    const lonely = mkdtempSync(join(tmpdir(), "ai-git-lonely-"));
+    git(["init", "-b", "main"], lonely);
+    writeFileSync(join(lonely, "app.txt"), "one\n");
+    git(["add", "-A"], lonely);
+    git(["commit", "-m", "init"], lonely);
+    const repository = buildRepository({
+      id: "repo-2",
+      name: "lonely",
+      url: "git@github.com:example/lonely.git",
+      localPath: lonely,
+      verificationCommands: ["true"],
+    });
+
+    const outcome = await new GitService().prepareBaseRef(repository);
+
+    expect(outcome.fetched).toBe(false);
+    expect(outcome.note).toContain("fetch 失败");
+    expect(outcome.ref).toBe("main");
+    expect(outcome.sha).toBe(git(["rev-parse", "HEAD"], lonely).trim());
+    rmSync(lonely, { recursive: true, force: true });
+  });
+});
+
 describe("GitService.syncRepository", () => {
   function cloneElsewhere(): string {
     const other = join(dir, "other");

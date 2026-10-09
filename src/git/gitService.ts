@@ -38,6 +38,18 @@ export interface SyncOutcome {
   message: string;
 }
 
+/** TASK-1245: which commit a Run's worktree should start from. */
+export interface BaseRefOutcome {
+  /** Ref handed to `git worktree add` (prefers `origin/<branch>`). */
+  ref: string;
+  /** Resolved commit, when it could be read. */
+  sha?: string;
+  /** True when the remote was fetched in this call. */
+  fetched: boolean;
+  /** Set when the fetch failed (offline, auth) and the local ref is used. */
+  note?: string;
+}
+
 export interface PublishOutcome {
   repositoryId: string;
   targetId?: string;
@@ -94,6 +106,42 @@ export class GitService {
    * Task branches are cut from a *local* ref, so without this every task would
    * start from whatever the base checkout last fetched.
    */
+  /**
+   * TASK-1245: the ref a Run's worktree must be cut from.
+   *
+   * Live evidence: `/srv/repos/x-music` sat at `beecba7` while `origin/main` was
+   * at `aebca08`, because nothing in the Run path ever fetched — worktrees were
+   * built from a stale local branch, and a test branch even "reverted" the newer
+   * commits. So: fetch best-effort, then prefer `origin/<branch>` — which is
+   * correct even when the base checkout is dirty, on another branch, or mid-work.
+   */
+  async prepareBaseRef(
+    repository: Repository,
+    baseRef?: string,
+  ): Promise<BaseRefOutcome> {
+    const cwd = repository.localPath;
+    const branch = baseRef?.trim() || repository.defaultBranch;
+    let fetched = false;
+    let note: string | undefined;
+    try {
+      await this.run(["fetch", "--prune", "origin"], cwd);
+      fetched = true;
+    } catch (error) {
+      // Offline or auth trouble must not block work: fall back to what we have.
+      note = `fetch 失败，沿用本地 ${branch}：${describeGitError(error)}`;
+    }
+    for (const ref of [`origin/${branch}`, branch]) {
+      const sha = (
+        await this.tryRun(["rev-parse", "--verify", "--quiet", `${ref}^{commit}`], cwd)
+      )?.trim();
+      if (sha) {
+        return { ref, sha, fetched, ...(note ? { note } : {}) };
+      }
+    }
+    // Nothing resolvable yet — let `git worktree add` fail loudly with its own text.
+    return { ref: branch, fetched, ...(note ? { note } : {}) };
+  }
+
   async syncRepository(repository: Repository): Promise<SyncOutcome> {
     const cwd = repository.localPath;
     const remote = "origin";

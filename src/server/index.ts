@@ -152,6 +152,7 @@ export class HarnessRuntime {
       // TASK-1242: reopening finished work stops at a released delivery.
       deliveryStatusForTask: deliveryStatusForTask(stores.deliveries),
     });
+    const gitService = new GitService();
     const worker = new Worker({
       runStore: stores.runs,
       taskStore: stores.tasks,
@@ -165,6 +166,8 @@ export class HarnessRuntime {
       reviewer: config.reviewer === "off" ? undefined : new LlmReviewerAgent(chat),
       reviewerMode: config.reviewer,
       reviews,
+      // TASK-1245: cut every worktree from the freshest `origin/<branch>`.
+      baseRefs: gitService,
     });
 
     const dependencies = new TaskDependencyService({
@@ -254,7 +257,6 @@ export class HarnessRuntime {
         analyzer: new LlmProblemAnalyzer(chat),
       }),
     );
-    const gitService = new GitService();
     const gitPublish = new GitPublishService({
       tasks: stores.tasks,
       runs: stores.runs,

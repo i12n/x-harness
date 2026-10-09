@@ -71,6 +71,19 @@ export interface WorkerOptions {
   reviewer?: ReviewerAgent;
   reviewerMode?: ReviewerMode;
   reviews?: ReviewService;
+  /**
+   * TASK-1245: resolves the freshest base ref for a Run's worktrees (fetch +
+   * `origin/<branch>`). Absent keeps the pre-1245 behaviour (local branch).
+   */
+  baseRefs?: BaseRefResolver;
+}
+
+/** Narrow port so the worker never depends on git plumbing details. */
+export interface BaseRefResolver {
+  prepareBaseRef(
+    repository: Repository,
+    baseRef?: string,
+  ): Promise<{ ref: string; sha?: string; fetched: boolean; note?: string }>;
 }
 
 export interface ExecuteRunOutcome {
@@ -106,6 +119,7 @@ export class Worker {
   private readonly reviewer: ReviewerAgent | undefined;
   private readonly reviewerMode: ReviewerMode;
   private readonly reviews: ReviewService | undefined;
+  private readonly baseRefs: BaseRefResolver | undefined;
 
   constructor(options: WorkerOptions) {
     this.runStore = options.runStore;
@@ -130,6 +144,7 @@ export class Worker {
     this.reviewer = options.reviewer;
     this.reviewerMode = options.reviewerMode ?? "off";
     this.reviews = options.reviews;
+    this.baseRefs = options.baseRefs;
   }
 
   async executeRun(
@@ -178,6 +193,38 @@ export class Worker {
       }
       runTargets = orderedTargets;
 
+      // TASK-1245: never start a Run from a stale base. Each target's base is
+      // resolved (fetch + origin/<branch>) right before the worktree is cut.
+      const baseByTarget = new Map<string, string>();
+      if (this.baseRefs) {
+        for (const { target, repository } of orderedTargets) {
+          try {
+            const base = await this.baseRefs.prepareBaseRef(repository, target.baseRef);
+            baseByTarget.set(target.id, base.ref);
+            await this.emit("WorkspaceBaseResolved", {
+              taskId: task.id,
+              runId,
+              payload: {
+                targetId: target.id,
+                repositoryId: repository.id,
+                ref: base.ref,
+                ...(base.sha ? { sha: base.sha } : {}),
+                fetched: base.fetched,
+                ...(base.note ? { note: base.note } : {}),
+              },
+            });
+          } catch (error) {
+            // A base that cannot be resolved is not fatal: fall back to what the
+            // Task asked for and let git report the real problem.
+            await this.emit("WorkspaceBaseUnresolved", {
+              taskId: task.id,
+              runId,
+              payload: { repositoryId: repository.id, reason: String(error) },
+            });
+          }
+        }
+      }
+
       const workspaces = await this.workspaceManager.createRunWorkspaces({
         taskId: task.id,
         runId,
@@ -185,7 +232,7 @@ export class Worker {
           targetId: target.id,
           repositoryLocalPath: repository.localPath,
           position: target.position,
-          baseRef: target.baseRef,
+          baseRef: baseByTarget.get(target.id) ?? target.baseRef,
         })),
       });
       runWorkspaces = workspaces;

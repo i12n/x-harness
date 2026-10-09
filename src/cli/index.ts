@@ -1057,6 +1057,8 @@ program
         executionManager,
         eventStore: handle.events,
         workerId: "cli-run",
+        // TASK-1245: same freshest-base rule as the service.
+        baseRefs: new GitService(),
       });
 
       try {
@@ -1134,6 +1136,7 @@ program
       verifier: new Verifier(),
       executionManager,
       eventStore: handle.events,
+      baseRefs: new GitService(),
     });
     const loop = new Loop({
       scheduler: new Scheduler({

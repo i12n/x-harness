@@ -41,7 +41,11 @@ describe("Worker", () => {
     }
   });
 
-  async function setup(engineCode: string, attempts = 3) {
+  async function setup(
+    engineCode: string,
+    attempts = 3,
+    extra: Partial<ConstructorParameters<typeof Worker>[0]> = {},
+  ) {
     const fixture: GitFixture = createGitFixture();
     cleanups.push(fixture.cleanup);
     commitFile(fixture.path, "checks.sh", "test -f solution.txt && echo ok\n");
@@ -69,6 +73,7 @@ describe("Worker", () => {
       maxAttempts: attempts,
     });
     const worker = new Worker({
+      ...extra,
       runStore: runs,
       taskStore: tasks,
       repositoryStore: repositories,
@@ -90,6 +95,40 @@ describe("Worker", () => {
     });
     return { fixture, repositories, tasks, runs, events, worker };
   }
+
+  // TASK-1245: the base ref is resolved (fetch + origin/<branch>) before the
+  // worktree is cut, and the chosen commit is recorded for staleness audits.
+  it("cuts the worktree from the resolved base ref and records it", async () => {
+    const asked: (string | undefined)[] = [];
+    const { runs, worker, events } = await setup(WRITE_CODE, 3, {
+      baseRefs: {
+        prepareBaseRef: async (_repository, baseRef) => {
+          asked.push(baseRef);
+          return { ref: "main", sha: "deadbeef", fetched: true };
+        },
+      },
+    });
+    await runs.createRun({
+      id: "run-001",
+      taskId: "task-001",
+      attempt: 1,
+      agent: "codex",
+      engine: "codex",
+    });
+
+    const outcome = await worker.executeRun("run-001");
+
+    expect(outcome.run.status).toBe("SUCCEEDED");
+    // The Task carries no explicit base ref, so the repository default is used.
+    expect(asked).toEqual([undefined]);
+    const recorded = await events.listEvents({ type: "WorkspaceBaseResolved" });
+    expect(recorded).toHaveLength(1);
+    expect(recorded[0]!.payload).toMatchObject({
+      ref: "main",
+      sha: "deadbeef",
+      fetched: true,
+    });
+  });
 
   it("claims, executes, verifies and completes a successful run", async () => {
     const { tasks, runs, worker } = await setup(WRITE_CODE);
