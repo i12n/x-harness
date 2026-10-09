@@ -2,6 +2,10 @@
 
 > 状态：设计稿（先设计，后编码）。本文档定稿前不实现飞书/钉钉代码。
 >
+> ⚠️ **交互模型已被取代**：[requirement-interaction-redesign.md](requirement-interaction-redesign.md)
+> （一个对象、一个话题、五个动词；聊天面删除所有带 id 的命令）。本文档保留为
+> Phase 11 的历史设计记录：命令层、Conversation、Channel 抽象仍然成立，只有"用户如何说话"变了。
+>
 > 目标：把"人怎么和 Harness 沟通"从 CLI 扩展成 **群聊 = Harness 的自然语言
 > 控制台**。群聊不是执行层，而是 **Human Interface**。
 

@@ -136,6 +136,11 @@ ai repository update repo-x-music \
 机器人会先判断这条消息是**查询 / 操作 / 新需求 / 闲聊**（判定规则与矩阵见
 [intent-triage.md](intent-triage.md)）。含糊到无法判断时它会先问一句：
 
+> 📌 本文档 §3 的命令表与"带 id 的说话方式"正在被
+> [requirement-interaction-redesign.md](requirement-interaction-redesign.md) 取代
+> （需求 = 话题、五个无 id 动词、聊天面不再接受 `task-…`/`dlv-…`）。改动落地前，
+> 以本文档为准。
+
 **TASK-1219 之后**：需求确认（`确认`）就是唯一的一次「开始」授权——
 规格推导 → 拆解 → 自动过 Task Intake → **任务 READY，调度器直接开跑**。
 不再需要逐条 `运行 task-x`。没通过 intake 的任务会被拦成 `BLOCKED` 并在聊天里点名单个
