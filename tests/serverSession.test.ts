@@ -217,6 +217,26 @@ describe("ChatSession", () => {
     expect(reply).not.toContain("task-");
   });
 
+  // TASK-1250: the fresh-start case — a chat with no requirement binding that
+  // simply describes new work must open a requirement, not answer "I don't know
+  // which one you mean".
+  it("opens a requirement when the chat has none bound", async () => {
+    const intent = new StubIntentEngine({
+      command: undefined,
+      action: { type: "create", payload: { statement: "面包屑间距改成 8px" } },
+    });
+    const { session, sent, problems } = await buildSession(intent, ["ou_dev"], {
+      requirements: { resolve: async () => undefined },
+    });
+
+    await session.handleEvent(event("om-1", "面包屑间距改成 8px"));
+
+    const created = await problems.listProblems();
+    expect(created).toHaveLength(1);
+    expect(created[0]!.title).toContain("面包屑间距改成 8px");
+    expect(textOf(sent.at(-1)!.message)).not.toContain("我还不知道你说的是哪件事");
+  });
+
   it("打回 reworks the finished deliverable and ignores a pasted id", async () => {
     const intent = new StubIntentEngine({
       command: undefined,

@@ -605,27 +605,13 @@ export class ChatSession {
     if (action.type === "chat" || !this.deps.requirements) {
       return false;
     }
+    // Pasted ids are ignored on purpose; say so once instead of failing.
+    const hint = pastedIdHint(message.text);
+    // TASK-1250: a new requirement is created without resolving anything — that
+    // ordering bug is why a fresh chat got "I don't know which one you mean".
     const view = await this.deps.requirements
       .resolve(target.conversationId)
       .catch(() => undefined);
-    // Pasted ids are ignored on purpose; say so once instead of failing.
-    const hint = pastedIdHint(message.text);
-    if (!view) {
-      await this.reply(
-        target,
-        {
-          conversationId: target.conversationId,
-          text: [
-            hint,
-            "我还不知道你说的是哪件事——直接描述要做的改动，我就开单。",
-          ]
-            .filter(Boolean)
-            .join("\n"),
-        },
-        routing,
-      );
-      return true;
-    }
     if (action.type === "clarify") {
       const question =
         asTrimmedString(action.payload?.question) ?? "你是想做什么？";
@@ -656,13 +642,15 @@ export class ChatSession {
           // TASK-1249: name the requirement the bot acted on. When a chat has
           // more than one similar requirement, this is what shows the operator
           // that the answer belongs to a different one than they meant.
-          text: [hint, `「${view.title}」：${outcome.ask}`].filter(Boolean).join("\n"),
+          text: [hint, view ? `「${view.title}」：${outcome.ask}` : outcome.ask]
+            .filter(Boolean)
+            .join("\n"),
         },
         routing,
       );
       return true;
     }
-    if (outcome.showCard || outcome.commands.length === 0) {
+    if (outcome.showCard && view) {
       const card = renderRequirementCard(view, {
         conversationId: target.conversationId,
       });
@@ -672,6 +660,9 @@ export class ChatSession {
         routing,
       );
       return true;
+    }
+    if (outcome.commands.length === 0) {
+      return false;
     }
 
     let first = true;

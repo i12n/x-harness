@@ -211,6 +211,31 @@ describe("action → command mapping (TASK-1244)", () => {
       payload: { title: "菜单栏的间距也要改一下", statement: "菜单栏的间距也要改一下\n顺便看看移动端" },
     });
   });
+
+  // TASK-1250: a brand-new chat (or an empty database) must still be able to
+  // open a requirement — `create` never needs an existing one.
+  it("creates without any requirement to resolve", async () => {
+    const outcome = commandsForRequirementAction(
+      { type: "create", payload: { statement: "面包屑间距改成 8px" } },
+      undefined,
+    );
+
+    expect(outcome.commands).toEqual([
+      {
+        type: "problem.create",
+        payload: { title: "面包屑间距改成 8px", statement: "面包屑间距改成 8px" },
+      },
+    ]);
+  });
+
+  it("asks instead of pretending when nothing is bound", async () => {
+    const outcome = commandsForRequirementAction(
+      { type: "reject", payload: { feedback: "还是不对" } },
+      undefined,
+    );
+    expect(outcome.commands).toHaveLength(0);
+    expect(outcome.ask).toContain("还没有对应的需求");
+  });
 });
 
 describe("intent normalisation (TASK-1244)", () => {

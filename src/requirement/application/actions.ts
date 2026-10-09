@@ -24,13 +24,42 @@ export interface RequirementActionOutcome {
 
 export function commandsForRequirementAction(
   action: IntentAction,
-  view: RequirementView,
+  view: RequirementView | undefined,
 ): RequirementActionOutcome {
   switch (action.type) {
+    case "create": {
+      // TASK-1250: a *new* requirement never needs an existing one. This used
+      // to sit behind "resolve the current requirement", so a fresh chat (or a
+      // wiped database) answered "I don't know which one you mean" to a message
+      // that was simply describing new work.
+      const statement = asText(action.payload?.statement);
+      if (!statement) {
+        return { commands: [], ask: "请把要做的事说清楚一点，我好开单。" };
+      }
+      const repositoryId = asText(action.payload?.repositoryId);
+      return {
+        commands: [
+          {
+            type: "problem.create",
+            payload: {
+              title: titleFromStatement(statement),
+              statement,
+              ...(repositoryId ? { repositoryId } : {}),
+            },
+          },
+        ],
+      };
+    }
     case "show":
+      if (!view) {
+        return { commands: [], ask: NO_REQUIREMENT_ASK };
+      }
       return { commands: [], showCard: true };
 
     case "reject": {
+      if (!view) {
+        return { commands: [], ask: NO_REQUIREMENT_ASK };
+      }
       if (view.stage === "released") {
         // Shipped code is the freeze point: this is a new requirement, not a rework.
         return {
@@ -88,6 +117,9 @@ export function commandsForRequirementAction(
     }
 
     case "deploy": {
+      if (!view) {
+        return { commands: [], ask: NO_REQUIREMENT_ASK };
+      }
       if (!view.delivery) {
         return { commands: [], ask: "这次改动还没有形成交付，等开发完成我再推测试环境。" };
       }
@@ -95,6 +127,9 @@ export function commandsForRequirementAction(
     }
 
     case "publish": {
+      if (!view) {
+        return { commands: [], ask: NO_REQUIREMENT_ASK };
+      }
       if (!view.delivery) {
         return { commands: [], ask: "现在还没有可发布的东西。" };
       }
@@ -113,6 +148,9 @@ export function commandsForRequirementAction(
     }
 
     case "rerun": {
+      if (!view) {
+        return { commands: [], ask: NO_REQUIREMENT_ASK };
+      }
       const target = view.currentTask ?? view.tasks[0];
       if (!target) {
         return { commands: [], ask: "这项需求还没有可重跑的开发点。" };
@@ -120,31 +158,15 @@ export function commandsForRequirementAction(
       return { commands: [{ type: "task.run", payload: { taskId: target.id } }] };
     }
 
-    case "create": {
-      const statement = asText(action.payload?.statement);
-      if (!statement) {
-        return { commands: [], ask: "请把要做的事说清楚一点，我好开单。" };
-      }
-      const repositoryId = asText(action.payload?.repositoryId);
-      return {
-        commands: [
-          {
-            type: "problem.create",
-            payload: {
-              title: titleFromStatement(statement),
-              statement,
-              ...(repositoryId ? { repositoryId } : {}),
-            },
-          },
-        ],
-      };
-    }
-
     case "chat":
     case "clarify":
       return { commands: [] };
   }
 }
+
+/** Said when the user asked to act on "the thing" and nothing is bound. */
+const NO_REQUIREMENT_ASK =
+  "这条会话还没有对应的需求——你要是想新做点什么，直接描述就行，我来开单。";
 
 /** First line, trimmed to something short enough for a card title. */
 export function titleFromStatement(statement: string): string {
