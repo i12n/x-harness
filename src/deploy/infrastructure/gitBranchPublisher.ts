@@ -145,6 +145,29 @@ export class GitBranchPublisher implements TestBranchPublisher {
         env,
       );
 
+      // Re-deploying a delivery whose content already sits on the test branch
+      // stays a no-op: pushing an identical tree would only re-trigger the
+      // repository's workflow. Compare trees, not commits (the commit is made
+      // fresh every time, so its hash always differs).
+      // Compare trees: the commit is made fresh every time, so its hash always
+      // differs even when the content does not.
+      await this.run(
+        [...scratchTrust, "fetch", "origin", `refs/heads/${input.branch}`],
+        scratch,
+        env,
+      ).catch(() => undefined);
+      const remoteTree = (
+        await this.run([...scratchTrust, "rev-parse", "FETCH_HEAD^{tree}"], scratch, env).catch(
+          () => "",
+        )
+      ).trim();
+      const localTree = (
+        await this.run([...scratchTrust, "rev-parse", "HEAD^{tree}"], scratch, env).catch(() => "")
+      ).trim();
+      if (remoteTree && remoteTree === localTree) {
+        return { pushed: true };
+      }
+
       phase = "push";
       const token = await this.options.tokenProvider.getToken();
       await this.run(
