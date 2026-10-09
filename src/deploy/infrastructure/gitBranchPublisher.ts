@@ -80,14 +80,23 @@ export class GitBranchPublisher implements TestBranchPublisher {
     let phase: "assemble" | "push" = "assemble";
     try {
       await this.run([...trusted, "fetch", "origin", base], input.workspacePath, env);
-      // TASK-1241: the delivery's delta is *everything* it changed relative to
-      // the default branch — committed or not. Approving a task publishes a
-      // commit on the `ai/…` branch, which left this workspace clean and made a
-      // following `测试部署` fail with "工作区没有改动" although the change was
-      // right there. Staging first also brings untracked files into the delta.
+      // TASK-1241: the delivery's delta is *everything this Run changed* —
+      // committed or not. Approving a task publishes a commit on the `ai/…`
+      // branch, which left the workspace clean and made a following `测试部署`
+      // fail with "工作区没有改动" although the change was right there.
+      //
+      // The delta is taken against the run's own fork point (merge-base with the
+      // remote default branch), never against the remote tip: the worktree may
+      // have been cut from an older `main`, and diffing against the fresh tip
+      // would turn every commit that landed since into a "revert" in the patch.
+      // Staging first also brings untracked files into the delta.
       await this.run([...trusted, "add", "-A"], input.workspacePath, env);
+      const mergeBase = (
+        await this.run([...trusted, "merge-base", "HEAD", `origin/${base}`], input.workspacePath, env)
+      ).trim();
+      const deltaBase = mergeBase || `origin/${base}`;
       const patch = await this.run(
-        [...trusted, "diff", "--cached", `origin/${base}`, "--binary"],
+        [...trusted, "diff", "--cached", deltaBase, "--binary"],
         input.workspacePath,
         env,
       );
@@ -150,6 +159,11 @@ export class GitBranchPublisher implements TestBranchPublisher {
           // Fully qualified: the scratch worktree is on a detached HEAD, so an
           // unqualified destination ("test/dlv-x") is ambiguous and git refuses
           // with "The <src> part of the refspec is a commit object".
+          //
+          // Force-with-lease: the test branch is rebuilt from the default branch
+          // on every publish, so re-deploying a delivery moves it forward *or*
+          // rebases it. It is a derived branch owned by the control plane.
+          "--force-with-lease",
           `HEAD:refs/heads/${input.branch}`,
         ],
         scratch,

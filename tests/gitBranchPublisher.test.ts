@@ -25,8 +25,9 @@ function publisher(options: { allowedPrefixes?: string[] } = {}) {
     authorEmail: "ai@example.com",
     exec: async (args, _cwd, env) => {
       calls.push({ args, env });
-      // The delivery delta (vs the default branch) must report work, or the
-      // publisher stops early.
+    // The delivery delta (vs the default branch) must report work, or the
+    // publisher stops early.
+      if (args.includes("merge-base")) return "base123\n";
       return args.includes("diff") ? "diff --git a/app/page.tsx b/app/page.tsx\n" : "";
     },
   });
@@ -63,10 +64,16 @@ describe("control-plane test-branch push (TASK-1230)", () => {
     // (with its already-published ai/… commit) is never rewritten.
     const worktreeAdd = calls.find((call) => call.args.includes("worktree"))!;
     expect(worktreeAdd.args).toContain("origin/main");
+    // The delta is measured from the run's fork point, not the remote tip —
+    // diffing against a moved-on `main` would make the patch revert it.
+    const diff = calls.find((call) => call.args.includes("diff"))!;
+    expect(diff.args).toContain("base123");
+    expect(diff.args).not.toContain("origin/main");
     expect(calls.some((call) => call.args.includes("checkout"))).toBe(false);
     const push = calls.filter((call) => call.args.includes("push")).at(-1)!;
     expect(push.args.join(" ")).toContain("@github.com/i12n/x-music.git");
     expect(push.args.join(" ")).toContain("HEAD:refs/heads/test/dlv-1");
+    expect(push.args).toContain("--force-with-lease");
     expect(push.args.join(" ")).toContain("x-access-token:ghs_token@");
   });
 
