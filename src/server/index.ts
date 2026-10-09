@@ -206,6 +206,19 @@ export class HarnessRuntime {
       target: ChatTarget,
       message: OutgoingMessage,
     ): Promise<void> => {
+      // TASK-1243: everything about a requirement lands in its own topic. The
+      // session already routes with the anchor; notifications (Run cards,
+      // delivery/deploy messages) do not, so resolve it here.
+      const explicitReply =
+        typeof message.metadata?.replyToMessageId === "string"
+          ? message.metadata.replyToMessageId
+          : undefined;
+      const anchor =
+        explicitReply ??
+        (await conversations
+          .findConversation(target.conversationId)
+          .then((conversation) => conversation.anchorMessageId)
+          .catch(() => undefined));
       const outgoing: OutgoingMessage = {
         ...message,
         conversationId: target.conversationId,
@@ -213,6 +226,7 @@ export class HarnessRuntime {
           ...message.metadata,
           receiveId: target.receiveId,
           receiveIdType: target.receiveIdType ?? "chat_id",
+          ...(anchor ? { replyToMessageId: anchor, replyInThread: true } : {}),
         },
       };
       const sent = await feishuAdapter.sendWithResult(outgoing);

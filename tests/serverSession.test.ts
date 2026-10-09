@@ -176,6 +176,22 @@ describe("ChatSession", () => {
     expect(intent.seen).toHaveLength(1);
   });
 
+  // TASK-1243: replies land in the requirement's topic — anchored to the first
+  // message, not to whatever message was just typed.
+  it("anchors every reply to the conversation's first message", async () => {
+    const intent = new StubIntentEngine({ command: undefined });
+    const { session, sent } = await buildSession(intent);
+
+    await session.handleEvent(event("om-1", "第一个问题"));
+    await session.handleEvent(event("om-2", "追问一句"));
+
+    const metadata = sent.map((entry) => entry.message.metadata ?? {});
+    expect(metadata[0]?.replyToMessageId).toBe("om-1");
+    expect(metadata[0]?.replyInThread).toBe(true);
+    // The second reply does NOT anchor to om-2: same requirement, same topic.
+    expect(metadata[1]?.replyToMessageId).toBe("om-1");
+  });
+
   it("refuses senders outside the allow-list", async () => {
     const intent = new StubIntentEngine({ command: undefined });
     const { session, sent } = await buildSession(intent, ["ou_someone_else"]);

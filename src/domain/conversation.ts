@@ -25,6 +25,14 @@ export interface Conversation {
   title?: string;
   subjectType?: SubjectType;
   subjectId?: string;
+  /**
+   * TASK-1243: the message this conversation's topic is anchored to.
+   *
+   * Feishu has no "send into thread X" API — a message can only be placed into
+   * a topic by replying to a message that lives in it. The anchor is that
+   * message, so every reply for one requirement lands in the same topic.
+   */
+  anchorMessageId?: string;
   status: ConversationStatus;
   createdAt: string;
   updatedAt: string;
@@ -38,6 +46,7 @@ export interface CreateConversationInput {
   title?: string;
   subjectType?: SubjectType;
   subjectId?: string;
+  anchorMessageId?: string;
 }
 
 export interface ConversationMessage {
@@ -103,6 +112,7 @@ export function buildConversation(input: CreateConversationInput): Conversation 
     title: input.title?.trim() || undefined,
     subjectType: input.subjectType,
     subjectId: input.subjectId?.trim() || undefined,
+    anchorMessageId: input.anchorMessageId?.trim() || undefined,
     status: "ACTIVE",
     createdAt: now,
     updatedAt: now,

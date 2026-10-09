@@ -15,6 +15,31 @@ function incoming(overrides: Record<string, unknown> = {}) {
 }
 
 describe("ConversationService (TASK-1102)", () => {
+  // TASK-1243: the first message anchors the requirement's topic, so every
+  // later reply for it can be placed in the same thread.
+  it("anchors the topic on the first inbound message and keeps it", async () => {
+    const store = new InMemoryConversationStore();
+    const service = new ConversationService(store);
+
+    const first = await service.handleIncoming(incoming());
+    expect(first.conversation.anchorMessageId).toBe("message-001");
+
+    const second = await service.handleIncoming(
+      incoming({ messageId: "message-002", text: "继续" }),
+    );
+    expect(second.conversation.anchorMessageId).toBe("message-001");
+  });
+
+  it("moves the anchor when a new requirement starts in the same chat", async () => {
+    const store = new InMemoryConversationStore();
+    const service = new ConversationService(store);
+    const first = await service.handleIncoming(incoming());
+
+    const moved = await service.setAnchor(first.conversation.id, "message-009");
+
+    expect(moved.anchorMessageId).toBe("message-009");
+  });
+
   it("records the first inbound message and reports no duplicate", async () => {
     const store = new InMemoryConversationStore();
     const service = new ConversationService(store);

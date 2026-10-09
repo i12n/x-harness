@@ -43,6 +43,11 @@ export interface ConversationStore {
     id: string,
     subject: { subjectType: SubjectType; subjectId: string },
   ): Promise<Conversation>;
+  /**
+   * TASK-1243: pin (or move) the topic anchor. Overwrites on purpose: a new
+   * requirement started in the same chat gets its own topic.
+   */
+  setAnchor(id: string, anchorMessageId: string): Promise<Conversation>;
 
   /** Idempotent append: a repeated (channel, externalMessageId) is returned. */
   appendMessage(input: AppendMessageInput): Promise<ConversationMessage>;

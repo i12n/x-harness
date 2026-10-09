@@ -92,8 +92,13 @@ export class ConversationService {
       externalThreadId: input.externalThreadId,
       title: input.title,
     });
+    // TASK-1243: the first inbound message of a conversation anchors its topic.
+    // Everything about this requirement is replied into that topic from here on.
+    const anchored = conversation.anchorMessageId
+      ? conversation
+      : await this.store.setAnchor(conversation.id, input.messageId);
     const message = await this.store.appendMessage({
-      conversationId: conversation.id,
+      conversationId: anchored.id,
       channel: input.channel,
       direction: "INBOUND",
       senderId: input.senderId,
@@ -103,7 +108,12 @@ export class ConversationService {
       externalMessageId: input.messageId,
       createdAt: toIso(input.timestamp),
     });
-    return { conversation, message, duplicate: false };
+    return { conversation: anchored, message, duplicate: false };
+  }
+
+  /** TASK-1243: move the conversation's topic anchor (a new requirement). */
+  async setAnchor(conversationId: string, anchorMessageId: string): Promise<Conversation> {
+    return this.store.setAnchor(conversationId, anchorMessageId);
   }
 
   async recordOutgoing(

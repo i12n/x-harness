@@ -26,6 +26,7 @@ interface ConversationRow {
   title: string | null;
   subject_type: string | null;
   subject_id: string | null;
+  anchor_message_id: string | null;
   status: string;
   created_at: Date | string;
   updated_at: Date | string;
@@ -52,8 +53,8 @@ export class PostgresConversationStore implements ConversationStore {
     const { rows } = await this.pool.query<ConversationRow>(
       `INSERT INTO conversations
          (id, channel, external_chat_id, external_thread_id, title,
-          subject_type, subject_id, status, created_at, updated_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$9)
+          subject_type, subject_id, anchor_message_id, status, created_at, updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$10)
        RETURNING *`,
       [
         conversation.id,
@@ -63,6 +64,7 @@ export class PostgresConversationStore implements ConversationStore {
         conversation.title ?? null,
         conversation.subjectType ?? null,
         conversation.subjectId ?? null,
+        conversation.anchorMessageId ?? null,
         conversation.status,
         conversation.createdAt,
       ],
@@ -152,6 +154,21 @@ export class PostgresConversationStore implements ConversationStore {
        WHERE id = $4
        RETURNING *`,
       [subject.subjectType, subject.subjectId, new Date().toISOString(), id],
+    );
+    const row = rows[0];
+    if (!row) {
+      throw new ConversationNotFoundError(id);
+    }
+    return rowToConversation(row);
+  }
+
+  async setAnchor(id: string, anchorMessageId: string): Promise<Conversation> {
+    const { rows } = await this.pool.query<ConversationRow>(
+      `UPDATE conversations
+       SET anchor_message_id = $1, updated_at = $2
+       WHERE id = $3
+       RETURNING *`,
+      [anchorMessageId.trim() || null, new Date().toISOString(), id],
     );
     const row = rows[0];
     if (!row) {
@@ -286,6 +303,7 @@ function rowToConversation(row: ConversationRow): Conversation {
     title: row.title ?? undefined,
     subjectType: (row.subject_type as SubjectType | null) ?? undefined,
     subjectId: row.subject_id ?? undefined,
+    anchorMessageId: row.anchor_message_id ?? undefined,
     status: row.status as Conversation["status"],
     createdAt: toIso(row.created_at),
     updatedAt: toIso(row.updated_at),

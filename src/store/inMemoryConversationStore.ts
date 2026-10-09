@@ -88,6 +88,17 @@ export class InMemoryConversationStore implements ConversationStore {
     return updated;
   }
 
+  async setAnchor(id: string, anchorMessageId: string): Promise<Conversation> {
+    const conversation = await this.findConversation(id);
+    const updated: Conversation = {
+      ...conversation,
+      anchorMessageId: anchorMessageId.trim() || undefined,
+      updatedAt: new Date().toISOString(),
+    };
+    this.conversations.set(id, updated);
+    return updated;
+  }
+
   async appendMessage(input: AppendMessageInput): Promise<ConversationMessage> {
     await this.findConversation(input.conversationId);
     const message = buildConversationMessage(input);

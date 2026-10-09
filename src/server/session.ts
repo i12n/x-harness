@@ -125,15 +125,6 @@ export class ChatSession {
       );
       return;
     }
-    // Answer inside a topic thread on the triggering message (default for both
-    // groups and private chats), so the main flow stays readable.
-    const threadMode = this.deps.threadReplies ?? "always";
-    const inThread =
-      threadMode === "always" || (threadMode === "group" && isGroup);
-    const routing: ReplyRouting | undefined = inThread
-      ? { replyToMessageId: message.messageId, replyInThread: true }
-      : undefined;
-
     // Deterministic configuration router. It runs BEFORE the language model so
     // a value typed here can never be sent to a model provider, and the stored
     // conversation text is redacted for anything that looks like a credential.
@@ -161,6 +152,15 @@ export class ChatSession {
       this.log(`duplicate message ${message.messageId} ignored`);
       return;
     }
+    // TASK-1243: answer in the requirement's own topic — anchored to the message
+    // that started it, falling back to this one. The chat's main flow never gets
+    // an answer (`never` is an explicit operator override).
+    const threadMode = this.deps.threadReplies ?? "always";
+    const anchor = outcome.conversation.anchorMessageId ?? message.messageId;
+    let routing: ReplyRouting | undefined =
+      threadMode === "never" || (threadMode === "group" && !isGroup)
+        ? undefined
+        : { replyToMessageId: anchor, replyInThread: true };
 
     const target: ChatTarget = {
       conversationId: outcome.conversation.id,
@@ -298,6 +298,16 @@ export class ChatSession {
       prepareCommand(input, decision.command),
       { channel: message.channel, userId: message.senderId, roles },
     );
+    if (result.status === "succeeded" && result.type === "problem.create") {
+      // TASK-1243: a new requirement gets its own topic — anchor it to the
+      // message that asked for it, so two requirements never share one thread.
+      try {
+        await this.deps.conversations.setAnchor(target.conversationId, message.messageId);
+        routing = { replyToMessageId: message.messageId, replyInThread: true };
+      } catch (error) {
+        this.log(`could not re-anchor the conversation: ${describeError(error)}`);
+      }
+    }
     const rendered = renderCommandResult(result, target.conversationId);
     await this.reply(target, rendered, routing);
 
