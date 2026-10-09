@@ -48,6 +48,11 @@ export interface BaseRefOutcome {
   fetched: boolean;
   /** Set when the fetch failed (offline, auth) and the local ref is used. */
   note?: string;
+  /**
+   * TASK-1248: the base checkout itself was fast-forwarded, so a human reading
+   * the machine sees the same code a Run would use.
+   */
+  advanced?: { branch: string; from: string; to: string };
 }
 
 export interface PublishOutcome {
@@ -130,16 +135,62 @@ export class GitService {
       // Offline or auth trouble must not block work: fall back to what we have.
       note = `fetch 失败，沿用本地 ${branch}：${describeGitError(error)}`;
     }
+    // TASK-1248: keep the base checkout current too — a human reading the
+    // machine should see the code a Run would use. Best effort, and only when it
+    // is safe: the checkout is clean and still on the default branch.
+    const advanced =
+      fetched && branch === repository.defaultBranch
+        ? await this.advanceBaseCheckout(repository, cwd)
+        : undefined;
     for (const ref of [`origin/${branch}`, branch]) {
       const sha = (
         await this.tryRun(["rev-parse", "--verify", "--quiet", `${ref}^{commit}`], cwd)
       )?.trim();
       if (sha) {
-        return { ref, sha, fetched, ...(note ? { note } : {}) };
+        return {
+          ref,
+          sha,
+          fetched,
+          ...(note ? { note } : {}),
+          ...(advanced ? { advanced } : {}),
+        };
       }
     }
     // Nothing resolvable yet — let `git worktree add` fail loudly with its own text.
-    return { ref: branch, fetched, ...(note ? { note } : {}) };
+    return {
+      ref: branch,
+      fetched,
+      ...(note ? { note } : {}),
+      ...(advanced ? { advanced } : {}),
+    };
+  }
+
+  /**
+   * TASK-1248: fast-forward the base checkout when nothing would be lost.
+   * A dirty checkout or a checkout parked on another branch is left alone — that
+   * state usually means a human is working in it.
+   */
+  private async advanceBaseCheckout(
+    repository: Repository,
+    cwd: string,
+  ): Promise<{ branch: string; from: string; to: string } | undefined> {
+    try {
+      if (await this.isDirty(cwd)) {
+        return undefined;
+      }
+      const branch = (await this.run(["rev-parse", "--abbrev-ref", "HEAD"], cwd)).trim();
+      if (branch !== repository.defaultBranch) {
+        return undefined;
+      }
+      const from = (await this.run(["rev-parse", "HEAD"], cwd)).trim();
+      // ff-only: a diverged base checkout must never get a merge commit here.
+      await this.run(["merge", "--ff-only", `origin/${repository.defaultBranch}`], cwd);
+      const to = (await this.run(["rev-parse", "HEAD"], cwd)).trim();
+      return from === to ? undefined : { branch, from, to };
+    } catch {
+      // Diverged, no upstream, ... — the Run still starts from origin/<branch>.
+      return undefined;
+    }
   }
 
   async syncRepository(repository: Repository): Promise<SyncOutcome> {

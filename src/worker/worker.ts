@@ -86,7 +86,13 @@ export interface BaseRefResolver {
   prepareBaseRef(
     repository: Repository,
     baseRef?: string,
-  ): Promise<{ ref: string; sha?: string; fetched: boolean; note?: string }>;
+  ): Promise<{
+    ref: string;
+    sha?: string;
+    fetched: boolean;
+    note?: string;
+    advanced?: { branch: string; from: string; to: string };
+  }>;
 }
 
 export interface ExecuteRunOutcome {
@@ -220,6 +226,7 @@ export class Worker {
                 ...(base.sha ? { sha: base.sha } : {}),
                 fetched: base.fetched,
                 ...(base.note ? { note: base.note } : {}),
+                ...(base.advanced ? { baseAdvanced: base.advanced } : {}),
               },
             });
           } catch (error) {

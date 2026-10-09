@@ -197,7 +197,7 @@ describe("GitService.publishWorkspace", () => {
  * resolver fetches and prefers `origin/<branch>`.
  */
 describe("GitService.prepareBaseRef", () => {
-  it("fetches and prefers origin/<default branch> over the stale local branch", async () => {
+  it("fetches, prefers origin/<default branch>, and fast-forwards the base checkout", async () => {
     // Someone else pushes while our checkout stays behind.
     const other = join(dir, "other");
     execFileSync("git", ["clone", "-q", origin, other], { stdio: "ignore" });
@@ -214,8 +214,29 @@ describe("GitService.prepareBaseRef", () => {
     expect(outcome.fetched).toBe(true);
     expect(outcome.ref).toBe("origin/main");
     expect(outcome.sha).toBe(remoteHead);
-    // The local branch was *not* touched — worktrees just start from the remote tip.
+    // TASK-1248: the base checkout is fast-forwarded too, so a human reading the
+    // machine sees the same code a Run would use.
+    expect(outcome.advanced).toEqual({ branch: "main", from: localHead, to: remoteHead });
+    expect(git(["rev-parse", "HEAD"], base).trim()).toBe(remoteHead);
+  });
+
+  it("leaves a dirty base checkout alone but still starts from origin/<branch>", async () => {
+    const other = join(dir, "other");
+    execFileSync("git", ["clone", "-q", origin, other], { stdio: "ignore" });
+    writeFileSync(join(other, "app.txt"), "two\n");
+    git(["add", "-A"], other);
+    git(["commit", "-m", "upstream moved on"], other);
+    execFileSync("git", ["push", "-q", "origin", "main"], { cwd: other, stdio: "ignore" });
+    const localHead = git(["rev-parse", "HEAD"], base).trim();
+    // A human is mid-edit in the base checkout.
+    writeFileSync(join(base, "app.txt"), "work in progress\n");
+
+    const outcome = await new GitService().prepareBaseRef(makeRepository());
+
+    expect(outcome.ref).toBe("origin/main");
+    expect(outcome.advanced).toBeUndefined();
     expect(git(["rev-parse", "HEAD"], base).trim()).toBe(localHead);
+    expect(git(["status", "--porcelain"], base).trim()).not.toBe("");
   });
 
   it("falls back to the local branch when there is no remote", async () => {

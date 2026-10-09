@@ -53,3 +53,23 @@ tests/worker.test.ts      · 解析出的 ref 真的传给了 worktree 创建，
 - 每次 Run 多一次 `git fetch --prune origin`（秒级；并发=1，不会打爆远端）。
 - `ai repository sync` 仍然有用：它把**基仓本身**快进到最新（人在这台机器上看代码时用）。
 - 想临时回到旧行为（例如远端不可达），把 Worker 的 `baseRefs` 摘掉即可——但生产不该这么做。
+
+## 6. TASK-1248：基仓也自动保持最新
+
+TASK-1245 只保证 **Run** 的代码新鲜（从 `origin/<branch>` 切），基仓本身仍要手动
+`ai repository sync`——实测又落后了两个提交（`beecba7` vs `aebca08`）。现在 Run 的那次
+fetch **顺带**做一次快进：
+
+```text
+fetch 成功 && baseRef 是默认分支 && 基仓干净 && 基仓在默认分支
+   → git merge --ff-only origin/<default>      （绝不产生 merge commit）
+否则 → 保持不动（人在里面改东西时不该被动他的分支）
+```
+
+结果记进 `WorkspaceBaseResolved.baseAdvanced = { branch, from, to }`，事后可查"这次 Run
+顺带把基仓从 X 推到了 Y"。快进失败（分叉、无上游）不影响 Run：worktree 照旧从远端 tip 切。
+
+```text
+tests/gitService.test.ts  · 远端领先且基仓干净 → 基仓被快进（from/to 记录在案）
+                          · 基仓有未提交改动     → 不快进，但 Run 仍从 origin/main 开始
+```
