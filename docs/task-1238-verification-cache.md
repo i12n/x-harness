@@ -51,7 +51,34 @@ root 创建了缺失的 `/workspace/.next`，容器用户（uid 1000）随后写
 （D3 的同一原则），并只在仓库声明了 build 命令时才挂构建缓存。
 
 ```text
-attempt 9   （无缓存）  agent 207s + 验证 114s = 322s
-attempt 10  （冷缓存，因 .next 属主失败）
-attempt 11  （热缓存）  → 实测见下
+生产（check-2 = 整条验证命令的时长）
+attempt  9  无缓存                     95.9s
+attempt 10  冷缓存 + .next 属主 bug    32.6s（失败）
+attempt 11  npm 热 / next 冷            94.7s
+attempt 12  npm + next 都热             99.6s
+
+同机同镜像对照（/tmp 手跑 next build）
+  冷 .next，全新路径                     97s
+  热缓存，**不同**宿主路径                78s（−20%）
+  热缓存，同一路径                        66s（−32%）
+  npm ci                                 33s → 24~29s
 ```
+
+### 5.1 结论：生产上没测出收益
+
+缓存确实在工作（`/var/cache/ai-harness/repo-x-music/{npm,next}` 分别 156M/61M，属主 1000，
+`.next/cache/{webpack,swc,.tsbuildinfo}` 每轮都在更新），但**验证总时长三次都在 95~100 秒**，
+差异落在噪声里（`npm ci` 本身 23~29s 波动，且每次 attempt 的 agent 产出源码并不相同，
+构建缓存只能部分命中）。
+
+地板在哪：这台机器是 **2 vCPU / 1.9G**，`next build` 是 CPU 密集的（本次对照 66~97s），
+缓存只能省掉"重复的计算"，省不掉"这一次的计算"；`npm ci` 的 25s 也主要是把 167 个包
+**写进新 worktree**，不是下载。
+
+### 5.2 真要压到 30 秒级，得换杠杆
+
+| 方案 | 预计收益 | 代价 |
+| --- | --- | --- |
+| 机器升到 4 vCPU | `next build` 约减半（→40~50s） | 花钱；对 agent 阶段也有益 |
+| 每仓共享 `node_modules`（并发=1 时安全） | 省掉每次 `npm ci` 的 ~25s | 需要一个 per-repo 的 node_modules 卷 + 验证命令改成"缺了才装" |
+| 按改动选择验证强度（例如只跑 `docs:check` + 定向测试，完整 `next build` 只在必要时跑） | 最大，但改变门禁语义 | 需要产品/工程决策 |
