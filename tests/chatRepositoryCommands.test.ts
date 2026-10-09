@@ -5,6 +5,7 @@ import { InMemoryIdempotencyStore } from "../src/command/idempotency.js";
 import { COMMAND_SCHEMAS } from "../src/command/schema.js";
 import type { Role } from "../src/command/types.js";
 import { createRepositoryQueryPort } from "../src/server/deployment/repositoryPort.js";
+import { defaultExecutionProfile } from "../src/domain/executionProfile.js";
 import { InMemoryRepositoryStore } from "../src/store/inMemoryRepositoryStore.js";
 
 async function setup(seed = true) {
@@ -16,6 +17,12 @@ async function setup(seed = true) {
       url: "git@github.com:example/demo.git",
       localPath: "/srv/repos/demo",
       verificationCommands: ["node test/verify.js"],
+      // TASK-1240: new repositories default to `gitPush: allow`; this fixture
+      // keeps one deny so the list card is exercised for both states.
+      executionProfile: {
+        ...(await defaultExecutionProfile()),
+        policy: { ...(await defaultExecutionProfile()).policy, gitPush: "deny" },
+      },
     });
     await store.createRepository({
       id: "repo-push",

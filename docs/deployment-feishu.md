@@ -369,6 +369,22 @@ CLI ：ai task approve <id> / ai task publish <id>
 2. 只推 `AI_GIT_PUSH_PREFIX`（默认 `ai/`）前缀的分支；
 3. 永不推送默认分支 / `main` / `master`。
 
+**TASK-1240 起，新注册的仓库默认 `gitPush: allow`**——审批后的改动会真的落到远端，
+不再出现"批准了却没推"。想反过来收紧（例如只读的镜像仓库），注册时传 `--git-push deny`，
+或事后收紧（幂等，只改这一项）：
+
+```bash
+ai repository update <repo-id> --git-push deny   # 收紧
+ai repository update <repo-id> --git-push allow  # 放开
+```
+
+无论默认值如何，推送的护栏不变：只推 `AI_GIT_PUSH_PREFIX` 内的分支、永不推默认分支、
+且只发生在人审批（或显式 `task publish` / `测试部署`）之后。若仍被拒，回话里会直接带上
+对应的放开命令（TASK-1239）。
+
+已经审批过的任务不需要重新跑：`推送 task-x`（或 `ai task publish <id>`）会把最新一次
+成功 Run 的改动 commit 成 `ai/<task>-<run>-t0` 分支推上去。
+
 **agent 容器不持有任何 GitHub 凭证**，也读不到 worktree 的 gitdir——fetch/commit/push
 全部由 Harness 在宿主机完成（容器内 git 实测为 `fatal: not a git repository`）。
 因此一次 Run 里 Codex 只能改文件，能不能进远端完全由审批这一步决定。

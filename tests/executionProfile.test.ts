@@ -24,7 +24,9 @@ describe("ExecutionProfile", () => {
     expect(profile.policy).toEqual({
       workspaceAccess: "read_write",
       hostFilesystem: "deny",
-      gitPush: "deny",
+      // TASK-1240: new repositories may publish (only ai/,test/ branches, and
+      // only after approval); everything else stays denied.
+      gitPush: "allow",
       dockerAccess: "deny",
       productionAccess: "deny",
     });

@@ -133,6 +133,8 @@ describe("GitService.publishWorkspace", () => {
     expect(outcome.skipped).toBe("push_disabled");
     expect(outcome.pushed).toBe(false);
     expect(outcome.committed).toBe(false);
+    // TASK-1239: the refusal must carry its own remedy.
+    expect(outcome.message).toContain("--git-push allow");
     // Nothing was committed either: the worktree is still dirty.
     expect(git(["status", "--porcelain"], workspace).trim()).not.toBe("");
     expect(git(["--git-dir", origin, "branch", "--list", "ai/task-1-run-1"]).trim()).toBe("");

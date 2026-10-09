@@ -22,7 +22,7 @@
 | D2 | planning 产出 INBOX 后**自动过 intake**：合格 → READY，不合格 → BLOCKED 并把 issues 报给人 | 复用已有、有测试的 Task Intake 规则，不新造判断 |
 | D3 | 开关 `AI_AUTO_START`，默认 `on`；`off` 时完全保持今天的人工 intake + 人工运行 | 一键回滚 |
 | D4 | **成本护栏同批落地**：Run 默认超时 30min（`AI_RUN_TIMEOUT_MS` 默认 0 → 1800000）；并发沿用 `AI_MAX_CONCURRENCY`；重试沿用 `maxAttempts=3` | 自动开始会放大失败重试的代价，没有超时就不能开 |
-| D5 | **不可逆动作不变**：自动流程只到 REVIEW；push / merge / release 仍然由人（仓库策略默认 `gitPush: deny`） | 自动化的收益在"开发+验证"，不在"上线" |
+| D5 | **不可逆动作不变**：自动流程只到 REVIEW；push / merge / release 仍然由人 —— 仓库策略当时默认 `gitPush: deny`，**TASK-1240 起改为默认 `allow`**（审批仍必须由人触发；护栏是前缀白名单 + 永不推默认分支） | 自动化的收益在"开发+验证"，不在"上线" |
 | D6 | `task.run` 保留，定位从"启动"改为"重跑" | 人仍要能干预 |
 
 依赖阻塞（TASK-1204 DAG）不受影响：调度器本来就只派发 `isRunnable` 的任务。

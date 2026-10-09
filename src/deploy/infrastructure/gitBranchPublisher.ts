@@ -1,5 +1,7 @@
 import { execFile } from "node:child_process";
-import { resolve } from "node:path";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 import { promisify } from "node:util";
 import type { Repository } from "../../domain/repository.js";
 import type { GitHubTokenProvider } from "../../github/tokenProvider.js";
@@ -74,12 +76,24 @@ export class GitBranchPublisher implements TestBranchPublisher {
     // root ("dubious ownership"). Same rail GitService uses: trust that one dir.
     const trusted = ["-c", `safe.directory=${resolve(input.workspacePath)}`];
     const base = input.repository.defaultBranch;
+    let scratch: string | undefined;
+    let phase: "assemble" | "push" = "assemble";
     try {
-      // Decide first whether there is anything *new* to ship. Re-publishing an
-      // already-published delivery must be a no-op, not a non-fast-forward
-      // (the branch is rebuilt from the default branch, so it would be behind).
-      const dirty = await this.run([...trusted, "status", "--porcelain"], input.workspacePath, env);
-      if (!dirty.trim()) {
+      await this.run([...trusted, "fetch", "origin", base], input.workspacePath, env);
+      // TASK-1241: the delivery's delta is *everything* it changed relative to
+      // the default branch — committed or not. Approving a task publishes a
+      // commit on the `ai/…` branch, which left this workspace clean and made a
+      // following `测试部署` fail with "工作区没有改动" although the change was
+      // right there. Staging first also brings untracked files into the delta.
+      await this.run([...trusted, "add", "-A"], input.workspacePath, env);
+      const patch = await this.run(
+        [...trusted, "diff", "--cached", `origin/${base}`, "--binary"],
+        input.workspacePath,
+        env,
+      );
+      if (!patch.trim()) {
+        // Re-publishing an already-published delivery stays a no-op, not a
+        // non-fast-forward (the branch is rebuilt from the default branch).
         const existing = await this.run(
           [...trusted, "ls-remote", "--heads", "origin", input.branch],
           input.workspacePath,
@@ -90,39 +104,26 @@ export class GitBranchPublisher implements TestBranchPublisher {
         }
         return { pushed: false, reason: "工作区没有改动，没有可测试的内容" };
       }
-      // Base the test branch on the repository's CURRENT default branch, not on
-      // whatever commit the Run happened to leave behind. The workflow that
-      // deploys the test environment lives on the default branch, so cutting
-      // from a stale HEAD would push a branch with nothing to run. The
-      // delivery's own changes are carried over via stash.
-      await this.run([...trusted, "fetch", "origin", base], input.workspacePath, env);
-      let stashed = false;
-      // `git stash push` exits 0 even when it saves nothing ("No local changes
-      // to save"), so compare the stash list to know whether a pop is owed.
-      const stashBefore = await this.run([...trusted, "stash", "list"], input.workspacePath, env);
-      try {
-        await this.run(
-          [...trusted, "stash", "push", "-u", "-m", "harness test-branch"],
-          input.workspacePath,
-          env,
-        );
-        const stashAfter = await this.run([...trusted, "stash", "list"], input.workspacePath, env);
-        stashed = stashAfter.trim() !== stashBefore.trim();
-      } catch {
-        // Nothing to save (already clean) — fine, there is just nothing to ship.
-      }
+
+      // The test branch must be cut from the repository's CURRENT default
+      // branch — the workflow that deploys the test environment lives there —
+      // and then carry the delivery's delta. That happens in a throwaway
+      // worktree, so the Run's own workspace keeps its `ai/…` commit untouched.
+      const scratchRoot = await mkdtemp(join(tmpdir(), "harness-test-branch-"));
+      scratch = join(scratchRoot, "wt");
+      const patchFile = join(scratchRoot, "delivery.patch");
+      await writeFile(patchFile, patch, "utf8");
       await this.run(
-        [...trusted, "checkout", "-B", input.branch, `origin/${base}`],
+        [...trusted, "worktree", "add", "--detach", scratch, `origin/${base}`],
         input.workspacePath,
         env,
       );
-      if (stashed) {
-        await this.run([...trusted, "stash", "pop"], input.workspacePath, env);
-      }
-      await this.run([...trusted, "add", "-A"], input.workspacePath, env);
+      const scratchTrust = ["-c", `safe.directory=${resolve(scratch)}`];
+      await this.run([...scratchTrust, "apply", "--binary", patchFile], scratch, env);
+      await this.run([...scratchTrust, "add", "-A"], scratch, env);
       await this.run(
         [
-          ...trusted,
+          ...scratchTrust,
           "-c",
           `user.name=${this.authorName}`,
           "-c",
@@ -131,21 +132,15 @@ export class GitBranchPublisher implements TestBranchPublisher {
           "-m",
           input.message,
         ],
-        input.workspacePath,
+        scratch,
         env,
       );
-    } catch (error) {
-      return {
-        pushed: false,
-        reason: `无法在 ${input.branch} 上提交改动：${error instanceof Error ? error.message : String(error)}`,
-      };
-    }
 
-    const token = await this.options.tokenProvider.getToken();
-    try {
+      phase = "push";
+      const token = await this.options.tokenProvider.getToken();
       await this.run(
         [
-          ...trusted,
+          ...scratchTrust,
           "push",
           // GitHub's documented form for an App installation token is basic
           // auth, not an Authorization header: `x-access-token:<token>`. The URL
@@ -154,15 +149,28 @@ export class GitBranchPublisher implements TestBranchPublisher {
           `https://x-access-token:${token}@github.com/${githubSlug(input.repository)}.git`,
           `HEAD:${input.branch}`,
         ],
-        input.workspacePath,
+        scratch,
         env,
       );
+      return { pushed: true };
     } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
       return {
         pushed: false,
-        reason: `推送 ${input.branch} 失败：${error instanceof Error ? error.message : String(error)}`,
+        reason:
+          phase === "push"
+            ? `推送 ${input.branch} 失败：${detail}`
+            : `无法在 ${input.branch} 上提交改动：${detail}`,
       };
+    } finally {
+      if (scratch) {
+        await this.run(
+          [...trusted, "worktree", "remove", "--force", scratch],
+          input.workspacePath,
+          env,
+        ).catch(() => undefined);
+        await rm(resolve(scratch, ".."), { recursive: true, force: true }).catch(() => undefined);
+      }
     }
-    return { pushed: true };
   }
 }

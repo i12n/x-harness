@@ -25,8 +25,9 @@ function publisher(options: { allowedPrefixes?: string[] } = {}) {
     authorEmail: "ai@example.com",
     exec: async (args, _cwd, env) => {
       calls.push({ args, env });
-      // `status --porcelain` must report work, or the publisher stops early.
-      return args.includes("status") ? " M app/page.tsx\n" : "";
+      // The delivery delta (vs the default branch) must report work, or the
+      // publisher stops early.
+      return args.includes("diff") ? "diff --git a/app/page.tsx b/app/page.tsx\n" : "";
     },
   });
   return { service, calls };
@@ -48,20 +49,22 @@ describe("control-plane test-branch push (TASK-1230)", () => {
     // Every git call carries `-c safe.directory=…` (worktrees are owned by the
     // container user, so git refuses to touch them as root otherwise).
     const verbs = calls
-      .map((call) =>
-        call.args.find((arg) => ["fetch", "stash", "checkout", "push", "ls-remote"].includes(arg)),
-      )
+      .map((call) => call.args.find((arg) => ["fetch", "worktree", "apply", "commit", "push"].includes(arg)))
       .filter(Boolean);
     expect(verbs).toContain("fetch");
-    expect(verbs).toContain("checkout");
-    expect(verbs.at(-1)).toBe("push");
+    expect(verbs).toContain("worktree");
+    expect(verbs).toContain("apply");
+    // The throwaway worktree is removed again after the push.
+    expect(verbs.at(-1)).toBe("worktree");
     expect(calls.some((call) => call.args.includes("commit"))).toBe(true);
     expect(calls.every((call) => call.args.some((arg) => arg.startsWith("safe.directory=")))).toBe(true);
-    // The test branch is cut from the repository's default branch, not from the
-    // Run's leftover HEAD — otherwise the deploy workflow would not be present.
-    const checkout = calls.find((call) => call.args.includes("checkout"))!;
-    expect(checkout.args).toContain("origin/main");
-    const push = calls.at(-1)!;
+    // The test branch is cut from the repository's default branch in a throwaway
+    // worktree — the deploy workflow lives there, and the Run's own workspace
+    // (with its already-published ai/… commit) is never rewritten.
+    const worktreeAdd = calls.find((call) => call.args.includes("worktree"))!;
+    expect(worktreeAdd.args).toContain("origin/main");
+    expect(calls.some((call) => call.args.includes("checkout"))).toBe(false);
+    const push = calls.filter((call) => call.args.includes("push")).at(-1)!;
     expect(push.args.join(" ")).toContain("@github.com/i12n/x-music.git");
     expect(push.args.join(" ")).toContain("HEAD:test/dlv-1");
     expect(push.args.join(" ")).toContain("x-access-token:ghs_token@");
@@ -108,7 +111,7 @@ describe("control-plane test-branch push (TASK-1230)", () => {
         if (args.includes("push")) {
           throw new Error("remote: Permission denied");
         }
-        return args.includes("status") ? " M app/page.tsx\n" : "";
+        return args.includes("diff") ? "diff --git a/app/page.tsx b/app/page.tsx\n" : "";
       },
     });
     const outcome = await service.publish(request("test/dlv-1"));

@@ -22,7 +22,7 @@ describe("InMemoryRepositoryStore", () => {
     expect(repo.verificationCommands).toEqual([]);
     expect(repo.executionProfile.name).toBe("default");
     expect(repo.executionProfile.network.mode).toBe("none");
-    expect(repo.executionProfile.policy.gitPush).toBe("deny");
+    expect(repo.executionProfile.policy.gitPush).toBe("allow");
     expect(repo.createdAt).toBe(repo.updatedAt);
   });
 

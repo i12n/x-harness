@@ -185,7 +185,12 @@ export class GitService {
         committed: false,
         pushed: false,
         skipped: "push_disabled",
-        message: `仓库 ${repository.id} 的执行档案是 gitPush=deny，未推送`,
+        // TASK-1239: this is the one outcome an operator can fix in a single
+        // command, so say which one. Default profiles stay restrictive; the
+        // message is what stops the operator from having to read the source.
+        message:
+          `仓库 ${repository.id} 的执行档案是 gitPush=deny，未推送` +
+          `（审批后的改动要推 ai/ 分支需先放开：ai repository update ${repository.id} --git-push allow）`,
       };
     }
 

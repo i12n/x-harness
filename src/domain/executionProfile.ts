@@ -97,7 +97,12 @@ export function buildExecutionProfile(
     policy: {
       workspaceAccess: input.policy?.workspaceAccess ?? "read_write",
       hostFilesystem: "deny",
-      gitPush: input.policy?.gitPush ?? "deny",
+      // TASK-1240: a newly registered repository defaults to `allow`, so an
+      // approval actually lands on the remote instead of silently skipping.
+      // The push guards stay: only `AI_GIT_PUSH_PREFIX` branches (ai/, test/),
+      // never the default branch, and only after a human approval or an
+      // explicit `task publish` / `deploy.test`.
+      gitPush: input.policy?.gitPush ?? "allow",
       dockerAccess: "deny",
       productionAccess: "deny",
     },
