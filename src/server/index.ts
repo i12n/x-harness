@@ -28,6 +28,7 @@ import {
   createRunQueryPort,
 } from "./deployment/queryPorts.js";
 import { GitService } from "../git/gitService.js";
+import { specificationIdOfTask } from "../domain/specificationPlan.js";
 import { GitPublishService } from "../git/publishService.js";
 import { InMemoryIdempotencyStore } from "../command/idempotency.js";
 import { LlmIntentEngine } from "../command/llmIntentEngine.js";
@@ -425,6 +426,52 @@ export class HarnessRuntime {
       runs: stores.runs,
       events: stores.events,
       send: sendToTarget,
+      // TASK-1253: Runs the scheduler (or the CLI) started carry no binding —
+      // resolve the conversation from the requirement they implement, so their
+      // cards stop disappearing.
+      resolveTarget: async (run) => {
+        try {
+          const task = await stores.tasks.findTask(run.taskId);
+          const specificationId = specificationIdOfTask(task.id);
+          const specification = specificationId
+            ? await stores.specifications
+                .findSpecification(specificationId)
+                .catch(() => undefined)
+            : undefined;
+          const subjects: { type: "task" | "problem"; id: string }[] = [
+            { type: "task", id: task.id },
+            ...(specification ? [{ type: "problem" as const, id: specification.problemId }] : []),
+          ];
+          for (const subject of subjects) {
+            const conversations = await stores.conversations
+              .listConversations({
+                subjectType: subject.type,
+                subjectId: subject.id,
+              })
+              .catch(() => []);
+            const conversation = conversations[conversations.length - 1];
+            if (conversation) {
+              return {
+                conversationId: conversation.id,
+                receiveId: conversation.externalChatId,
+                receiveIdType: "chat_id" as const,
+              };
+            }
+          }
+        } catch {
+          // Fall through to the default chat, then to silence.
+        }
+        return undefined;
+      },
+      ...(config.feishu.defaultChatId
+        ? {
+            defaultTarget: {
+              conversationId: `runs-${config.feishu.defaultChatId}`,
+              receiveId: config.feishu.defaultChatId,
+              receiveIdType: "chat_id" as const,
+            },
+          }
+        : {}),
     });
 
     const intent = new LlmIntentEngine({

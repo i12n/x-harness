@@ -32,6 +32,40 @@ async function setup() {
 }
 
 describe("RunChatNotifier", () => {
+  // TASK-1253: the scheduler (auto-start) and the CLI never bind a conversation,
+  // so their terminal Runs were silent. Resolution now falls back to the
+  // requirement, then to the default chat.
+  it("reports an unbound run through the resolver", async () => {
+    const { runs, events, sent } = await setup();
+    const notifier = new RunChatNotifier({
+      runs,
+      events,
+      send: async (to, message) => {
+        sent.push({ target: to, message });
+      },
+      resolveTarget: async () => target,
+    });
+    await runs.completeRun("run-1", { status: "SUCCEEDED", exitCode: 0 });
+
+    expect(await notifier.flush()).toBe(1);
+    expect(sent[0]!.target.conversationId).toBe("conv-1");
+  });
+
+  it("reports an unbound run to the default chat as a last resort", async () => {
+    const { runs, events, sent } = await setup();
+    const notifier = new RunChatNotifier({
+      runs,
+      events,
+      send: async (to, message) => {
+        sent.push({ target: to, message });
+      },
+      defaultTarget: target,
+    });
+    await runs.completeRun("run-1", { status: "FAILED", exitCode: 1 });
+
+    expect(await notifier.flush()).toBe(1);
+  });
+
   it("stays silent while the run is active and reports once it finishes", async () => {
     const { runs, sent, notifier } = await setup();
     await notifier.bind("run-1", target);
