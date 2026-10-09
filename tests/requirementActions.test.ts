@@ -73,8 +73,10 @@ async function harness(
     id: "conv-1",
     channel: "feishu",
     externalChatId: "chat-1",
-    subjectType: options.bound === "problem" ? "problem" : "task",
-    subjectId: options.bound === "problem" ? "prob-1" : taskSpecs[0]!.id,
+    // No tasks (yet) means the conversation is bound to the requirement itself.
+    subjectType: options.bound === "problem" || taskSpecs.length === 0 ? "problem" : "task",
+    subjectId:
+      options.bound === "problem" || taskSpecs.length === 0 ? "prob-1" : taskSpecs[0]!.id,
   });
 
   const resolver = createRequirementResolver({
@@ -235,6 +237,20 @@ describe("action → command mapping (TASK-1244)", () => {
     );
     expect(outcome.commands).toHaveLength(0);
     expect(outcome.ask).toContain("还没有对应的需求");
+  });
+
+  // TASK-1252: "开始做吧 / 重试生成规格" on a requirement whose derivation failed
+  // must advance it (derive + plan), not report "nothing to re-run".
+  it("advances a confirmed requirement that has no specification yet", async () => {
+    const { resolver, view } = await harness({ tasks: [] });
+    // A confirmed problem with no specification and no tasks.
+    const bare = { ...view, specification: undefined, tasks: [], currentTask: undefined };
+    expect(await resolver.resolve("conv-1")).toBeDefined();
+
+    const outcome = commandsForRequirementAction({ type: "rerun" }, bare);
+
+    expect(outcome.commands).toHaveLength(0);
+    expect(outcome.advance).toBe(true);
   });
 });
 

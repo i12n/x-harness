@@ -237,6 +237,43 @@ describe("ChatSession", () => {
     expect(textOf(sent.at(-1)!.message)).not.toContain("我还不知道你说的是哪件事");
   });
 
+  // TASK-1252: "开始做吧 / 重试生成规格" on a confirmed requirement whose
+  // derivation failed must advance it (re-run the bootstrap), not say "nothing
+  // to re-run".
+  it("advances a confirmed requirement through the bootstrap", async () => {
+    const intent = new StubIntentEngine({
+      command: undefined,
+      action: { type: "rerun" },
+    });
+    let bootstrapped: string | undefined;
+    const { session, sent } = await buildSession(intent, ["ou_dev"], {
+      requirements: {
+        resolve: async () => ({
+          problemId: "prob-1",
+          title: "面包屑间距 8px",
+          stage: "clarifying" as const,
+          tasks: [],
+        }),
+      },
+      specificationBootstrap: {
+        bootstrap: async (problemId: string) => {
+          bootstrapped = problemId;
+          return {
+            specification: { id: "spec-1", acceptance: [], title: "面包屑间距 8px" },
+            tasks: [{ id: "task-spec-1-0", title: "改间距" }],
+            replayed: false,
+            unknownTargets: [],
+          };
+        },
+      } as unknown as SpecificationBootstrap,
+    });
+
+    await session.handleEvent(event("om-1", "开始做吧"));
+
+    expect(bootstrapped).toBe("prob-1");
+    expect(textOf(sent.at(-1)!.message)).toContain("规格已就绪");
+  });
+
   it("打回 reworks the finished deliverable and ignores a pasted id", async () => {
     const intent = new StubIntentEngine({
       command: undefined,

@@ -650,6 +650,23 @@ export class ChatSession {
       );
       return true;
     }
+    // TASK-1252: "开始做吧 / 重试生成规格" on a requirement that stopped before
+    // planning — advance it (derive the specification, then plan).
+    if (outcome.advance) {
+      if (view?.problemId && this.deps.specificationBootstrap) {
+        await this.bootstrap(target, view.problemId);
+        return true;
+      }
+      await this.reply(
+        target,
+        {
+          conversationId: target.conversationId,
+          text: [hint, "这项需求还没到能开工的阶段——先确认要做什么。"].filter(Boolean).join("\n"),
+        },
+        routing,
+      );
+      return true;
+    }
     if (outcome.showCard && view) {
       const card = renderRequirementCard(view, {
         conversationId: target.conversationId,

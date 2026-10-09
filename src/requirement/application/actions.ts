@@ -20,6 +20,12 @@ export interface RequirementActionOutcome {
   ask?: string;
   /** True when the caller should render the requirement card instead of a command. */
   showCard?: boolean;
+  /**
+   * TASK-1252: the requirement has nothing to re-run yet — advance it instead
+   * (derive the specification, plan the tasks). "开始做吧 / 重试生成规格" lands
+   * here when the earlier derivation failed.
+   */
+  advance?: boolean;
 }
 
 export function commandsForRequirementAction(
@@ -150,6 +156,15 @@ export function commandsForRequirementAction(
     case "rerun": {
       if (!view) {
         return { commands: [], ask: NO_REQUIREMENT_ASK };
+      }
+      // Nothing to re-run yet: the bottleneck is upstream (no specification, or
+      // a specification that never got planned). Advancing is what the user
+      // means by "开始做吧" / "重试生成规格".
+      if (!view.specification || view.tasks.length === 0) {
+        if (!view.problemId) {
+          return { commands: [], ask: "这项需求还没到能开工的阶段。" };
+        }
+        return { commands: [], advance: true };
       }
       const target = view.currentTask ?? view.tasks[0];
       if (!target) {
