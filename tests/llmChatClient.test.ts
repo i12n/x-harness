@@ -82,7 +82,7 @@ describe("HttpChatClient", () => {
     await expect(client.complete({ messages: [] })).rejects.toThrow(HarnessError);
   });
 
-  it("retries once with a doubled budget when the model only reasoned", async () => {
+  it("keeps doubling the budget while the model only reasons", async () => {
     const calls: { url: string; init: Parameters<ChatFetchLike>[1] }[] = [];
     // A reasoning model answers 200 with content:"" and finish_reason:"length"
     // when its hidden reasoning ate the whole max_tokens budget.
@@ -97,7 +97,8 @@ describe("HttpChatClient", () => {
     };
     const fetchImpl: ChatFetchLike = async (url, init) => {
       calls.push({ url, init });
-      return calls.length === 1
+      // Two budgets burned on reasoning in a row, then an answer.
+      return calls.length <= 2
         ? response(200, reasoningOnly)
         : response(200, { choices: [{ message: { content: '{"ok":true}' } }] });
     };
@@ -110,11 +111,13 @@ describe("HttpChatClient", () => {
 
     await expect(client.complete({ messages: [], json: true })).resolves.toBe('{"ok":true}');
 
-    expect(calls).toHaveLength(2);
+    expect(calls).toHaveLength(3);
     const first = JSON.parse(calls[0]!.init.body ?? "{}") as { max_tokens: number };
     const second = JSON.parse(calls[1]!.init.body ?? "{}") as { max_tokens: number };
+    const third = JSON.parse(calls[2]!.init.body ?? "{}") as { max_tokens: number };
     expect(first.max_tokens).toBe(2048);
     expect(second.max_tokens).toBe(4096);
+    expect(third.max_tokens).toBe(8192);
   });
 
   it("names the token budget instead of retrying at the ceiling", async () => {

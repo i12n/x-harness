@@ -114,20 +114,21 @@ export class HttpChatClient implements ChatClient {
   }
 
   async complete(request: ChatCompletionRequest): Promise<string> {
-    const requested = request.maxTokens ?? this.maxTokens;
-    const first = await this.sendOnce(request, requested);
-    if (first.content.trim()) {
-      return first.content;
+    // TASK-1251: a reasoning model can burn *several* budgets in a row on hidden
+    // reasoning before writing anything, so escalate until the ceiling instead of
+    // giving up after one doubling (2048 → 4096 → 8192).
+    let maxTokens = request.maxTokens ?? this.maxTokens;
+    for (;;) {
+      const parsed = await this.sendOnce(request, maxTokens);
+      if (parsed.content.trim()) {
+        return parsed.content;
+      }
+      const next = escalateBudget(maxTokens);
+      if (next === undefined) {
+        throw emptyContentError(parsed, maxTokens);
+      }
+      maxTokens = next;
     }
-    const retryBudget = escalateBudget(requested);
-    if (retryBudget === undefined) {
-      throw emptyContentError(first, requested);
-    }
-    const retried = await this.sendOnce(request, retryBudget);
-    if (retried.content.trim()) {
-      return retried.content;
-    }
-    throw emptyContentError(retried, retryBudget);
   }
 
   private async sendOnce(
