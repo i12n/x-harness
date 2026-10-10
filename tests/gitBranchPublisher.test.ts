@@ -127,4 +127,23 @@ describe("control-plane test-branch push (TASK-1230)", () => {
     expect(outcome.pushed).toBe(false);
     expect(outcome.reason).toContain("Permission denied");
   });
+
+  // TASK-1268: the watcher pins the deploy run to this commit, so the push has
+  // to report which commit it produced.
+  it("returns the pushed commit", async () => {
+    const service = new GitBranchPublisher({
+      tokenProvider: new StaticTokenProvider("ghs_token"),
+      exec: async (args) => {
+        if (args.includes("merge-base")) return "base123\n";
+        if (args.includes("diff")) return "diff --git a/app/page.tsx b/app/page.tsx\n";
+        if (args.includes("rev-parse") && args.includes("HEAD")) return "cafe1234\n";
+        return "";
+      },
+    });
+
+    const outcome = await service.publish(request("test/dlv-1"));
+
+    expect(outcome.pushed).toBe(true);
+    expect(outcome.sha).toBe("cafe1234");
+  });
 });

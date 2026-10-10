@@ -141,3 +141,18 @@ export class ConversationNotFoundError extends HarnessError {
     super(`没有找到会话：${id}`);
   }
 }
+
+/**
+ * TASK-1268: a GitHub REST call came back non-2xx. The status is kept because
+ * callers must tell "the workflow does not exist" (404, a configuration
+ * problem worth reporting) apart from "the API is unhappy right now" (keep
+ * watching).
+ */
+export class GitHubRequestError extends HarnessError {
+  readonly status: number;
+
+  constructor(status: number, message: string) {
+    super(message);
+    this.status = status;
+  }
+}

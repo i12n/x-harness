@@ -224,4 +224,105 @@ describe("GitHub REST client (TASK-1230)", () => {
     expect(pr.number).toBe(7);
     expect(pr.merged).toBe(false);
   });
+
+  // TASK-1268: the run lookup must be scoped to the deploy workflow, otherwise
+  // it answers with every workflow the push triggered.
+  it("scopes the run lookup to one workflow and one event", async () => {
+    const seen: string[] = [];
+    const client = HttpGitHubClient.withToken("ghp_x", {
+      fetch: (async (url: string) => {
+        seen.push(url);
+        return jsonResponse({
+          workflow_runs: [
+            {
+              id: 38024066961,
+              name: "Deploy app to test environment",
+              head_branch: "test/dlv-9121521df0",
+              head_sha: "99f0f6fb1234",
+              status: "in_progress",
+              event: "push",
+              path: ".github/workflows/deploy-test.yml",
+              html_url: "https://github.com/i12n/x-music/actions/runs/38024066961",
+              created_at: "2026-10-10T04:26:24Z",
+            },
+          ],
+        });
+      }) as unknown as typeof fetch,
+    });
+
+    const runs = await client.listWorkflowRuns({
+      repo: "i12n/x-music",
+      branch: "test/dlv-9121521df0",
+      workflow: "deploy-test.yml",
+      event: "push",
+    });
+
+    expect(seen[0]).toContain("/repos/i12n/x-music/actions/workflows/deploy-test.yml/runs");
+    expect(seen[0]).toContain("branch=test%2Fdlv-9121521df0");
+    expect(seen[0]).toContain("event=push");
+    expect(runs[0]?.path).toBe(".github/workflows/deploy-test.yml");
+    expect(runs[0]?.event).toBe("push");
+    expect(runs[0]?.headSha).toBe("99f0f6fb1234");
+  });
+
+  it("lists the repository's workflows with their paths and states", async () => {
+    const client = HttpGitHubClient.withToken("ghp_x", {
+      fetch: (async () =>
+        jsonResponse({
+          workflows: [
+            {
+              id: 378027925,
+              name: "Deploy app to test environment",
+              path: ".github/workflows/deploy-test.yml",
+              state: "active",
+            },
+          ],
+        })) as unknown as typeof fetch,
+    });
+
+    expect(await client.listWorkflows({ repo: "i12n/x-music" })).toEqual([
+      {
+        id: 378027925,
+        name: "Deploy app to test environment",
+        path: ".github/workflows/deploy-test.yml",
+        state: "active",
+      },
+    ]);
+  });
+
+  it("decodes a workflow file, and answers undefined when it is absent", async () => {
+    const body = Buffer.from("on:\n  push:\n    branches: [main]\n", "utf8").toString("base64");
+    const present = HttpGitHubClient.withToken("ghp_x", {
+      fetch: (async () =>
+        jsonResponse({ encoding: "base64", content: body })) as unknown as typeof fetch,
+    });
+    expect(await present.readFile({ repo: "i12n/x-music", path: ".github/workflows/x.yml" })).toBe(
+      "on:\n  push:\n    branches: [main]\n",
+    );
+
+    const missing = HttpGitHubClient.withToken("ghp_x", {
+      fetch: (async () =>
+        jsonResponse({ message: "Not Found" }, 404)) as unknown as typeof fetch,
+    });
+    expect(
+      await missing.readFile({ repo: "i12n/x-music", path: ".github/workflows/nope.yml" }),
+    ).toBeUndefined();
+  });
+
+  // A missing workflow is a configuration fact the caller must be able to
+  // recognise, so the HTTP status survives as a typed error.
+  it("surfaces a missing workflow as a 404 GitHubRequestError", async () => {
+    const client = HttpGitHubClient.withToken("ghp_x", {
+      fetch: (async () =>
+        jsonResponse({ message: "Not Found" }, 404)) as unknown as typeof fetch,
+    });
+
+    await expect(
+      client.listWorkflowRuns({
+        repo: "i12n/x-music",
+        branch: "test/dlv-1",
+        workflow: "deploy-prod.yml",
+      }),
+    ).rejects.toMatchObject({ name: "GitHubRequestError", status: 404 });
+  });
 });

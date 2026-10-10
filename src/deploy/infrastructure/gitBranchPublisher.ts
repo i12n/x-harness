@@ -56,7 +56,7 @@ export class GitBranchPublisher implements TestBranchPublisher {
     workspacePath: string;
     branch: string;
     message: string;
-  }): Promise<{ pushed: boolean; reason?: string }> {
+  }): Promise<{ pushed: boolean; sha?: string; reason?: string }> {
     if (
       input.branch === input.repository.defaultBranch ||
       input.branch === "main" ||
@@ -109,7 +109,8 @@ export class GitBranchPublisher implements TestBranchPublisher {
           env,
         );
         if (existing.trim()) {
-          return { pushed: true };
+          // TASK-1268: the branch tip is what a (re-)deploy would run for.
+          return { pushed: true, ...shaOrNothing(existing) };
         }
         return { pushed: false, reason: "工作区没有改动，没有可测试的内容" };
       }
@@ -165,7 +166,12 @@ export class GitBranchPublisher implements TestBranchPublisher {
         await this.run([...scratchTrust, "rev-parse", "HEAD^{tree}"], scratch, env).catch(() => "")
       ).trim();
       if (remoteTree && remoteTree === localTree) {
-        return { pushed: true };
+        // TASK-1268: nothing was pushed, so the run (if any) belongs to the
+        // commit already on the branch.
+        const tip = (
+          await this.run([...scratchTrust, "rev-parse", "FETCH_HEAD"], scratch, env).catch(() => "")
+        ).trim();
+        return { pushed: true, ...(tip ? { sha: tip } : {}) };
       }
 
       phase = "push";
@@ -195,7 +201,11 @@ export class GitBranchPublisher implements TestBranchPublisher {
         scratch,
         env,
       );
-      return { pushed: true };
+      // TASK-1268: the commit the deployment run will report as its head_sha.
+      const head = (
+        await this.run([...scratchTrust, "rev-parse", "HEAD"], scratch, env).catch(() => "")
+      ).trim();
+      return { pushed: true, ...(head ? { sha: head } : {}) };
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
       return {
@@ -216,4 +226,10 @@ export class GitBranchPublisher implements TestBranchPublisher {
       }
     }
   }
+}
+
+/** First field of a `git ls-remote` line — the object name. */
+function shaOrNothing(lsRemoteOutput: string): { sha?: string } {
+  const sha = lsRemoteOutput.trim().split(/\s+/)[0]?.trim() ?? "";
+  return sha ? { sha } : {};
 }

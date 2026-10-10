@@ -101,6 +101,14 @@ ai repository update repo-x-music \
 「声明的 secret 能不能解析、网络能不能够到 provider」，逐仓库在日志里点名。
 确认无误时可用 `--skip-profile-check` 跳过。
 
+**部署工作流门禁**（TASK-1268）：注册与更新还会读一次该仓库的 GitHub Actions，
+要求它按约定声明 `.github/workflows/deploy-test.yml`（push 到 `test/**`）与
+`.github/workflows/deploy-prod.yml`（push 到默认分支），且都处于 active。缺一个、
+被禁用或触发分支对不上都会拒绝注册，报错里会列出该仓库实际存在的工作流；确认要
+接入可用 `--skip-deploy-check` 跳过，但 harness 之后无法确认这个仓库的部署结果
+（卡片会显示「无法确认部署结果」而不是「就绪」）。本机没配 GitHub 凭据时该项
+自动跳过并打印提示；非 GitHub 远程（如 `file://` 演示仓库）不检查。
+
 ### 必备环境变量
 
 | 变量 | 说明 |

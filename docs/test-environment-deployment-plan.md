@@ -36,8 +36,15 @@ test/<deliveryId>       测试分支；harness 在需要验收时推送
 
 | workflow | 触发 | 做什么 | harness 关心什么 |
 | --- | --- | --- | --- |
-| `deploy-test` | push 到 `test/**` | 部署到测试环境 | 这次 run 的结论 + 测试环境 URL |
-| `deploy-prod` | push/merge 到 `main` | 部署到线上 | 这次 run 的结论 |
+| `.github/workflows/deploy-test.yml` | push 到 `test/**` | 部署到测试环境 | 这次 run 的结论 + 测试环境 URL |
+| `.github/workflows/deploy-prod.yml` | push/merge 到 `main` | 部署到线上 | 这次 run 的结论 |
+
+**这两个文件名是接入 harness 的硬性前提**（TASK-1268）：harness 只能观测它认得的
+工作流——按分支取"最新一条 run"会把同一 push 触发的其它工作流（如文档检查，
+11 秒就跑完）当成部署结果。`ai repository create` / `update` 会读一次仓库的
+workflow 列表并解析这两个文件的触发条件，缺一个、被禁用或触发分支对不上都直接
+拒绝注册（`--skip-deploy-check` 可跳过，但该仓库的部署结果就不再可见）。
+不是 GitHub 远程（如 `file://` 演示仓库）的跳过这项检查。
 
 workflow 自身与目标环境（部署到哪台机、用什么凭证）完全属于**项目仓库**，
 harness 不参与、也不需要知道细节——它只看 run 的状态与输出。
@@ -110,7 +117,9 @@ git 层原本只允许推送 `AI_GIT_PUSH_PREFIX`（默认 `ai/`）下的分支�
 
 harness 服务用飞书长连接，**没有 HTTP server、没有公网回调**（这是有意的）。
 因此监控走**轮询**：loop 每跳查一次 GitHub API 的 workflow run 状态
-（`GET /repos/{owner}/{repo}/actions/runs?branch=test/<deliveryId>`），
+（TASK-1268 起是 scoped 端点
+`GET /repos/{owner}/{repo}/actions/workflows/deploy-test.yml/runs?branch=test/<deliveryId>&event=push`，
+线上同理换成 `deploy-prod.yml` 与默认分支），
 状态变化才写事件、才更新飞书卡片。这样不需要新增公网入口，也不需反向代理。
 
 （未来若要做 PR 打开即预览，再考虑 GitHub webhook；那需要一个新的受保护入站入口，

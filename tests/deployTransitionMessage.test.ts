@@ -57,6 +57,19 @@ describe("deploy transition messages", () => {
     expect(ready?.text).toContain("打开链接即可验收");
   });
 
+  // TASK-1268: a repository without the conventional workflow is never "ready",
+  // and the message has to say what to fix.
+  it("says it cannot tell, and names the convention, when the workflow is gone", () => {
+    const message = renderDeployTransitionMessage(
+      { deliveryId: "dlv-1", state: "unconfigured", kind: "test" },
+      urls,
+    );
+    expect(message?.text).toContain("⚠️ 无法确认测试环境部署结果");
+    expect(message?.text).toContain("deploy-test.yml");
+    expect(message?.text).not.toContain("测试环境就绪");
+    expect(message?.text).not.toContain("47.100.5.48");
+  });
+
   it("points at the delivery still being releasable when production fails", () => {
     const message = renderDeployTransitionMessage(
       { deliveryId: "dlv-1", state: "failed", kind: "production" },

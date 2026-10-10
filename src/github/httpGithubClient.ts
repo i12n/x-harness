@@ -1,11 +1,13 @@
 import {
   normalizeConclusion,
+  type GitHubWorkflow,
   type GitHubClient,
   type GitHubPullRequest,
   type GitHubWorkflowRun,
   type MergePullRequestInput,
   type OpenPullRequestInput,
 } from "./githubClient.js";
+import { GitHubRequestError } from "../errors.js";
 import { StaticTokenProvider, type GitHubTokenProvider } from "./tokenProvider.js";
 
 export interface HttpGitHubClientOptions {
@@ -78,17 +80,67 @@ export class HttpGitHubClient implements GitHubClient {
     repo: string;
     branch: string;
     limit?: number;
+    workflow?: string;
+    event?: string;
   }): Promise<GitHubWorkflowRun[]> {
     const query = new URLSearchParams({
       branch: input.branch,
       per_page: String(input.limit ?? 10),
     });
+    if (input.event) {
+      query.set("event", input.event);
+    }
+    // TASK-1268: scoping to one workflow is what makes the answer mean "the
+    // deployment", instead of "whichever workflow on this branch finished first".
+    const path = input.workflow
+      ? `/repos/${input.repo}/actions/workflows/${encodeURIComponent(input.workflow)}/runs`
+      : `/repos/${input.repo}/actions/runs`;
     const body = await this.request<{ workflow_runs?: unknown[] }>(
       "GET",
-      `/repos/${input.repo}/actions/runs?${query.toString()}`,
+      `${path}?${query.toString()}`,
     );
     const rows = Array.isArray(body?.workflow_runs) ? body.workflow_runs : [];
     return rows.map(toRun);
+  }
+
+  async listWorkflows(input: { repo: string }): Promise<GitHubWorkflow[]> {
+    const body = await this.request<{ workflows?: unknown[] }>(
+      "GET",
+      `/repos/${input.repo}/actions/workflows?per_page=100`,
+    );
+    const rows = Array.isArray(body?.workflows) ? body.workflows : [];
+    return rows.map((row) => {
+      const record = (row ?? {}) as Record<string, unknown>;
+      return {
+        id: Number(record.id ?? 0),
+        name: String(record.name ?? ""),
+        path: String(record.path ?? ""),
+        state: String(record.state ?? ""),
+      };
+    });
+  }
+
+  async readFile(input: { repo: string; path: string; ref?: string }): Promise<string | undefined> {
+    const query = input.ref ? `?ref=${encodeURIComponent(input.ref)}` : "";
+    let body: unknown;
+    try {
+      body = await this.request<unknown>(
+        "GET",
+        `/repos/${input.repo}/contents/${input.path}${query}`,
+      );
+    } catch (error) {
+      // A missing file is an answer ("this repository does not declare it"),
+      // not a failure of the lookup.
+      if (error instanceof GitHubRequestError && error.status === 404) {
+        return undefined;
+      }
+      throw error;
+    }
+    const record = (body ?? {}) as Record<string, unknown>;
+    if (record.encoding !== "base64" || typeof record.content !== "string") {
+      return undefined;
+    }
+    return Buffer.from(record.content.replace(/\n/g, ""), "base64").toString("utf8");
   }
 
   private async request<T>(method: string, path: string, body?: unknown): Promise<T> {
@@ -110,7 +162,10 @@ export class HttpGitHubClient implements GitHubClient {
         (parsed && typeof parsed === "object" && "message" in parsed
           ? String((parsed as { message?: unknown }).message)
           : undefined) ?? text.slice(0, 200);
-      throw new Error(`GitHub ${method} ${path} → ${response.status} ${message}`.trim());
+      throw new GitHubRequestError(
+        response.status,
+        `GitHub ${method} ${path} → ${response.status} ${message}`.trim(),
+      );
     }
     return parsed as T;
   }
@@ -132,6 +187,9 @@ function toPullRequest(raw: unknown): GitHubPullRequest {
     state: record.state === "closed" ? "closed" : "open",
     merged: record.merged === true || record.merged_at != null,
     ...(typeof record.merged_at === "string" ? { mergedAt: record.merged_at } : {}),
+    ...(typeof record.merge_commit_sha === "string" && record.merge_commit_sha
+      ? { mergeCommitSha: record.merge_commit_sha }
+      : {}),
     head: String((record.head as Record<string, unknown> | undefined)?.ref ?? ""),
     base: String((record.base as Record<string, unknown> | undefined)?.ref ?? ""),
   };
@@ -153,5 +211,8 @@ function toRun(raw: unknown): GitHubWorkflowRun {
       : {}),
     url: String(record.html_url ?? ""),
     createdAt: String(record.created_at ?? ""),
+    ...(typeof record.path === "string" ? { path: record.path } : {}),
+    ...(typeof record.event === "string" ? { event: record.event } : {}),
+    ...(typeof record.head_sha === "string" ? { headSha: record.head_sha } : {}),
   };
 }

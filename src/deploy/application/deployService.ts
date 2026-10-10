@@ -3,8 +3,16 @@ import type { Repository } from "../../domain/repository.js";
 import type { Run } from "../../domain/run.js";
 import type { Task } from "../../domain/task.js";
 import { latestDeliveryProduct } from "../../delivery/application/product.js";
-import type { GitHubClient, GitHubPullRequest, GitHubWorkflowRun } from "../../github/githubClient.js";
+import {
+  githubSlugFromUrl,
+  type GitHubClient,
+  type GitHubPullRequest,
+  type GitHubWorkflow,
+  type GitHubWorkflowRun,
+} from "../../github/githubClient.js";
+import { GitHubRequestError, HarnessError } from "../../errors.js";
 import type { EventStore } from "../../store/eventStore.js";
+import { DEPLOY_PROD_WORKFLOW, DEPLOY_TEST_WORKFLOW, deployWorkflowPath } from "../domain/deployWorkflow.js";
 
 /** Pushes a branch to a repository (the harness's existing git path). */
 export interface TestBranchPublisher {
@@ -74,8 +82,17 @@ export interface TestDeployStatus {
   branch: string;
   /** Latest run on the branch, when any has started. */
   run?: GitHubWorkflowRun;
-  /** `none` before any run appears — Actions may take a moment to queue. */
-  state: "none" | "pending" | "succeeded" | "failed";
+  /**
+   * `none` before any run appears — Actions may take a moment to queue.
+   *
+   * TASK-1268: `unconfigured` means the repository does not declare the
+   * conventional deploy workflow, so the harness cannot tell whether anything
+   * was deployed. It is deliberately not a success: no card says "ready" and no
+   * release is written from it.
+   */
+  state: "none" | "pending" | "succeeded" | "failed" | "unconfigured";
+  /** TASK-1268: the deploy workflow this status was read from. */
+  workflow?: string;
 }
 
 export interface PromoteOutcome {
@@ -132,6 +149,8 @@ export class DeployService {
       branch: string;
       sinceMs: number;
       kind: "test" | "production";
+      /** TASK-1268: the commit this watch belongs to, when we know it. */
+      headSha?: string;
     }
   >();
 
@@ -145,7 +164,12 @@ export class DeployService {
   /** TASK-1231: start watching a deployment (called when the branch is pushed). */
   watch(
     deliveryId: string,
-    options: { branch?: string; kind?: "test" | "production"; sinceMs?: number } = {},
+    options: {
+      branch?: string;
+      kind?: "test" | "production";
+      sinceMs?: number;
+      headSha?: string;
+    } = {},
   ): void {
     const at = this.now().getTime();
     this.watching.set(deliveryId, {
@@ -159,6 +183,7 @@ export class DeployService {
       // already-merged PR must still see the deploy that merge triggered.
       sinceMs: options.sinceMs ?? at,
       kind: options.kind ?? "test",
+      ...(options.headSha ? { headSha: options.headSha } : {}),
     });
   }
 
@@ -189,7 +214,10 @@ export class DeployService {
       }
       let status: TestDeployStatus;
       try {
-        status = await this.statusOn(deliveryId, entry.branch, entry.sinceMs);
+        status = await this.statusOn(deliveryId, entry.branch, entry.sinceMs, {
+          kind: entry.kind,
+          ...(entry.headSha ? { headSha: entry.headSha } : {}),
+        });
       } catch (error) {
         // A failed lookup is not a failed deployment: keep watching, say nothing.
         continue;
@@ -214,7 +242,11 @@ export class DeployService {
           ? "TestDeploySucceeded"
           : status.state === "failed"
             ? "TestDeployFailed"
-            : "TestDeployProgress",
+            : status.state === "unconfigured"
+              ? // TASK-1268: keep it distinguishable in the audit log — this is a
+                // repository problem, not a deployment that is still running.
+                "TestDeployUnconfigured"
+              : "TestDeployProgress",
         { deliveryId, state: status.state, run: status.run?.url },
       );
       // TASK-1255: the production deploy is what "上线" means, so it — not the
@@ -255,6 +287,11 @@ export class DeployService {
           "要再改请开新需求（或先打回这份交付）",
       );
     }
+    // TASK-1268: refuse in words when the repository clearly does not declare
+    // the test workflow, instead of pushing, saying "部署中" and never being
+    // able to tell. A failed lookup is not evidence — the watcher reports
+    // `unconfigured` on its own if the workflow really is missing.
+    await this.assertDeployWorkflow(repository, repo, DEPLOY_TEST_WORKFLOW, "测试环境");
 
     const publish = await this.deps.git.publish({
       repository,
@@ -289,38 +326,68 @@ export class DeployService {
       url: pullRequest.url,
     });
     // TASK-1231: from here the loop watches the repository's own deployment.
-    this.watch(deliveryId);
+    // TASK-1268: pinned to the commit we just pushed.
+    this.watch(deliveryId, publish.sha ? { headSha: publish.sha } : {});
     return { deliveryId, repositoryId: repository.id, branch, pullRequest };
   }
 
   /** Observe the repository's own deployment: we only read the runs. */
   async status(deliveryId: string): Promise<TestDeployStatus> {
-    return this.statusOn(deliveryId, this.branchName(deliveryId), 0);
+    return this.statusOn(deliveryId, this.branchName(deliveryId), 0, { kind: "test" });
   }
 
   /**
    * TASK-1231: observe one branch. `sinceMs` ignores runs older than the watch,
    * so a re-published branch cannot report success from its previous run.
+   *
+   * TASK-1268: the answer is scoped to the conventional deploy workflow for
+   * `kind` — never "the newest run on this branch". A push also triggers the
+   * repository's PR checks, and the fast one used to be mistaken for the
+   * deployment (a delivery was announced ready while the real deploy was still
+   * building). `headSha` pins the run to the commit this watch belongs to.
    */
   private async statusOn(
     deliveryId: string,
     branch: string,
     sinceMs: number,
+    options: { kind?: "test" | "production"; headSha?: string } = {},
   ): Promise<TestDeployStatus> {
+    const kind = options.kind ?? "test";
+    const workflow = kind === "production" ? DEPLOY_PROD_WORKFLOW : DEPLOY_TEST_WORKFLOW;
     // Only the repository is needed here — requiring a succeeded Run (and its
     // worktree) would make a deployment unobservable exactly when it matters.
     const repository = await this.resolveRepository(deliveryId);
-    const runs = await this.deps.github.listWorkflowRuns({
-      repo: githubSlug(repository),
-      branch,
-      limit: 5,
-    });
-    // Newest first, so the first run at/after `sinceMs` is the one we watch.
-    const run = runs.find((candidate) => Date.parse(candidate.createdAt) >= sinceMs);
-    if (!run) {
-      return { deliveryId, branch, state: "none" };
+    const repo = githubSlug(repository);
+    let runs: GitHubWorkflowRun[];
+    try {
+      runs = await this.deps.github.listWorkflowRuns({
+        repo,
+        branch,
+        limit: 5,
+        workflow,
+        event: "push",
+      });
+    } catch (error) {
+      if (error instanceof GitHubRequestError && error.status === 404) {
+        // The repository stopped declaring that workflow. Saying so beats
+        // reporting whatever else happened to run on this branch.
+        return { deliveryId, branch, state: "unconfigured", workflow };
+      }
+      throw error;
     }
-    return { deliveryId, branch, run, state: summarize(run) };
+    // Newest first, so the first run at/after `sinceMs` is the one we watch.
+    const run = runs.find(
+      (candidate) =>
+        Date.parse(candidate.createdAt) >= sinceMs &&
+        // Both guards only bite when the API actually reported the field, so a
+        // thin client (or an older GitHub response) cannot make a watch hang.
+        (!candidate.event || candidate.event === "push") &&
+        (!options.headSha || !candidate.headSha || candidate.headSha === options.headSha),
+    );
+    if (!run) {
+      return { deliveryId, branch, state: "none", workflow };
+    }
+    return { deliveryId, branch, run, state: summarize(run), workflow };
   }
 
   /**
@@ -369,6 +436,8 @@ export class DeployService {
       branch: repository.defaultBranch,
       kind: "production",
       ...(Number.isFinite(mergedAtMs) ? { sinceMs: mergedAtMs } : {}),
+      // TASK-1268: the merge commit is what the production workflow runs for.
+      ...(merged.mergeCommitSha ? { headSha: merged.mergeCommitSha } : {}),
     });
     // TASK-1255: also confirm now, so the release does not depend on a watch
     // that a restart (or AI_DEPLOY_WATCH=off) may never deliver.
@@ -412,17 +481,18 @@ export class DeployService {
     if (!Number.isFinite(since)) {
       return { deliveryId, merged: true, state: "none", pullRequest };
     }
-    const runs = await this.deps.github.listWorkflowRuns({
-      repo,
-      branch: repository.defaultBranch,
-      limit: 5,
+    // TASK-1268: only the production deploy workflow, and only a run for the
+    // merge commit. A fast checks workflow finishing on `main` used to be enough
+    // to mark a delivery released.
+    const status = await this.statusOn(deliveryId, repository.defaultBranch, since, {
+      kind: "production",
+      ...(pullRequest.mergeCommitSha ? { headSha: pullRequest.mergeCommitSha } : {}),
     });
-    const run = runs.find((candidate) => Date.parse(candidate.createdAt) >= since);
     return {
       deliveryId,
       merged: true,
-      state: run ? summarize(run) : "none",
-      ...(run ? { run } : {}),
+      state: status.state,
+      ...(status.run ? { run: status.run } : {}),
       pullRequest,
     };
   }
@@ -482,6 +552,39 @@ export class DeployService {
     return this.deps.repositories.findRepository(task.repositoryId);
   }
 
+  /**
+   * TASK-1268: the onboarding gate refuses repositories that do not declare the
+   * convention, but one registered before the gate existed (or renamed
+   * afterwards) would otherwise fail silently: the branch is pushed, the card
+   * says "部署中", and no run ever matches. Refuse in words instead.
+   */
+  private async assertDeployWorkflow(
+    repository: Repository,
+    repo: string,
+    workflow: string,
+    label: string,
+  ): Promise<void> {
+    let workflows: GitHubWorkflow[];
+    try {
+      workflows = await this.deps.github.listWorkflows({ repo });
+    } catch {
+      // Cannot look it up (network, credentials): not evidence of a violation.
+      // The watcher reports `unconfigured` by itself if the workflow is gone.
+      return;
+    }
+    if (workflows.some((entry) => entry.path === deployWorkflowPath(workflow))) {
+      return;
+    }
+    const known =
+      workflows.length > 0 ? workflows.map((entry) => entry.path).join("、") : "（读不到任何工作流）";
+    throw new HarnessError(
+      `仓库 ${repository.id} 没有${label}部署工作流 ${deployWorkflowPath(workflow)}：` +
+        "harness 无法确认部署结果，所以不推分支。" +
+        `请把该工作流按约定命名（文件必须是 .github/workflows/${workflow}）后重试。` +
+        `现有工作流：${known}`,
+    );
+  }
+
   /** Delivery → its repository and the worktree a Run left behind. */
   private async resolve(
     deliveryId: string,
@@ -523,9 +626,9 @@ function describeError(error: unknown): string {
 
 /** `owner/name` from the repository's remote URL. */
 export function githubSlug(repository: Repository): string {
-  const match = /github\.com[:/]([^/]+\/[^/.]+)(\.git)?$/.exec(repository.url);
-  if (!match) {
+  const slug = githubSlugFromUrl(repository.url);
+  if (!slug) {
     throw new Error(`仓库 ${repository.id} 的地址不是 GitHub：${repository.url}`);
   }
-  return match[1]!;
+  return slug;
 }

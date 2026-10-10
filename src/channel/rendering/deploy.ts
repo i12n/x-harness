@@ -11,6 +11,7 @@ const STATE_LABEL: Record<TestDeployStatus["state"], string> = {
   pending: "🔄 部署中",
   succeeded: "✅ 测试环境就绪",
   failed: "❌ 部署失败",
+  unconfigured: "⚠️ 无法确认部署结果",
 };
 
 export function renderTestDeployMessage(
@@ -116,7 +117,9 @@ export function renderDeployTransitionMessage(
         ? `❌ ${what}部署失败`
         : row.state === "stale"
           ? `⏳ ${what}部署超时，仍在进行`
-          : `🔄 ${what}部署中`;
+          : row.state === "unconfigured"
+            ? `⚠️ 无法确认${what}部署结果`
+            : `🔄 ${what}部署中`;
   const url = row.state === "succeeded" ? (production ? urls.productionUrl : urls.testUrl) : undefined;
   const progressHint =
     row.state === "pending"
@@ -127,7 +130,10 @@ export function renderDeployTransitionMessage(
           : "测试环境没有更新；可以重跑或打回。"
         : row.state === "stale"
           ? "监听已超时，可以用「部署状态」再查一次。"
-          : undefined;
+          : row.state === "unconfigured"
+            ? "仓库缺少约定命名的部署工作流（deploy-test.yml / deploy-prod.yml）——" +
+              "harness 不会把这次部署当作成功。按约定命名后重新部署。"
+            : undefined;
   return {
     conversationId: urls.conversationId ?? row.deliveryId,
     text: [

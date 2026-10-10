@@ -15,6 +15,9 @@ import {
 } from "../domain/executionProfile.js";
 import type { ExecutionProfile } from "../domain/executionProfile.js";
 import { gateRepositoryProfile } from "../execution/profileGate.js";
+import { gateRepositoryDeployWorkflows } from "../deploy/application/deployWorkflowGate.js";
+import { githubSettingsFromEnv } from "../github/githubSettings.js";
+import { HttpGitHubClient } from "../github/httpGithubClient.js";
 import type { Repository } from "../domain/repository.js";
 import type { ProblemDetail } from "./commands/problemCommands.js";
 import {
@@ -213,6 +216,10 @@ repository
     "--skip-profile-check",
     "register even when the execution profile would break every Run (not recommended)",
   )
+  .option(
+    "--skip-deploy-check",
+    "register even without the conventional deploy workflows (deployment will be unobservable)",
+  )
   .action(async (options: RepositoryCreateCliOptions) => {
     await withStores(async ({ repositories }) => {
       const executionProfile = buildExecutionProfileFromCliOptions(options);
@@ -225,6 +232,13 @@ repository
           profile: executionProfile ?? defaultExecutionProfile(),
         });
       }
+      // TASK-1268: the harness can only report a deployment it can identify.
+      await gateDeployWorkflows({
+        repositoryId: options.id?.trim() || options.name,
+        url: options.url,
+        defaultBranch: options.defaultBranch?.trim() || "main",
+        ...(options.skipDeployCheck ? { skip: true } : {}),
+      });
       const repo = await createRepositoryCommand(repositories, {
         ...options,
         executionProfile,
@@ -251,6 +265,7 @@ repository
   .option("--memory-mb <n>", "container memory limit in MB", parsePositiveInt)
   .option("--pids-limit <n>", "container pids limit", parsePositiveInt)
   .option("--skip-profile-check", "update even when the profile would break every Run")
+  .option("--skip-deploy-check", "update even without the conventional deploy workflows")
   .action(async (id: string, options: RepositoryUpdateCliOptions) => {
     await withStores(async ({ repositories }) => {
       const current = await showRepositoryCommand(repositories, id);
@@ -266,6 +281,12 @@ repository
           profile: executionProfile,
         });
       }
+      await gateDeployWorkflows({
+        repositoryId: id,
+        url: current.url,
+        defaultBranch: current.defaultBranch,
+        ...(options.skipDeployCheck ? { skip: true } : {}),
+      });
       const repo = await updateRepositoryCommand(repositories, id, {
         verificationCommands,
         executionProfile,
@@ -1227,6 +1248,43 @@ program
 // output helpers
 // ---------------------------------------------------------------------------
 
+/**
+ * TASK-1268: onboarding refuses a repository whose deploy workflows do not
+ * follow the convention, because the harness could never tell whether it
+ * deployed. Without GitHub credentials the CLI cannot look — say so and let the
+ * registration through, since deployment is unobservable until they exist.
+ */
+async function gateDeployWorkflows(input: {
+  repositoryId: string;
+  url: string;
+  defaultBranch: string;
+  skip?: boolean;
+}): Promise<void> {
+  if (input.skip) {
+    console.log(
+      "跳过部署工作流约定校验（--skip-deploy-check）——该仓库的部署结果将无法确认",
+    );
+    return;
+  }
+  const settings = githubSettingsFromEnv(process.env);
+  if (!settings) {
+    console.log(
+      "未配置 GitHub 凭据（AI_GITHUB_APP_* 或 AI_GITHUB_TOKEN），跳过部署工作流约定校验——" +
+        "该仓库的部署结果将无法确认",
+    );
+    return;
+  }
+  await gateRepositoryDeployWorkflows({
+    repositoryId: input.repositoryId,
+    url: input.url,
+    defaultBranch: input.defaultBranch,
+    github: new HttpGitHubClient({
+      tokenProvider: settings.provider,
+      ...(settings.apiBase ? { apiBase: settings.apiBase } : {}),
+    }),
+  });
+}
+
 function printRepository(repo: Repository): void {
   console.log(`id: ${repo.id}`);
   console.log(`name: ${repo.name}`);
@@ -1481,13 +1539,15 @@ type RepositoryProfileCliOptions = {
   skipProfileCheck?: boolean;
 };
 
-type RepositoryCreateCliOptions = RepositoryCreateOptions & RepositoryProfileCliOptions;
+type RepositoryCreateCliOptions = RepositoryCreateOptions &
+  RepositoryProfileCliOptions & { skipDeployCheck?: boolean };
 
 type RepositoryUpdateCliOptions = RepositoryProfileCliOptions & {
   verify?: string[];
   install?: string;
   build?: string;
   screenshot?: string;
+  skipDeployCheck?: boolean;
 };
 
 type PreviewEvidenceLike = PreviewEvidence;
