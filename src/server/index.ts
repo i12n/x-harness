@@ -6,7 +6,10 @@ import { renderFeishuCard, renderFeishuText } from "../channel/feishu/cards.js";
 import { parseCardAction } from "../channel/feishu/cardActions.js";
 import { FeishuAdapter } from "../channel/feishu/adapter.js";
 import { HttpFeishuClient } from "../channel/feishu/client.js";
-import { renderDeployTransitionMessage } from "../channel/rendering/deploy.js";
+import {
+  renderDeployTransitionMessage,
+  type DeployAcceptanceControl,
+} from "../channel/rendering/deploy.js";
 import {
   REQUIREMENT_NEXT_ACTION,
   renderRequirementCard,
@@ -840,6 +843,47 @@ export class HarnessRuntime {
         kind?: string;
         run?: { url?: string };
       }[];
+      // TASK-1269: the ready test environment is the acceptance moment. Resolve
+      // the requirement behind the delivery here, so the message can carry a
+      // 「验收完成」 button and a 验收结果反馈 box without the user having to
+      // say which requirement — or which verb — they mean.
+      const acceptanceFor = async (row: {
+        deliveryId: string;
+        state: string;
+        kind?: string;
+      }): Promise<DeployAcceptanceControl | undefined> => {
+        if (row.kind === "production" || row.state !== "succeeded") {
+          return undefined;
+        }
+        try {
+          const delivery = await stores.deliveries.findDelivery(row.deliveryId);
+          if (!delivery) {
+            return undefined;
+          }
+          const specification = await stores.specifications
+            .findSpecification(delivery.specificationId)
+            .catch(() => undefined);
+          if (!specification) {
+            return undefined;
+          }
+          const view = await requirements
+            .resolveByProblemId(specification.problemId)
+            .catch(() => undefined);
+          if (
+            !view?.problemId ||
+            (view.stage !== "awaiting_acceptance" && view.stage !== "awaiting_release")
+          ) {
+            return undefined;
+          }
+          return {
+            requirementId: view.problemId,
+            stage: view.stage,
+            action: view.stage === "awaiting_release" ? "publish" : "approve",
+          };
+        } catch {
+          return undefined;
+        }
+      };
       for (const row of rows) {
         // TASK-1258: the copy (and which states deserve a message at all) lives
         // in the renderer, so it can be tested without booting the service.
@@ -847,6 +891,7 @@ export class HarnessRuntime {
           testUrl: deployTestUrl,
           productionUrl: deployProdUrl,
           conversationId: row.deliveryId,
+          acceptance: await acceptanceFor(row),
         });
         if (!message) {
           continue;

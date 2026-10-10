@@ -394,6 +394,10 @@ export class ChatSession {
     if (!requirementId || !actionType || !this.deps.requirements) {
       return { immediate: expiredCard(target.conversationId) };
     }
+    // TASK-1269: a form submit folds the typed text into the same record, so
+    // everything except the routing keys is the action's payload (e.g. the
+    // 验收结果反馈 a `reject` carries into `delivery.revise`).
+    const { requirementId: _id, action: _action, stage: _stage, ...payload } = value;
     return {
       immediate: {
         conversationId: target.conversationId,
@@ -408,6 +412,7 @@ export class ChatSession {
             requirementId,
             actionType,
             ...(stage ? { stage } : {}),
+            ...(Object.keys(payload).length > 0 ? { payload } : {}),
           });
           await this.reply(
             outcome.target.target,
@@ -440,6 +445,7 @@ export class ChatSession {
     requirementId: string;
     actionType: string;
     stage?: string;
+    payload?: Record<string, unknown>;
   }): Promise<{ target: { target: ChatTarget; routing?: ReplyRouting }; message: OutgoingMessage }> {
     const fallback = { target: input.fallback, routing: undefined };
     const view = await this.deps.requirements!
@@ -467,7 +473,7 @@ export class ChatSession {
       };
     }
     const outcome = commandsForRequirementAction(
-      { type: input.actionType as IntentAction["type"], payload: {} },
+      { type: input.actionType as IntentAction["type"], payload: input.payload ?? {} },
       view,
     );
     if (outcome.ask) {

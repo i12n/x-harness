@@ -1,10 +1,11 @@
-import type { OutgoingMessage } from "../message.js";
+import type { MessageBlock, OutgoingMessage } from "../message.js";
 import type {
   PromoteOutcome,
   TestDeployStart,
   TestDeployStatus,
 } from "../../deploy/application/deployService.js";
 import { markdownBlock, sectionBlock } from "./common.js";
+import { REQUIREMENT_NEXT_ACTION } from "./requirement.js";
 
 const STATE_LABEL: Record<TestDeployStatus["state"], string> = {
   none: "⏳ 还没排到（Actions 可能还在排队）",
@@ -87,6 +88,25 @@ export interface DeployTransitionUrls {
   testUrl?: string;
   productionUrl?: string;
   conversationId?: string;
+  /**
+   * TASK-1269: the acceptance controls to attach to a *succeeded test* deploy —
+   * 「验收完成」 plus the feedback box that turns an opinion into a revision.
+   * Absent when the requirement is not at a decision point, in which case the
+   * message stays a plain report.
+   */
+  acceptance?: DeployAcceptanceControl;
+}
+
+export interface DeployAcceptanceControl {
+  /** `prob-…` — the requirement's tracking handle, what the button carries. */
+  requirementId: string;
+  /** The stage the card was rendered at; a stale click is refused. */
+  stage: string;
+  /**
+   * What 「验收完成」 runs: `approve` at 待验收 (accept the work) or `publish`
+   * at 待发布 (merge the PR and let GitHub release it).
+   */
+  action: "approve" | "publish";
 }
 
 /**
@@ -134,6 +154,43 @@ export function renderDeployTransitionMessage(
             ? "仓库缺少约定命名的部署工作流（deploy-test.yml / deploy-prod.yml）——" +
               "harness 不会把这次部署当作成功。按约定命名后重新部署。"
             : undefined;
+  // TASK-1269: a ready test environment is the acceptance moment — put the
+  // decision on the card that carries the address, so nobody has to remember
+  // which verb to type in which topic.
+  const acceptance = !production && row.state === "succeeded" ? urls.acceptance : undefined;
+  const blocks: MessageBlock[] = [];
+  if (acceptance) {
+    blocks.push({
+      type: "input",
+      name: "feedback",
+      label: "验收结果反馈",
+      placeholder: "要调整的地方写在这里（不用改可以不填）",
+      submit: {
+        action: REQUIREMENT_NEXT_ACTION,
+        label: "提交验收意见",
+        payload: {
+          requirementId: acceptance.requirementId,
+          action: "reject",
+          stage: acceptance.stage,
+        },
+      },
+    });
+    blocks.push({
+      type: "actions",
+      actions: [
+        {
+          id: REQUIREMENT_NEXT_ACTION,
+          label: "验收完成",
+          style: "primary",
+          value: JSON.stringify({
+            requirementId: acceptance.requirementId,
+            action: acceptance.action,
+            stage: acceptance.stage,
+          }),
+        },
+      ],
+    });
+  }
   return {
     conversationId: urls.conversationId ?? row.deliveryId,
     text: [
@@ -147,5 +204,6 @@ export function renderDeployTransitionMessage(
     ]
       .filter(Boolean)
       .join("\n"),
+    ...(blocks.length > 0 ? { blocks } : {}),
   };
 }

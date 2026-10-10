@@ -44,15 +44,71 @@ export function parseCardAction(raw: unknown): ParsedCardAction | undefined {
   if (!actionId) {
     return undefined;
   }
+  // TASK-1269: a form submit carries the typed text next to the button value
+  // (`action.form_value`), not inside it. Older/newer shapes may instead pack
+  // the fields into the value record itself; fold both in so every command
+  // handler keeps seeing one payload record, exactly like a plain button.
+  const formValue = {
+    ...scalarFields(asRecord(action.value), ["action", "value"]),
+    ...scalarFields(asRecord(action.form_value) ?? asRecord(event.form_value)),
+  };
   return {
     messageId,
     chatId,
     operatorOpenId,
     operatorUserId: firstString(operator?.user_id),
     actionId,
-    value,
+    value: mergeFormValue(value, Object.keys(formValue).length > 0 ? formValue : undefined),
     tag: firstString(action.tag) ?? "unknown",
   };
+}
+
+/** The string/number/boolean entries of a record, minus the routing keys. */
+function scalarFields(
+  record: Record<string, unknown> | undefined,
+  exclude: string[] = [],
+): Record<string, unknown> {
+  if (!record) {
+    return {};
+  }
+  const fields: Record<string, unknown> = {};
+  for (const [key, field] of Object.entries(record)) {
+    if (exclude.includes(key)) {
+      continue;
+    }
+    if (typeof field === "string" || typeof field === "number" || typeof field === "boolean") {
+      fields[key] = field;
+    }
+  }
+  return fields;
+}
+
+/**
+ * Typed form fields win over the button's static value: the value is what the
+ * card declared, the form fields are what the human just wrote.
+ */
+function mergeFormValue(
+  value: string | undefined,
+  formValue: Record<string, unknown> | undefined,
+): string | undefined {
+  if (!formValue || Object.keys(formValue).length === 0) {
+    return value;
+  }
+  return JSON.stringify({ ...parseRecord(value), ...formValue });
+}
+
+function parseRecord(value: string | undefined): Record<string, unknown> {
+  if (!value) {
+    return {};
+  }
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : {};
+  } catch {
+    return {};
+  }
 }
 
 /**

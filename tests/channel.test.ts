@@ -33,6 +33,24 @@ describe("Channel abstraction (TASK-1101)", () => {
     ).toEqual(["Run: run-001", "Targets:", "```sh", "npm test", "```", "---"]);
   });
 
+  // TASK-1269: the 验收结果反馈 box is a real input on Feishu; the CLI fallback
+  // still has to show what it is and how it is submitted.
+  it("renders an input block as a labeled field plus a submit button", () => {
+    expect(
+      renderOutgoingMessage({
+        conversationId: "conv-1",
+        blocks: [
+          {
+            type: "input",
+            name: "feedback",
+            label: "验收结果反馈",
+            submit: { action: "requirement.next", label: "提交验收意见" },
+          },
+        ],
+      }),
+    ).toEqual(["[输入：验收结果反馈]", "[提交验收意见]"]);
+  });
+
   it("sends multi-line text exactly as the old CLI printed it", async () => {
     const lines: string[] = [];
     const channel = new CliChannel({ write: (line) => lines.push(line) });

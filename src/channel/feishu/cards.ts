@@ -37,6 +37,10 @@ export function renderFeishuText(message: OutgoingMessage): string {
           ].join(" "),
         );
         break;
+      case "input":
+        parts.push(`[输入：${block.label ?? block.placeholder ?? block.name}]`);
+        parts.push(`[${block.submit.label}]`);
+        break;
     }
   }
   return parts.join("\n");
@@ -123,6 +127,41 @@ export function renderFeishuCard(message: OutgoingMessage): FeishuCard {
                   },
                 ]
               : []),
+          ],
+        });
+        break;
+      case "input":
+        // Feishu form: the input and its submit button must share one `form`
+        // element, otherwise the field is rendered but never sent back.
+        if (block.label) {
+          markdown(block.label);
+        }
+        elements.push({
+          tag: "form",
+          name: block.name,
+          elements: [
+            {
+              tag: "input",
+              name: block.name,
+              ...(block.placeholder
+                ? { placeholder: { tag: "plain_text", content: block.placeholder } }
+                : {}),
+              ...(block.label
+                ? { label: { tag: "plain_text", content: block.label } }
+                : {}),
+              label_position: "top",
+            },
+            {
+              tag: "button",
+              name: `${block.name}_submit`,
+              action_type: "form_submit",
+              text: { tag: "plain_text", content: block.submit.label },
+              type: "primary",
+              value: {
+                action: block.submit.action,
+                value: JSON.stringify(block.submit.payload ?? {}),
+              },
+            },
           ],
         });
         break;

@@ -131,10 +131,29 @@ harness 服务用飞书长连接，**没有 HTTP server、没有公网回调**�
 | --- | --- | --- |
 | `TestBranchPushed` | 推测试分支成功 | 卡片：已推送 + PR 链接 |
 | `TestDeployStarted` | 监控到 deploy-test 开始 | 卡片：测试环境部署中 |
-| `TestDeploySucceeded` | run 成功 | 卡片：测试环境就绪 + URL |
+| `TestDeploySucceeded` | run 成功 | 卡片：测试环境就绪 + URL + **验收完成 / 验收结果反馈**（决策点才有，见 5.5） |
 | `TestDeployFailed` | run 失败 | 卡片：失败 + 失败步骤 + 链接 |
 | `MergeStarted` / `Merged` | 合并 PR | 卡片：已合并到 main |
 | `ProdDeploySucceeded` / `ProdDeployFailed` | deploy-prod 结论 | 卡片：上线结果 |
+
+### 5.5 测试环境就绪卡上的验收（TASK-1269）
+
+部署成功后，harness 解析「交付 → 规格 → 需求」；**当需求正处在决策点**
+（待验收 / 待发布）时，这条就绪消息带上两个控件：
+
+```text
+[ 要调整的地方写在这里（不用改可以不填） ] [ 提交验收意见 ]   ← 输入框，验收后调整
+[ 验收完成 ]                                                ← 一键走后续流程
+```
+
+- **验收完成**：`awaiting_release` → `publish`（合并 PR、触发线上发布）；
+  `awaiting_acceptance` → `approve`（先接受这轮工作）。动作按渲染时的实际阶段决定。
+- **提交验收意见**：把输入框原文作为 `feedback` 交给 `reject`，即一次交付修订
+  （TASK-1267），旧任务不动、同一个 PR 更新。
+- 控件携带 `prob-…` 句柄，点击/提交后仍走与打字相同的动作管线（角色门禁、
+  过期阶段判定一致），用户不必再报任何 id。
+- 需求不在决策点（还在开发中）时不附控件，消息保持纯播报；线上部署卡也永远不加
+  控件（已上线是冻结点）。详见 [task-1269-test-env-acceptance-controls.md](task-1269-test-env-acceptance-controls.md)。
 
 ## 6. 对现有设计的影响
 

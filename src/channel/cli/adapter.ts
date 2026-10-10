@@ -77,5 +77,10 @@ function renderBlock(block: MessageBlock): string[] {
           ...(block.submit ? [`[${block.submit.label}]`] : []),
         ].join(" "),
       ];
+    case "input":
+      return [
+        `[输入：${block.label ?? block.placeholder ?? block.name}]`,
+        `[${block.submit.label}]`,
+      ];
   }
 }

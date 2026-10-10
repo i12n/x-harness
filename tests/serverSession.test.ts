@@ -474,6 +474,64 @@ describe("ChatSession", () => {
     expect(textOf(sent.at(-1)!.message)).toContain("测试部署");
   });
 
+  // TASK-1269: the 验收结果反馈 box on the test-env card is a form submit — the
+  // typed text travels as `feedback` and becomes one revision of the delivery,
+  // never a "which task?" question.
+  it("turns a feedback form submit into a delivery revision", async () => {
+    const seen: Record<string, unknown>[] = [];
+    const dispatcher = new CommandDispatcher({
+      handlers: {
+        "delivery.revise": async (payload) => {
+          seen.push(payload);
+          return { message: { conversationId: "x", text: "收到，这就改" } };
+        },
+      },
+      idempotency: new InMemoryIdempotencyStore(),
+    });
+    const intent = new StubIntentEngine({ command: undefined });
+    const { session, sent } = await buildSession(intent, ["ou_reviewer"], {
+      dispatcher,
+      access: {
+        allowedUserIds: ["ou_reviewer"],
+        roleMap: { ou_reviewer: "reviewer" },
+        defaultRole: "developer",
+      },
+      requirements: {
+        resolve: async () => undefined,
+        resolveByProblemId: async (id) => ({
+          problemId: id,
+          title: "下载歌曲功能",
+          stage: "awaiting_release" as const,
+          tasks: [{ id: "task-1", status: "DONE" } as never],
+          delivery: {
+            id: "dlv-9",
+            specificationId: "spec-9",
+            status: "READY_FOR_RELEASE",
+          } as never,
+        }),
+      },
+    });
+
+    const outcome = await session.handleCardAction({
+      messageId: "om-card",
+      chatId: "oc_chat",
+      operatorOpenId: "ou_reviewer",
+      actionId: REQUIREMENT_NEXT_ACTION,
+      value: JSON.stringify({
+        requirementId: "prob-9",
+        action: "reject",
+        stage: "awaiting_release",
+        feedback: "详情页那三个按钮风格要统一",
+      }),
+    });
+    await outcome.deferred?.();
+
+    expect(seen).toEqual([
+      { deliveryId: "dlv-9", statement: "详情页那三个按钮风格要统一" },
+    ]);
+    expect(textOf(sent.at(-1)!.message)).toContain("这就改");
+  });
+
   it("refuses a card button the sender's role cannot use", async () => {
     const seen: unknown[] = [];
     const dispatcher = new CommandDispatcher({

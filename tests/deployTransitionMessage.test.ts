@@ -79,4 +79,82 @@ describe("deploy transition messages", () => {
     expect(message?.text).not.toContain("rehelu.net");
     expect(message?.text).toContain("待发布");
   });
+
+  // TASK-1269: a ready test environment is the acceptance moment — the message
+  // carries 「验收完成」 plus the 验收结果反馈 box, both routed by prob id.
+  it("attaches 验收完成 and a feedback box to a ready test environment", () => {
+    const message = renderDeployTransitionMessage(
+      { deliveryId: "dlv-1", state: "succeeded", kind: "test", run },
+      {
+        ...urls,
+        acceptance: {
+          requirementId: "prob-950662cc5b",
+          stage: "awaiting_release",
+          action: "publish",
+        },
+      },
+    );
+    const actions = (message?.blocks ?? []).find((block) => block.type === "actions");
+    expect(actions?.type === "actions" ? actions.actions[0]?.label : undefined).toBe("验收完成");
+    expect(
+      JSON.parse((actions?.type === "actions" ? actions.actions[0]?.value : undefined) ?? "null"),
+    ).toEqual({
+      requirementId: "prob-950662cc5b",
+      action: "publish",
+      stage: "awaiting_release",
+    });
+
+    const input = (message?.blocks ?? []).find((block) => block.type === "input");
+    expect(input?.type === "input" ? input.name : undefined).toBe("feedback");
+    if (input?.type === "input") {
+      expect(input.label).toContain("验收结果反馈");
+      expect(input.submit.label).toContain("提交");
+      expect(input.submit.payload).toMatchObject({
+        requirementId: "prob-950662cc5b",
+        action: "reject",
+        stage: "awaiting_release",
+      });
+    }
+  });
+
+  it("accepts the work at 待验收 instead of publishing", () => {
+    const message = renderDeployTransitionMessage(
+      { deliveryId: "dlv-1", state: "succeeded", kind: "test" },
+      {
+        ...urls,
+        acceptance: {
+          requirementId: "prob-9",
+          stage: "awaiting_acceptance",
+          action: "approve",
+        },
+      },
+    );
+    const actions = (message?.blocks ?? []).find((block) => block.type === "actions");
+    const value = actions?.type === "actions" ? actions.actions[0]?.value : undefined;
+    expect(JSON.parse(value ?? "null")).toMatchObject({ action: "approve" });
+  });
+
+  it("stays a plain report without an acceptance context", () => {
+    const message = renderDeployTransitionMessage(
+      { deliveryId: "dlv-1", state: "succeeded", kind: "test" },
+      urls,
+    );
+    expect(message?.blocks ?? []).toHaveLength(0);
+    expect(message?.text).not.toContain("验收完成");
+  });
+
+  it("never puts acceptance controls on a production deploy", () => {
+    const message = renderDeployTransitionMessage(
+      { deliveryId: "dlv-1", state: "succeeded", kind: "production" },
+      {
+        ...urls,
+        acceptance: {
+          requirementId: "prob-9",
+          stage: "awaiting_release",
+          action: "publish",
+        },
+      },
+    );
+    expect(message?.blocks ?? []).toHaveLength(0);
+  });
 });

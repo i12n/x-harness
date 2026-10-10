@@ -16,6 +16,9 @@
     (`id` / `receive` / `send`)、`IncomingMessage`、`OutgoingMessage` +
     `MessageBlock`（text/code/divider）、`CommandEnvelope`（仅定义形状，
     Intent 解析留给 TASK-1106）
+    （块集合此后扩展：markdown/section/actions（TASK-1105）、`choice`
+    多选提交（TASK-1216/1266）、`input` 文本表单（TASK-1269）；
+    参见 [task-1269-test-env-acceptance-controls.md](task-1269-test-env-acceptance-controls.md)）
   - `src/channel/cli/adapter.ts`：`CliChannel`（第一个 Channel），
     `send()` 渲染文本，输出与旧 CLI 逐字一致；`receive()` 调用可选 handler
     后回发（供 Conversation 接入）

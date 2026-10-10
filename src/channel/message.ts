@@ -61,6 +61,31 @@ export interface MessageChoice {
   };
 }
 
+/**
+ * TASK-1269: one free-text field plus its own submit button.
+ *
+ * The transport renders a form: the typed text is committed only when the
+ * submit button is pressed, and comes back as a normal card action carrying
+ * the field under {@link MessageInput.name} in the payload. Used for the
+ * "验收结果反馈" box, so an adjustment opinion reaches the revision pipeline
+ * as one value instead of a separate message the harness has to guess about.
+ */
+export interface MessageInput {
+  type: "input";
+  /** Payload field the typed text is written to. */
+  name: string;
+  /** Shown above (or inside) the box, e.g. 验收结果反馈. */
+  label?: string;
+  placeholder?: string;
+  submit: {
+    /** Command type (or requirement action) dispatched when submit is pressed. */
+    action: string;
+    label: string;
+    /** Extra payload fields merged with the typed text. */
+    payload?: Record<string, unknown>;
+  };
+}
+
 /** Internal card action: toggle one option of a {@link MessageChoice}. */
 export const CARD_CHOICE_TOGGLE = "card.choice.toggle";
 
@@ -72,7 +97,8 @@ export type MessageBlock =
   | { type: "divider" }
   | { type: "section"; title?: string; text: string }
   | { type: "actions"; actions: MessageAction[] }
-  | MessageChoice;
+  | MessageChoice
+  | MessageInput;
 
 export interface OutgoingMessage {
   conversationId: string;

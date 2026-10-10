@@ -1,7 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { parseCardAction } from "../src/channel/feishu/cardActions.js";
 import { renderFeishuCard } from "../src/channel/feishu/cards.js";
-import { CARD_CHOICE_TOGGLE, type MessageChoice, type OutgoingMessage } from "../src/channel/message.js";
+import {
+  CARD_CHOICE_TOGGLE,
+  type MessageChoice,
+  type OutgoingMessage,
+} from "../src/channel/message.js";
+import { REQUIREMENT_NEXT_ACTION } from "../src/channel/rendering/requirement.js";
 import { CommandDispatcher } from "../src/command/dispatcher.js";
 import { InMemoryIdempotencyStore } from "../src/command/idempotency.js";
 import { ConversationService } from "../src/conversation/service.js";
@@ -91,6 +96,30 @@ describe("feishu card actions", () => {
     expect(parseCardAction({ action: { value: { action: "x" } } })).toBeUndefined();
     expect(parseCardAction(click("", undefined))).toBeUndefined();
   });
+
+  // TASK-1269: a form submit carries the typed text in `action.form_value`;
+  // fold it into the value record so the command handler sees one payload.
+  it("folds a form submit's typed text into the button payload", () => {
+    const payload = {
+      requirementId: "prob-950662cc5b",
+      action: "reject",
+      stage: "awaiting_release",
+    };
+    const parsed = parseCardAction(
+      click(REQUIREMENT_NEXT_ACTION, JSON.stringify(payload), {
+        action: {
+          tag: "button",
+          value: { action: REQUIREMENT_NEXT_ACTION, value: JSON.stringify(payload) },
+          form_value: { feedback: "详情页三个按钮风格要统一" },
+        },
+      }),
+    );
+    expect(parsed?.actionId).toBe(REQUIREMENT_NEXT_ACTION);
+    expect(JSON.parse(parsed!.value!)).toEqual({
+      ...payload,
+      feedback: "详情页三个按钮风格要统一",
+    });
+  });
 });
 
 describe("card registry", () => {
@@ -132,6 +161,34 @@ describe("choice cards", () => {
     const message = choiceMessage();
     (message.blocks![0] as MessageChoice).selected = ["a"];
     expect(JSON.stringify(renderFeishuCard(message))).toContain("✅ 选项 A");
+  });
+});
+
+describe("input cards (TASK-1269)", () => {
+  it("renders a form with an input and a form_submit button", () => {
+    const card = renderFeishuCard({
+      conversationId: "conv-1",
+      blocks: [
+        {
+          type: "input",
+          name: "feedback",
+          label: "验收结果反馈",
+          placeholder: "要调整的地方写在这里",
+          submit: {
+            action: REQUIREMENT_NEXT_ACTION,
+            label: "提交验收意见",
+            payload: { requirementId: "prob-9", action: "reject", stage: "awaiting_release" },
+          },
+        },
+      ],
+    });
+    const json = JSON.stringify(card);
+    expect(json).toContain('"tag":"form"');
+    expect(json).toContain('"tag":"input"');
+    expect(json).toContain("form_submit");
+    expect(json).toContain("提交验收意见");
+    expect(json).toContain(REQUIREMENT_NEXT_ACTION);
+    expect(json).toContain("验收结果反馈");
   });
 });
 
