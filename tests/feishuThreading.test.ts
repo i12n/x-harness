@@ -39,4 +39,53 @@ describe("Feishu threading", () => {
     }
     expect(parsed.message.metadata?.threadId).toBe("omt_topic_1");
   });
+
+  // TASK-1260: formatted messages arrive as `post`; dropping them made the bot
+  // look dead for any requirement typed as a list.
+  it("reads rich text (post) instead of dropping it", () => {
+    const post = {
+      zh_cn: {
+        title: "x-music 添加下载歌曲功能",
+        content: [
+          [{ tag: "text", text: "歌曲列表（专辑、歌单）加下载按钮" }],
+          [
+            { tag: "text", text: "不支持整个专辑下载" },
+            { tag: "a", text: "，详情见文档", href: "https://example.test" },
+          ],
+          [{ tag: "img", image_key: "img_v2_1" }],
+          [{ tag: "at", user_name: "老王" }],
+        ],
+      },
+    };
+    const parsed = parseFeishuEvent(
+      envelope({ message_type: "post", content: JSON.stringify(post) }),
+    );
+    expect(parsed.kind).toBe("message");
+    if (parsed.kind !== "message") {
+      return;
+    }
+    expect(parsed.message.text).toContain("x-music 添加下载歌曲功能");
+    expect(parsed.message.text).toContain("歌曲列表（专辑、歌单）加下载按钮");
+    expect(parsed.message.text).toContain("不支持整个专辑下载");
+    expect(parsed.message.text).toContain("[图片]");
+    expect(parsed.message.text).toContain("@老王");
+  });
+
+  it("reads a flat (v1) post body too", () => {
+    const parsed = parseFeishuEvent(
+      envelope({
+        message_type: "post",
+        content: JSON.stringify({
+          title: "纯文本标题",
+          content: [[{ tag: "text", text: "正文" }]],
+        }),
+      }),
+    );
+    expect(parsed.kind).toBe("message");
+    if (parsed.kind !== "message") {
+      return;
+    }
+    expect(parsed.message.text).toContain("纯文本标题");
+    expect(parsed.message.text).toContain("正文");
+  });
 });

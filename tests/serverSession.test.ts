@@ -585,6 +585,31 @@ describe("ChatSession", () => {
     expect(sent).toHaveLength(0);
   });
 
+  // TASK-1260: an unreadable message used to be dropped silently, which read as
+  // "the bot is dead". Answer once instead.
+  it("answers an unreadable message instead of staying silent", async () => {
+    const intent = new StubIntentEngine({ command: undefined });
+    const { session, sent } = await buildSession(intent);
+
+    await session.handleEvent({
+      schema: "2.0",
+      header: { event_id: "evt-img", event_type: "im.message.receive_v1" },
+      event: {
+        sender: { sender_id: { open_id: "ou_dev" }, sender_type: "user" },
+        message: {
+          message_id: "om-img",
+          chat_id: "oc_chat",
+          chat_type: "p2p",
+          message_type: "image",
+          create_time: "1758240000000",
+          content: JSON.stringify({ image_key: "img_v2_1" }),
+        },
+      },
+    });
+
+    expect(textOf(sent.at(-1)!.message)).toContain("只认纯文字");
+  });
+
   it("replies with an error when intent parsing fails", async () => {
     const intent: IntentEngine = {
       parse: vi.fn(async () => {

@@ -120,6 +120,7 @@ export class ChatSession {
     const parsed = parseFeishuEvent(record);
     if (parsed.kind === "ignored") {
       this.log(`ignoring event: ${parsed.reason}`);
+      await this.explainUnsupportedMessage(record, parsed.reason);
       return;
     }
     const message = parsed.message;
@@ -926,6 +927,47 @@ export class ChatSession {
     } catch (error) {
       this.log(`failed to send reply: ${describeError(error)}`);
       return;
+    }
+  }
+
+  /**
+   * TASK-1260: a message the harness cannot read (image / file / sticker …)
+   * used to be logged and dropped — the user saw nothing and assumed the bot
+   * was broken. Say so once, in the chat it arrived in (1:1 only: a group
+   * should not get a lecture for every picture).
+   */
+  private async explainUnsupportedMessage(
+    envelope: Record<string, unknown>,
+    reason: string,
+  ): Promise<void> {
+    if (!reason.startsWith("unsupported message type")) {
+      return;
+    }
+    const message = asRecord(asRecord(envelope.event)?.message);
+    const chatId = typeof message?.chat_id === "string" ? message.chat_id : "";
+    const chatType = typeof message?.chat_type === "string" ? message.chat_type : "";
+    const messageId = typeof message?.message_id === "string" ? message.message_id : "";
+    if (!chatId || (chatType && chatType !== "p2p")) {
+      return;
+    }
+    try {
+      const conversation = await this.deps.conversations.getOrCreate({
+        channel: "feishu",
+        externalChatId: chatId,
+      });
+      const anchor = conversation.anchorMessageId ?? messageId;
+      await this.reply(
+        { conversationId: conversation.id, receiveId: chatId, receiveIdType: "chat_id" },
+        {
+          conversationId: conversation.id,
+          text:
+            "这条消息我读不了——目前只认纯文字（图片、文件、表情这些还不行）。" +
+            "把要做的改动用文字发一遍，我就开单。",
+        },
+        anchor ? { replyToMessageId: anchor, replyInThread: true } : undefined,
+      );
+    } catch (error) {
+      this.log(`could not explain the unsupported message: ${describeError(error)}`);
     }
   }
 

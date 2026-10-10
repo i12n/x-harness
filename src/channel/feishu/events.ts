@@ -40,7 +40,7 @@ export function parseFeishuEvent(
   }
 
   const messageType = typeof message.message_type === "string" ? message.message_type : "text";
-  if (messageType !== "text") {
+  if (messageType !== "text" && messageType !== "post") {
     return {
       kind: "ignored",
       reason: `unsupported message type: ${messageType}`,
@@ -56,7 +56,10 @@ export function parseFeishuEvent(
   const mentions = extractMentions(message.mentions);
   // Feishu puts a placeholder (`@_user_1`) in the text for each mention; the
   // command parser should see what the human actually typed.
-  const text = stripMentionPlaceholders(extractText(message.content), mentions);
+  const text = stripMentionPlaceholders(
+    messageType === "post" ? extractPostText(message.content) : extractText(message.content),
+    mentions,
+  );
   const senderId =
     firstString(senderIds?.open_id, senderIds?.union_id, senderIds?.user_id) ?? "";
   // Only `thread_id` starts a new conversation.
@@ -143,6 +146,60 @@ function extractText(content: unknown): string {
     return typeof parsed.text === "string" ? parsed.text : "";
   } catch {
     return "";
+  }
+}
+
+/**
+ * TASK-1260: 富文本（`post`）也是消息正文。
+ *
+ * The Feishu client sends `post` for anything the user formats — bullets,
+ * headings, pasted lists — so a plain-text-only reader silently swallowed
+ * requirements that were typed as a list. Flatten it to text; unknown segment
+ * types degrade to a short placeholder instead of dropping the line.
+ */
+function extractPostText(content: unknown): string {
+  if (typeof content !== "string") {
+    return "";
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(content);
+  } catch {
+    return "";
+  }
+  const root = asRecord(parsed);
+  if (!root) {
+    return "";
+  }
+  // v2 posts are wrapped per locale (`zh_cn`); v1 posts are flat.
+  const body = asRecord(root.zh_cn) ?? asRecord(root.en_us) ?? root;
+  const title = typeof body.title === "string" ? body.title.trim() : "";
+  const lines = Array.isArray(body.content) ? body.content : [];
+  const rendered = lines
+    .map((line) =>
+      (Array.isArray(line) ? line : [])
+        .map((segment) => postSegmentText(asRecord(segment)))
+        .join(""),
+    )
+    .filter((line) => line.trim().length > 0);
+  return [title, ...rendered].filter(Boolean).join("\n");
+}
+
+function postSegmentText(segment: Record<string, unknown> | undefined): string {
+  if (!segment) {
+    return "";
+  }
+  const tag = typeof segment.tag === "string" ? segment.tag : "";
+  switch (tag) {
+    case "at":
+      return typeof segment.user_name === "string" ? `@${segment.user_name}` : "@";
+    case "img":
+    case "media":
+      return "[图片]";
+    case "emotion":
+      return "";
+    default:
+      return typeof segment.text === "string" ? segment.text : "";
   }
 }
 
