@@ -39,7 +39,13 @@ function run() {
   } as never;
 }
 
-function harness(options: { runs?: GitHubWorkflowRun[]; existingPr?: GitHubPullRequest } = {}) {
+function harness(
+  options: {
+    runs?: GitHubWorkflowRun[];
+    existingPr?: GitHubPullRequest;
+    deliveryStatus?: string;
+  } = {},
+) {
   const calls: {
     published: string[];
     opened: string[];
@@ -89,7 +95,11 @@ function harness(options: { runs?: GitHubWorkflowRun[]; existingPr?: GitHubPullR
     deliveries: {
       async load(deliveryId) {
         return {
-          delivery: { id: deliveryId, specificationId: "spec-1", status: "IN_PROGRESS" } as never,
+          delivery: {
+            id: deliveryId,
+            specificationId: "spec-1",
+            status: options.deliveryStatus ?? "IN_PROGRESS",
+          } as never,
           tasks: [{ id: "task-1", repositoryId: "repo-x-music" } as never],
         };
       },
@@ -133,6 +143,30 @@ describe("test-branch deploy, GitHub-driven (TASK-1230)", () => {
     const started = await service.deployTest("dlv-1");
     expect(calls.opened).toEqual([]);
     expect(started.pullRequest.number).toBe(3);
+  });
+
+  // TASK-1256: a released delivery has nothing left to test — its delta is on
+  // the default branch, so rebuilding the test branch from it cannot apply.
+  it("refuses 测试部署 once the delivery is released", async () => {
+    const { service, calls } = harness({ deliveryStatus: "RELEASED" });
+    await expect(service.deployTest("dlv-1")).rejects.toThrow(/已经上线/);
+    expect(calls.published).toEqual([]);
+  });
+
+  it("refuses 测试部署 when the delivery's PR is already merged", async () => {
+    const { service, calls } = harness({
+      existingPr: {
+        number: 9,
+        url: "https://github.com/i12n/x-music/pull/9",
+        state: "closed",
+        merged: true,
+        mergedAt: "2026-10-09T08:35:00Z",
+        head: "test/dlv-1",
+        base: "main",
+      },
+    });
+    await expect(service.deployTest("dlv-1")).rejects.toThrow(/已经合并/);
+    expect(calls.published).toEqual([]);
   });
 
   it("reports a queued run as pending, and success as succeeded", async () => {

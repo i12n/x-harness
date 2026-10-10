@@ -233,8 +233,29 @@ export class DeployService {
   }
 
   async deployTest(deliveryId: string): Promise<TestDeployStart> {
-    const { repository, worktree } = await this.resolve(deliveryId);
+    const { repository, worktree, delivery } = await this.resolve(deliveryId);
     const branch = this.branchName(deliveryId);
+    // TASK-1256: a delivery that is already merged has nothing left to test —
+    // its delta is on the default branch, so rebuilding the test branch from it
+    // cannot apply and surfaced as a raw `git apply` error. Refuse in words.
+    if (delivery.status === "RELEASED") {
+      throw new Error(
+        `交付 ${deliveryId} 已经上线，不需要再推测试环境；要再改请开新需求`,
+      );
+    }
+    const repo = githubSlug(repository);
+    const existing = await this.deps.github.findPullRequest({
+      repo,
+      head: branch,
+      base: repository.defaultBranch,
+    });
+    if (existing?.merged) {
+      throw new Error(
+        `交付 ${deliveryId} 的改动已经合并进 ${repository.defaultBranch}，不需要再推测试环境；` +
+          "要再改请开新需求（或先打回这份交付）",
+      );
+    }
+
     const publish = await this.deps.git.publish({
       repository,
       workspacePath: worktree,
@@ -248,12 +269,6 @@ export class DeployService {
     }
     await this.record("TestBranchPushed", { deliveryId, repositoryId: repository.id, branch });
 
-    const repo = githubSlug(repository);
-    const existing = await this.deps.github.findPullRequest({
-      repo,
-      head: branch,
-      base: repository.defaultBranch,
-    });
     const pullRequest =
       existing ??
       (await this.deps.github.openPullRequest({
@@ -470,8 +485,8 @@ export class DeployService {
   /** Delivery → its repository and the worktree a Run left behind. */
   private async resolve(
     deliveryId: string,
-  ): Promise<{ repository: Repository; worktree: string }> {
-    const { tasks } = await this.deps.deliveries.load(deliveryId);
+  ): Promise<{ repository: Repository; worktree: string; delivery: Delivery }> {
+    const { delivery, tasks } = await this.deps.deliveries.load(deliveryId);
     for (const task of tasks) {
       const runs = await this.deps.runs.listRuns({ taskId: task.id });
       const run = [...runs].reverse().find((candidate) => candidate.status === "SUCCEEDED");
@@ -480,7 +495,7 @@ export class DeployService {
         continue;
       }
       const repository = await this.deps.repositories.findRepository(task.repositoryId);
-      return { repository, worktree: workspace.path };
+      return { repository, worktree: workspace.path, delivery };
     }
     throw new Error(`交付 ${deliveryId} 没有带工作区的成功 Run，无法推送测试分支`);
   }

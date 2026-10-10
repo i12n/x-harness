@@ -163,6 +163,14 @@ export function commandsForRequirementAction(
       if (!view.delivery) {
         return { commands: [], ask: "这次改动还没有形成交付，等开发完成我再推测试环境。" };
       }
+      // TASK-1256: 已上线的交付没有可测试的内容（改动已合并进主分支），
+      // 直接说清楚比让它去重建测试分支、再抛一个 git 错误好。
+      if (view.delivery.status === "RELEASED") {
+        return {
+          commands: [],
+          ask: "这份需求已经上线了，测试环境不用再部署——要改的话直接说要改什么，我开新需求。",
+        };
+      }
       return { commands: [{ type: "deploy.test", payload: { deliveryId: view.delivery.id } }] };
     }
 

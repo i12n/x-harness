@@ -200,6 +200,11 @@ describe("action → command mapping (TASK-1244)", () => {
     const released = (await harness({ delivery: "RELEASED" })).view;
     expect(commandsForRequirementAction({ type: "publish" }, released).ask).toContain("上线");
     expect(commandsForRequirementAction({ type: "reject" }, released).ask).toContain("新需求");
+    // TASK-1256: 已上线之后「测试部署」没有可测的内容——直接说清楚，
+    // 不要让它去重建测试分支再抛一个 git 错误。
+    const releasedDeploy = commandsForRequirementAction({ type: "deploy" }, released);
+    expect(releasedDeploy.commands).toEqual([]);
+    expect(releasedDeploy.ask).toContain("已经上线");
   });
 
   it("create keeps the user's own wording and shortens a title from it", async () => {
