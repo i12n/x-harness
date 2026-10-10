@@ -149,6 +149,11 @@ export function intentSystemPrompt(options: IntentPromptOptions = {}): string {
     "5. No matching action (e.g. 回滚) → chat; do not force it into a similar action.",
     "6. Stage decides meaning: 「可以上线了」 on an accepted delivery = publish intent,",
     "   while 「可以上线吗？」 is a question.",
+    "7. reject: the user is talking about the改动 itself, never about how the",
+    "   harness split it up. Put their own words in `feedback` and stop there —",
+    '   the harness finds the target. Only fill payload.scope="item" (+ item) or',
+    '   payload.scope="all" when the user themselves narrowed it ("只改第二个"、',
+    '   "两处都要改"). Never ask them which deliverable or task they mean.',
     "",
     "Rules:",
     "- Never emit or ask for internal ids of any kind. The harness resolves the current",
@@ -261,7 +266,19 @@ export function normalizeAction(
   switch (type) {
     case "reject": {
       const feedback = text(raw.feedback);
-      return { type, ...(feedback ? { payload: { feedback } } : { payload: {} }) };
+      // TASK-1267: the model may answer the harness's own 「这次改哪一个？」 question
+      // by naming the scope; without these two fields its answer was dropped and
+      // the same question came back forever.
+      const scope = raw.scope === "all" || raw.scope === "item" ? raw.scope : undefined;
+      const item = scope === "item" ? text(raw.item)?.slice(0, 60) : undefined;
+      return {
+        type,
+        payload: {
+          ...(feedback ? { feedback } : {}),
+          ...(scope ? { scope } : {}),
+          ...(item ? { item } : {}),
+        },
+      };
     }
     case "create": {
       const statement = text(raw.statement);

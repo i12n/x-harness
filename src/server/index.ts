@@ -16,6 +16,7 @@ import type { RunNextStep } from "../channel/rendering/run.js";
 import type { OutgoingMessage } from "../channel/message.js";
 import { CommandDispatcher } from "../command/dispatcher.js";
 import { createDeliveryCommandHandlers } from "../command/handlers/delivery.js";
+import { createRevisionCommandHandlers } from "../command/handlers/revision.js";
 import { createProblemCommandHandlers } from "../command/handlers/problem.js";
 import { createReviewCommandHandlers } from "../command/handlers/review.js";
 import { createSpecificationCommandHandlers } from "../command/handlers/specification.js";
@@ -403,6 +404,13 @@ export class HarnessRuntime {
         }),
         ...createSpecificationCommandHandlers({ planning, specification: specifications }),
         ...createDeliveryCommandHandlers({ deliveries, runs: stores.runs }),
+        ...createRevisionCommandHandlers({
+          deliveries,
+          tasks: stores.tasks,
+          plans: stores.specificationPlans,
+          runs: stores.runs,
+          events: stores.events,
+        }),
         ...createPreviewCommandHandlers({
           preview: previewService,
         }),

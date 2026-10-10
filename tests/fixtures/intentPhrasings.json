@@ -34,7 +34,16 @@
     { "text": "可以合并 PR 了", "expect": "publish", "allowAlso": ["approve"] },
     { "text": "菜单栏的间距也要改", "expect": "create" },
     { "text": "验收通过，发吧", "expect": "publish", "allowAlso": ["approve"] },
-    { "text": "是不是可以上线了", "expect": "show", "allowAlso": ["chat"] }
+    { "text": "是不是可以上线了", "expect": "show", "allowAlso": ["chat"] },
+    { "text": "详情页那三个按钮的风格要统一", "expect": "reject" },
+    { "text": "把列表页和详情页的下载按钮做成一样的", "expect": "reject" },
+    {
+      "text": "做如下调整：歌曲详情页的下载按钮，夹在播放和喜欢两个按钮之间，样式与其他两个按钮不统一",
+      "expect": "reject"
+    },
+    { "text": "这版还有个小问题：下载按钮的位置不对", "expect": "reject" },
+    { "text": "验收不通过", "expect": "reject", "allowAlso": ["clarify"] },
+    { "text": "列表页也要一起改", "expect": "reject" }
   ],
   "$dangerous": [
     "疑问句（以？或 吗/是不是 结尾）绝不能触发 deploy/publish/reject",

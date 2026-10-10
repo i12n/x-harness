@@ -1,0 +1,235 @@
+{
+  "$comment": "TASK-1267 对话回归集：用户真会说的话（按阶段分组）→ harness 应当产出的动作。tests/conversationRegression.test.ts 离线跑这份语料：不调模型、不连网。action 是意图层给出的用户级动作（自然语言那一步由 scripts/eval-intent.mjs 用真模型评测）。",
+  "scenarios": {
+    "awaiting_release": {
+      "titles": [
+        "在歌曲列表添加单曲下载按钮并实现统一单曲",
+        "在歌曲详情页添加下载按钮并确认播放器无下"
+      ],
+      "tasks": [
+        { "id": "task-spec-1-0", "status": "DONE" },
+        { "id": "task-spec-1-1", "status": "DONE" }
+      ],
+      "delivery": "READY_FOR_RELEASE",
+      "bound": "problem"
+    },
+    "awaiting_acceptance": {
+      "tasks": [{ "id": "task-spec-1-0", "status": "DONE" }],
+      "delivery": "IN_PROGRESS",
+      "bound": "problem"
+    },
+    "developing": {
+      "tasks": [{ "id": "task-spec-1-0", "status": "RUNNING" }],
+      "delivery": "IN_PROGRESS",
+      "bound": "problem"
+    },
+    "developing_stuck": {
+      "titles": ["列表页的下载按钮", "详情页的下载按钮"],
+      "tasks": [
+        { "id": "task-spec-1-0", "status": "BLOCKED" },
+        { "id": "task-spec-1-1", "status": "BLOCKED" }
+      ],
+      "delivery": "IN_PROGRESS",
+      "bound": "problem"
+    },
+    "single_review": {
+      "tasks": [{ "id": "task-spec-1-0", "status": "REVIEW" }],
+      "delivery": "IN_PROGRESS",
+      "bound": "problem"
+    },
+    "two_in_review": {
+      "tasks": [
+        { "id": "task-spec-1-0", "status": "REVIEW" },
+        { "id": "task-spec-1-1", "status": "REVIEW" }
+      ],
+      "delivery": "IN_PROGRESS",
+      "bound": "problem"
+    },
+    "released": {
+      "tasks": [{ "id": "task-spec-1-0", "status": "DONE" }],
+      "delivery": "RELEASED",
+      "bound": "problem"
+    },
+    "no_requirement": {
+      "tasks": [],
+      "bound": "problem"
+    }
+  },
+  "cases": [
+    {
+      "message": "做如下调整：歌曲详情页的下载按钮，夹在播放和喜欢两个按钮之间，样式与其他两个按钮不统一。需要对这三个按钮做统一的设计，风格统一且美观。",
+      "scenario": "awaiting_release",
+      "action": {
+        "type": "reject",
+        "payload": {
+          "feedback": "做如下调整：歌曲详情页的下载按钮，夹在播放和喜欢两个按钮之间，样式与其他两个按钮不统一。需要对这三个按钮做统一的设计，风格统一且美观。"
+        }
+      },
+      "expect": { "command": "delivery.revise" }
+    },
+    {
+      "message": "列表页和详情页的下载按钮都要统一一下",
+      "scenario": "awaiting_release",
+      "action": { "type": "reject", "payload": { "feedback": "列表页和详情页的下载按钮都要统一一下" } },
+      "expect": { "command": "delivery.revise", "count": 1 }
+    },
+    {
+      "message": "下载按钮不好看",
+      "scenario": "awaiting_release",
+      "action": { "type": "reject", "payload": { "feedback": "下载按钮不好看" } },
+      "expect": { "command": "delivery.revise" }
+    },
+    {
+      "message": "打回",
+      "scenario": "awaiting_release",
+      "action": { "type": "reject", "payload": {} },
+      "expect": { "noCommands": true, "askContains": "要改哪儿" }
+    },
+    {
+      "message": "验收通过了，发布吧",
+      "scenario": "awaiting_release",
+      "action": { "type": "publish", "payload": {} },
+      "expect": { "command": "deploy.promote" }
+    },
+    {
+      "message": "可以了",
+      "scenario": "awaiting_release",
+      "action": { "type": "approve", "payload": {} },
+      "expect": { "command": "deploy.promote" }
+    },
+    {
+      "message": "推测试环境看看",
+      "scenario": "awaiting_release",
+      "action": { "type": "deploy", "payload": {} },
+      "expect": { "command": "deploy.test" }
+    },
+    {
+      "message": "现在到哪一步了",
+      "scenario": "awaiting_release",
+      "action": { "type": "show", "payload": {} },
+      "expect": { "showCard": true }
+    },
+    {
+      "message": "再跑一遍",
+      "scenario": "awaiting_release",
+      "action": { "type": "rerun", "payload": {} },
+      "expect": { "command": "task.run" }
+    },
+    {
+      "message": "菜单栏的间距也要改一下",
+      "scenario": "awaiting_release",
+      "action": { "type": "create", "payload": { "statement": "菜单栏的间距也要改一下" } },
+      "expect": { "command": "problem.create" }
+    },
+    {
+      "message": "在吗",
+      "scenario": "awaiting_release",
+      "action": { "type": "chat", "payload": {} },
+      "expect": { "noCommands": true }
+    },
+    {
+      "message": "验收不通过，详情页那三个按钮风格不统一",
+      "scenario": "awaiting_acceptance",
+      "action": { "type": "reject", "payload": { "feedback": "详情页那三个按钮风格不统一" } },
+      "expect": { "command": "delivery.revise" }
+    },
+    {
+      "message": "测试环境还没好，先别发",
+      "scenario": "awaiting_acceptance",
+      "action": { "type": "publish", "payload": {} },
+      "expect": { "noCommands": true, "askContains": "测试部署" }
+    },
+    {
+      "message": "打回，还是不对",
+      "scenario": "developing",
+      "action": { "type": "reject", "payload": { "feedback": "还是不对" } },
+      "expect": { "noCommands": true, "askContains": "还在跑" }
+    },
+    {
+      "message": "打回，详情页的下载按钮不对",
+      "scenario": "developing_stuck",
+      "action": { "type": "reject", "payload": { "feedback": "详情页的下载按钮不对" } },
+      "expect": { "command": "review.request_changes", "payloadTaskId": "task-spec-1-1" }
+    },
+    {
+      "message": "打回，哪儿都不对",
+      "scenario": "developing_stuck",
+      "action": { "type": "reject", "payload": { "feedback": "哪儿都不对" } },
+      "expect": { "command": "review.request_changes", "count": 1 }
+    },
+    {
+      "message": "打回，验收没覆盖空数据",
+      "scenario": "single_review",
+      "action": { "type": "reject", "payload": { "feedback": "验收没覆盖空数据" } },
+      "expect": { "command": "review.request_changes", "payloadTaskId": "task-spec-1-0" }
+    },
+    {
+      "message": "通过",
+      "scenario": "single_review",
+      "action": { "type": "approve", "payload": {} },
+      "expect": { "command": "review.approve" }
+    },
+    {
+      "message": "通过",
+      "scenario": "two_in_review",
+      "action": { "type": "approve", "payload": {} },
+      "expect": { "command": "review.approve_batch", "count": 1 }
+    },
+    {
+      "message": "打回，按钮风格不统一",
+      "scenario": "released",
+      "action": { "type": "reject", "payload": { "feedback": "按钮风格不统一" } },
+      "expect": { "noCommands": true, "askContains": "新需求" }
+    },
+    {
+      "message": "推测试环境",
+      "scenario": "released",
+      "action": { "type": "deploy", "payload": {} },
+      "expect": { "noCommands": true, "askContains": "已经上线" }
+    },
+    {
+      "message": "发布",
+      "scenario": "released",
+      "action": { "type": "publish", "payload": {} },
+      "expect": { "noCommands": true, "askContains": "上线" }
+    },
+    {
+      "message": "通过",
+      "scenario": "released",
+      "action": { "type": "approve", "payload": {} },
+      "expect": { "noCommands": true, "askContains": "上线" }
+    },
+    {
+      "message": "这个按钮改一下",
+      "scenario": "no_requirement",
+      "action": { "type": "reject", "payload": { "feedback": "这个按钮改一下" } },
+      "expect": { "noCommands": true, "askContains": "还没有对应的需求" }
+    },
+    {
+      "message": "首页太空了，加个空状态",
+      "scenario": "no_requirement",
+      "action": { "type": "create", "payload": { "statement": "首页太空了，加个空状态" } },
+      "expect": { "command": "problem.create" }
+    },
+    {
+      "message": "现在到哪一步了",
+      "scenario": "no_requirement",
+      "action": { "type": "show", "payload": {} },
+      "expect": { "noCommands": true, "askContains": "还没有对应的需求" }
+    }
+  ],
+  "$voice": {
+    "comment": "任何一条回复（ask）都不许把内部拆分摆到用户面前。",
+    "forbidden": [
+      "开发点",
+      "任务",
+      "重做",
+      "改哪一个",
+      "通过哪些",
+      "task-",
+      "dlv-",
+      "spec-",
+      "run-"
+    ]
+  }
+}

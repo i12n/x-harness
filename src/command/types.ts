@@ -19,6 +19,7 @@ export const COMMAND_TYPES = [
   "spec.show",
   "spec.plan",
   "delivery.show",
+  "delivery.revise",
   "delivery.release",
   "preview.build",
   "deploy.test",

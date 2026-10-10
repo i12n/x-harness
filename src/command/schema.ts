@@ -133,6 +133,15 @@ export const COMMAND_SCHEMAS: Record<CommandType, CommandSchema> = {
     fields: { deliveryId: { type: "string", required: true } },
     roles: REVIEWERS,
   },
+  // TASK-1267: an acceptance-stage opinion becomes one more round of work on
+  // top of the current delivery — it reopens nothing and deletes nothing.
+  "delivery.revise": {
+    fields: {
+      deliveryId: { type: "string", required: true },
+      statement: { type: "string", required: true },
+    },
+    roles: REVIEWERS,
+  },
   "preview.build": {
     fields: { deliveryId: { type: "string", required: true } },
     roles: OPERATORS,

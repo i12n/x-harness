@@ -129,7 +129,9 @@
 
 ```text
 已上线后要改：你「间距再大一点」→ 机器人：这是新需求，我按「面包屑分隔符间距（第 2 次）」开单
-多开发点：    打回时先问「重做哪一项？[① 间距数值] [② 移动端不换行] [全部]」
+多开发点：    你「详情页那个下载按钮要统一」→ 收到，按你说的再改一轮
+              不退回、不重跑旧开发点，已经通过的部分不动——怎么拆的、改哪些
+              内部任务都不进你的视野；永远不问你「改哪一个」（TASK-1267）
 权限不足：    机器人：这一步需要 reviewer/admin 角色（当前 developer）
 旧习惯：      你「测试部署 dlv-c2eaf5d883」→ 机器人：我按当前需求推测试环境了（正在处理「面包屑分隔符间距」）
 说不清：      你「可以」→ 机器人：你是说测试通过可以发布，还是要再改一处？[可以发布] [还要改]
@@ -145,7 +147,7 @@
 | action | 参数 | 角色下限 | 说明 |
 | --- | --- | --- | --- |
 | `show` | `{}` | 全部 | 需求卡（当前话题；歧义时给候选） |
-| `reject` | `{ feedback?, scope?: "all" \| "item", item? }` | reviewer/admin | 打回；`scope` 仅在多开发点时出现 |
+| `reject` | `{ feedback?, scope?: "all" \| "item", item?: "②" \| 标题片段 }` | reviewer/admin | 打回；`scope`/`item` 只是**用户自己收窄范围**时的输入，harness 不会反问交付物 |
 | `deploy` | `{}` | reviewer/admin | 推测试分支并开/更新 PR |
 | `publish` | `{}` | reviewer/admin | 合并发布（仅"待发布"阶段） |
 | `rerun` | `{}` | developer+ | 逃生口：重新跑一次 |
@@ -183,17 +185,28 @@ migrations/013_requirement_threads.sql
 ### 7.5 打回语义
 
 ```text
-requirement.reject(意见)
-  → 找到当前交付下"已 DONE 的开发点"（多开发点且未指定 → 先问）
-  → 每个目标 Task: DONE → READY（不受 attempts 限制）+ appendTaskReview(意见)
-  → Delivery 聚合自动回 IN_PROGRESS（reconciler，无需额外写入）
-  → 事件 review.changes_requested（含 actor 与意见原文）
-  → 调度器自动起新 Run（AI_AUTO_START）
+requirement.reject(意见)                      # TASK-1267：验收阶段
+  → 没有"退哪一条"这一步：意见=对当前交付的一次修订
+  → 同一 Specification 下新增一条 Task（title/description = 意见），status = READY
+     · baseRef = 交付现状（最新一次成功 Run 的分支），工作区从这里建
+     · constraints.revision.previousFiles = 上一轮改过的文件（回归不变式用）
+  → 旧 Task 一律保持 DONE，产物冻结，不重跑
+  → Delivery 聚合自动回 IN_PROGRESS（多了一条未完成 required Task）
+  → 事件 revision.created → 调度器自动起新 Run → 同一个 PR 更新
+
+守卫：交付 `RELEASED` → 拒绝并引导开新需求。
+
+剩下的任务级打回只服务于"开发中还有卡住/待评审的开发点"（没有交付可修订）：
+读意见原文定位到那一条（永不反问用户"改哪一个"），退回 READY 并重跑。
 ```
 
 守卫：交付 `RELEASED` → 拒绝并引导开新需求；Task 已是 READY/RUNNING → 拒绝并说明状态。
 
 **发布语义（TASK-1255）**：`发布` 只负责"合并 PR + 开始盯生产部署"，**RELEASED 由生产部署确认成功写入**，不由合并写入：
+
+**修订语义（TASK-1267）**：验收阶段的一条意见 = 一条修订（见上）。它替换掉旧的
+"选范围 + 退回重跑"，用户只说意见，任务拆分与作用范围都不进用户视野。设计、落地
+位置与验收见 [task-1267-acceptance-change-as-revision.md](task-1267-acceptance-change-as-revision.md)。
 
 ```text
 requirement.publish
@@ -290,13 +303,27 @@ requirement.publish
 
 ## 10. 测试与验收
 
-**意图语料回归（新增，固化 §7.6 的 33 条）**
+**对话回归（两层）**
 
 ```text
-tests/fixtures/intentPhrasings.json   33 条：{ text, stage, expect, allowAlso? }
+第一层：听懂了吗（意图）
+tests/fixtures/intentPhrasings.json   39 条：{ text, stage, expect, allowAlso? }
 tests/requirementIntent.test.ts       离线：断言规则（疑问句 ≠ 不可逆动作、模糊句 → clarify）
 scripts/eval-intent.mjs               联网：跑真模型，输出命中率 + 未命中清单（人工复核）
 CI 时不跑联网版；发版前手动跑一次，命中率下限 90% 且"危险误判=0"
+
+第二层：听懂之后对用户做了什么（TASK-1267）
+tests/fixtures/conversationRegression.json  26 例 / 8 个阶段：真会说的话 → 期望动作
+tests/conversationRegression.test.ts        离线、表驱动；新增一句话是改数据，不是改代码
+· 覆盖 待发布 / 待验收 / 开发中 / 开发中卡住 / 单条待评审 / 多条待评审 / 已上线 / 无需求
+· 语音不变式：任何 ask 都不许出现 开发点 / 任务 / 重做 / 改哪一个 / 内部 id
+
+第三层：只在会话层发生的分支
+tests/fixtures/sessionRegression.json       真实往返（消息 → store → 回复）
+tests/sessionRegression.test.ts
+ · 澄清循环：说出需求 → 机器人提问（选项卡）→ 一次答完 → 问题 CONFIRMED
+ · 建单被拒：模型抽风 → 回复说清原因，且新需求仍开**自己的**话题（TASK-1261）
+ · 权限不足：不在白名单 → 不进模型、不建单；developer 打回 → 角色门禁拦下，什么都不改
 ```
 
 **单测 / 集成**
@@ -327,7 +354,7 @@ schema migration       013 幂等
 | 用户仍用旧 id 命令 | 不执行，回一句引导（不报错） |
 | 模型误判意图 | 只读动作（show）直接执行；`deploy/publish/reject` 一律二次确认；模糊/疑问一律反问（§7.6 实测：危险误判 0） |
 | 跨话题输入导致上下文混乱 | 回复里回显"你说：…"，并把该消息并入需求上下文 |
-| 打回误伤（多开发点） | 先问 scope；无法判定时也先问 |
+| 打回误伤（多开发点） | 按用户原话定范围：命中几条退几条；没点名就退当前那条——宁可少退（用户一句话可补），也不整批重跑、更不拿交付物反问用户（TASK-1267） |
 | 迁移 013 出错 | 纯 `ADD COLUMN IF NOT EXISTS`，幂等；回滚 = 停止使用该列 |
 
 ## 12. 待确认
@@ -351,7 +378,7 @@ schema migration       013 幂等
 | 动作 → 内部命令映射（阶段门禁 + 反问） | ✅（`reject` 多开发点先问、`publish` 只在待发布、RELEASED 引导开新需求） | `src/requirement/application/actions.ts` |
 | D8 卡片去 id | ✅（需求卡主文案只有标题 + 阶段 + 动作；id 仅在 `includeIds` 详情行） | `src/channel/rendering/requirement.ts` |
 | D4 旧命令不再面向用户 | ✅（模型不再产出 id 命令；用户粘 id 时忽略并回一句引导） | `src/server/session.ts`（`pastedIdHint`） |
-| 语料回归资产 | ✅（33 条 fixture + 离线测试 + 联网评估脚本；**未跑联网版**） | `tests/fixtures/intentPhrasings.json`、`tests/requirementIntent.test.ts`、`scripts/eval-intent.mjs` |
+| 语料回归资产 | ✅（39 条意图语料 + 26 例动作回归 + 4 例会话回归 + 离线测试 + 联网评估脚本；**未跑联网版**） | `tests/fixtures/{intentPhrasings,conversationRegression,sessionRegression}.json`、`tests/{requirementIntent,conversationRegression,sessionRegression}.test.ts`、`scripts/eval-intent.mjs` |
 | 新需求换锚点 + 上下文按话题裁剪 + 不在别人话题里开单（TASK-1257） | ✅ | `src/server/session.ts`、`src/conversation/service.ts`、`src/server/index.ts`，设计见 `docs/conversation-binding-design.md` |
 
 **部署前还要做的**：跑一次 `node scripts/eval-intent.mjs`（需要 `npm run build` 与线上同源的

@@ -2,9 +2,9 @@ import type { Delivery } from "../../domain/delivery.js";
 import type { Repository } from "../../domain/repository.js";
 import type { Run } from "../../domain/run.js";
 import type { Task } from "../../domain/task.js";
+import { latestDeliveryProduct } from "../../delivery/application/product.js";
 import type { GitHubClient, GitHubPullRequest, GitHubWorkflowRun } from "../../github/githubClient.js";
 import type { EventStore } from "../../store/eventStore.js";
-import { extractWorkspacesInfo } from "../../workspace/info.js";
 
 /** Pushes a branch to a repository (the harness's existing git path). */
 export interface TestBranchPublisher {
@@ -487,17 +487,17 @@ export class DeployService {
     deliveryId: string,
   ): Promise<{ repository: Repository; worktree: string; delivery: Delivery }> {
     const { delivery, tasks } = await this.deps.deliveries.load(deliveryId);
-    for (const task of tasks) {
-      const runs = await this.deps.runs.listRuns({ taskId: task.id });
-      const run = [...runs].reverse().find((candidate) => candidate.status === "SUCCEEDED");
-      const workspace = run ? extractWorkspacesInfo(run)[0] : undefined;
-      if (!workspace?.path) {
-        continue;
-      }
-      const repository = await this.deps.repositories.findRepository(task.repositoryId);
-      return { repository, worktree: workspace.path, delivery };
+    // TASK-1267: push the *newest* worktree in the delivery. Picking the first
+    // task was wrong as soon as a delivery could gain a revision: the revision
+    // is the newest content, and an older worktree would hide it.
+    const product = await latestDeliveryProduct(tasks, this.deps.runs);
+    if (!product) {
+      throw new Error(`交付 ${deliveryId} 没有带工作区的成功 Run，无法推送测试分支`);
     }
-    throw new Error(`交付 ${deliveryId} 没有带工作区的成功 Run，无法推送测试分支`);
+    const repository = await this.deps.repositories.findRepository(
+      product.task.repositoryId,
+    );
+    return { repository, worktree: product.path, delivery };
   }
 
   private async record(type: string, payload: unknown): Promise<void> {

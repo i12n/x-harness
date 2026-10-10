@@ -6,6 +6,7 @@ import { defaultExecutionProfile } from "../domain/executionProfile.js";
 import type { TaskTarget } from "../domain/taskTarget.js";
 import type { Run } from "../domain/run.js";
 import type { Task, TaskStatus } from "../domain/task.js";
+import { describeRevisionRegression } from "../domain/revision.js";
 import {
   ExecutionCancelledError,
   ExecutionTimeoutError,
@@ -450,6 +451,14 @@ export class Worker {
       if (testEvidenceReason && primaryTarget.repository.verificationCommands.length > 0) {
         risk.level = "high";
         risk.reasons.push(testEvidenceReason);
+      }
+      // TASK-1267: a revision starts from the delivery as it stands, so losing
+      // part of that content is not "a smaller change" — it is a regression of
+      // work a human already accepted.
+      const regression = describeRevisionRegression(task, diff.files);
+      if (regression) {
+        risk.level = "high";
+        risk.reasons.push(regression);
       }
       const review = await this.runReviewer(
         { task, acceptance, verification, diff, testEvidence },

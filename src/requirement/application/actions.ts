@@ -1,4 +1,5 @@
 import type { CommandType, IntentAction } from "../../command/types.js";
+import type { Task } from "../../domain/task.js";
 import type { RequirementView } from "./resolver.js";
 
 /**
@@ -160,10 +161,16 @@ export function commandsForRequirementAction(
         };
       }
       if (reviewable.length > 1) {
-        const options = reviewable.map((task) => task.title.slice(0, 20));
+        // TASK-1267: the same rule as 打回 — how the work was split is not the
+        // user's problem. 「通过」 accepts what is in front of them, so approve
+        // all of it instead of asking which one they mean.
         return {
-          commands: [],
-          ask: `这项需求有 ${reviewable.length} 个开发点等你验收，通过哪些？[${options.join("] [")}] [全部]`,
+          commands: [
+            {
+              type: "review.approve_batch",
+              payload: { taskIds: reviewable.map((task) => task.id) },
+            },
+          ],
         };
       }
       if (view.delivery?.status === "READY_FOR_RELEASE") {
@@ -192,6 +199,28 @@ export function commandsForRequirementAction(
         };
       }
       const feedback = asText(action.payload?.feedback);
+      // TASK-1267: at an acceptance stage the opinion is about *the delivery*,
+      // not about which task to reopen. It becomes one more round of work on
+      // top of what the user is looking at — nothing is sent back to be
+      // implemented again, and nothing already accepted is rewritten. The user
+      // never sees, or answers, how the work was split into tasks.
+      if (view.delivery && view.tasks.length > 0 && view.tasks.every((task) => task.status === "DONE")) {
+        if (!feedback) {
+          // Not a task question: we genuinely do not know what to change yet.
+          return {
+            commands: [],
+            ask: "要改哪儿？说一下（改什么、期望是什么），我这就按你说的改。",
+          };
+        }
+        return {
+          commands: [
+            {
+              type: "delivery.revise",
+              payload: { deliveryId: view.delivery.id, statement: feedback },
+            },
+          ],
+        };
+      }
       // TASK-1249: anything that has stopped moving can be sent back — waiting
       // for review, finished, or stuck after exhausting its attempts. Only the
       // classic "reject a REVIEW task" case used to work, which is exactly the
@@ -214,30 +243,25 @@ export function commandsForRequirementAction(
           ask:
             running.length > 0
               ? "这项还在跑，等它跑完再打回（或者先说要停）。"
-              : "现在还没有可打回的开发点；你要是想改需求，直接说要改成什么。",
+              : "现在还没有可打回的东西；你要是想改需求，直接说要改成什么。",
         };
       }
-      if (targets.length > 1) {
-        // Precision beats guessing: ask which deliverable to redo, by title.
-        const options = targets.map(
-          (task) => `${task.title.slice(0, 20)}（${statusLabel(task.status)}）`,
-        );
-        return {
-          commands: [],
-          ask: `这项需求有 ${targets.length} 个开发点，重做哪些？[${options.join("] [")}] [全部]`,
-        };
+      if (targets.length === 1) {
+        return { commands: [rework(targets[0]!.id, feedback)] };
       }
-      return {
-        commands: [
-          {
-            type: "review.request_changes",
-            payload: {
-              taskId: targets[0]!.id,
-              ...(feedback ? { feedback } : {}),
-            },
-          },
-        ],
-      };
+      // TASK-1267: how this delivery was split into deliverables is the
+      // harness's implementation detail — the user never sees it and must never
+      // be asked about it. The targets are read out of their own words: whoever
+      // their complaint names gets sent back, and a complaint that names nobody
+      // falls back to the deliverable they were just looking at.
+      const scope = asText(action.payload?.scope);
+      const item = asText(action.payload?.item);
+      const chosen = scope === "all" ? targets : pickTargets(
+        scope === "item" ? (item ?? feedback) : feedback,
+        targets,
+        view.currentTask,
+      );
+      return { commands: chosen.map((task) => rework(task.id, feedback)) };
     }
 
     case "deploy": {
@@ -294,7 +318,7 @@ export function commandsForRequirementAction(
       }
       const target = view.currentTask ?? view.tasks[0];
       if (!target) {
-        return { commands: [], ask: "这项需求还没有可重跑的开发点。" };
+        return { commands: [], ask: "这项需求还没有可重跑的。" };
       }
       return { commands: [{ type: "task.run", payload: { taskId: target.id } }] };
     }
@@ -320,19 +344,118 @@ function asText(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
-function statusLabel(status: string): string {
-  switch (status) {
-    case "REVIEW":
-      return "等人验收";
-    case "DONE":
-      return "已完成";
-    case "BLOCKED":
-      return "已阻塞";
-    case "RUNNING":
-      return "执行中";
-    case "QUEUED":
-      return "排队中";
-    default:
-      return status;
+/**
+ * TASK-1267: the numbered forms a user may use when they *volunteer* a scope
+ * (「只改第二个」). Nothing is ever printed back as a numbered question — the
+ * harness decides the scope itself; these are only accepted as input.
+ */
+const CIRCLED = ["①", "②", "③", "④", "⑤", "⑥", "⑦", "⑧", "⑨"] as const;
+
+const CN_NUMBERS: Record<string, number> = {
+  一: 1,
+  二: 2,
+  三: 3,
+  四: 4,
+  五: 5,
+  六: 6,
+  七: 7,
+  八: 8,
+  九: 9,
+};
+
+/**
+ * A title only counts as "the user named this deliverable" when the user's own
+ * words share a run this long with it. Below it, matches are vocabulary both
+ * deliverables have in common (「下载按钮」), which must never decide a scope.
+ */
+const MIN_TITLE_MATCH = 4;
+
+function rework(taskId: string, feedback: string | undefined): ResolvedRequirementCommand {
+  return {
+    type: "review.request_changes",
+    payload: { taskId, ...(feedback ? { feedback } : {}) },
+  };
+}
+
+/**
+ * TASK-1267: which deliverables does this text mean? Deliberately deterministic
+ * and deliberately never empty:
+ *
+ * 1. an option number (「①」/「2」/「第二个」) or an exact task id names one;
+ * 2. otherwise every deliverable whose title shares a ≥4-character run with the
+ *    user's words, keeping only the best-scoring tier — a complaint that names
+ *    one thing sends one back, a complaint that names two sends two;
+ * 3. a complaint that names nothing (「打回」 with no words) falls back to the
+ *    deliverable the user was just looking at.
+ */
+function pickTargets(
+  needle: string | undefined,
+  targets: Task[],
+  fallback: Task | undefined,
+): Task[] {
+  const text = needle?.trim();
+  if (text) {
+    const index = optionIndexOf(text, targets.length);
+    if (index !== undefined) {
+      return [targets[index]!];
+    }
+    const byId = targets.find((task) => task.id === text);
+    if (byId) {
+      return [byId];
+    }
+    const ranked = targets
+      .map((task) => ({ task, score: longestSharedRun(text, task.title) }))
+      .filter((entry) => entry.score >= MIN_TITLE_MATCH)
+      .sort((a, b) => b.score - a.score);
+    const best = ranked[0];
+    if (best) {
+      return ranked
+        .filter((entry) => entry.score === best.score)
+        .map((entry) => entry.task);
+    }
   }
+  const named = fallback && targets.find((task) => task.id === fallback.id);
+  return [named ?? targets[0]!];
+}
+
+/** TASK-1267: 「①」/「1」/「第二个」/「2.」 → a 0-based deliverable index. */
+function optionIndexOf(text: string, count: number): number | undefined {
+  const trimmed = text.trim().replace(/[。.!！]$/, "");
+  const circled = CIRCLED.indexOf(trimmed as (typeof CIRCLED)[number]);
+  if (circled >= 0) {
+    return circled < count ? circled : undefined;
+  }
+  const digits = /^(\d{1,2})\s*[.、)）]?$/.exec(trimmed);
+  if (digits) {
+    const value = Number(digits[1]);
+    return value >= 1 && value <= count ? value - 1 : undefined;
+  }
+  const chinese = /^第\s*([一二三四五六七八九1-9])\s*(个|条|项)?$/.exec(trimmed);
+  if (chinese) {
+    const token = chinese[1]!;
+    const value = CN_NUMBERS[token] ?? Number(token);
+    return value >= 1 && value <= count ? value - 1 : undefined;
+  }
+  return undefined;
+}
+
+/** Longest run of characters the two strings have in common. */
+function longestSharedRun(left: string, right: string): number {
+  const a = [...left];
+  const b = [...right];
+  let best = 0;
+  let previous = new Array<number>(b.length + 1).fill(0);
+  for (const character of a) {
+    const current = new Array<number>(b.length + 1).fill(0);
+    for (let j = 1; j <= b.length; j += 1) {
+      if (character === b[j - 1]) {
+        current[j] = previous[j - 1]! + 1;
+        if (current[j]! > best) {
+          best = current[j]!;
+        }
+      }
+    }
+    previous = current;
+  }
+  return best;
 }

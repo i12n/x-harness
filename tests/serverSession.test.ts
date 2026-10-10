@@ -245,6 +245,63 @@ describe("ChatSession", () => {
     expect(textOf(sent.at(-1)!.message)).not.toContain("我还不知道你说的是哪件事");
   });
 
+  // TASK-1267: at an acceptance stage the opinion becomes one revision of the
+  // delivery. The user never sees — or is asked about — how the work was split.
+  it("turns an acceptance opinion into one revision, never a task question", async () => {
+    const revised: Record<string, unknown>[] = [];
+    const dispatcher = new CommandDispatcher({
+      handlers: {
+        "delivery.revise": async (payload) => {
+          revised.push(payload);
+          return {
+            message: { conversationId: "x", text: "📝 收到，这就按你说的改" },
+          };
+        },
+      },
+      idempotency: new InMemoryIdempotencyStore(),
+    });
+    const intent = new StubIntentEngine({
+      command: undefined,
+      action: { type: "reject", payload: { feedback: "三个按钮风格要统一" } },
+    });
+    const { session, sent } = await buildSession(intent, ["ou_reviewer"], {
+      dispatcher,
+      access: {
+        allowedUserIds: ["ou_reviewer"],
+        roleMap: { ou_reviewer: "reviewer" },
+        defaultRole: "developer",
+      },
+      requirements: {
+        resolve: async () => ({
+          problemId: "prob-1",
+          title: "x-music 添加下载歌曲功能",
+          stage: "awaiting_release" as const,
+          delivery: { id: "dlv-1", specificationId: "spec-1", status: "READY_FOR_RELEASE" },
+          tasks: [
+            {
+              id: "task-spec-1-0",
+              title: "在歌曲列表添加单曲下载按钮并实现统一单曲",
+              status: "DONE",
+            },
+            {
+              id: "task-spec-1-1",
+              title: "在歌曲详情页添加下载按钮并确认播放器无下",
+              status: "DONE",
+            },
+          ],
+        }),
+      },
+    });
+
+    await session.handleEvent(event("om-1", "打回：三个按钮风格要统一", "ou_reviewer"));
+
+    expect(revised).toEqual([
+      { deliveryId: "dlv-1", statement: "三个按钮风格要统一" },
+    ]);
+    expect(intent.seen).toHaveLength(1);
+    expect(textOf(sent.at(-1)!.message)).not.toContain("这次改哪一个");
+  });
+
   // TASK-1257: the user-level `create` action must move the topic anchor too.
   // It reaches the same `problem.create` command as the legacy path but returns
   // through a helper, so the old re-anchor never ran for it — that is how a new

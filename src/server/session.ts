@@ -1017,9 +1017,16 @@ export class ChatSession {
     }
 
     let first = true;
-    for (const command of outcome.commands) {
+    for (const [index, command] of outcome.commands.entries()) {
+      // TASK-1267: one message can carry several commands of the same type (a
+      // complaint that names two deliverables sends both back). The idempotency
+      // key is `${channel}:${messageId}:${type}`, so without a discriminator the
+      // dispatcher reads the second one as a replay of the first and silently
+      // drops it.
+      const prepared = prepareCommand(input, command) as Record<string, unknown>;
+      prepared.idempotencyKey = `${String(prepared.idempotencyKey)}:${index}`;
       const result = await this.deps.dispatcher.dispatch(
-        prepareCommand(input, command),
+        prepared,
         { channel: message.channel, userId: message.senderId, roles },
       );
       // TASK-1257: the user-level `create` action reaches the same

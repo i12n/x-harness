@@ -1,0 +1,114 @@
+{
+  "$comment": "TASK-1267 会话层回归：只在 ChatSession 里发生的分支——澄清循环、建单被拒、权限不足。每例是一串真实往返（消息 + 意图层判定的结果 → 期望行为）。占位符 $problemId / $firstClarification / $firstOption 由测试在派发前用 store 里的真实值替换。",
+  "cases": [
+    {
+      "name": "澄清循环：说出需求 → 机器人提问 → 一次答完就确认",
+      "operator": "ou_reviewer",
+      "turns": [
+        {
+          "text": "首页太空了，加个空状态",
+          "intent": {
+            "command": {
+              "type": "problem.create",
+              "payload": { "title": "首页空状态", "statement": "首页太空了，加个空状态" }
+            }
+          },
+          "expect": {
+            "replyContains": ["空状态要显示什么", "提交全部答案"],
+            "engineCalls": 1,
+            "problems": 1
+          }
+        },
+        {
+          "text": "空的时候显示引导文案就行",
+          "intent": {
+            "command": {
+              "type": "problem.clarification.answer",
+              "payload": {
+                "problemId": "$problemId",
+                "clarificationId": "$firstClarification",
+                "optionId": "$firstOption"
+              }
+            }
+          },
+          "expect": {
+            "replyContains": ["已确认", "首页空状态"],
+            "engineCalls": 2,
+            "problemsConfirmed": 1,
+            "openClarifications": 0
+          }
+        }
+      ]
+    },
+    {
+      "name": "建单被拒：模型抽风 → 说清原因，且新需求仍开自己的话题",
+      "operator": "ou_reviewer",
+      "brokenCreate": true,
+      "turns": [
+        {
+          "text": "再做一个：首页空状态",
+          "intent": {
+            "action": {
+              "type": "create",
+              "payload": { "statement": "再做一个：首页空状态" }
+            }
+          },
+          "expect": {
+            "replyContains": ["没做成", "problem.create"],
+            "engineCalls": 1,
+            "problems": 0,
+            "anchorsToOwnMessage": true
+          }
+        }
+      ]
+    },
+    {
+      "name": "权限不足：不在白名单 → 不进模型、不建单",
+      "operator": "ou_stranger",
+      "turns": [
+        {
+          "text": "首页太空了，加个空状态",
+          "intent": {
+            "command": {
+              "type": "problem.create",
+              "payload": { "title": "首页空状态", "statement": "首页太空了，加个空状态" }
+            }
+          },
+          "expect": {
+            "replyContains": ["未授权"],
+            "engineCalls": 0,
+            "problems": 0
+          }
+        }
+      ]
+    },
+    {
+      "name": "权限不足：developer 打回 → 角色门禁拦下，什么都不改",
+      "operator": "ou_dev",
+      "requirement": {
+        "titles": ["在歌曲列表添加单曲下载按钮", "在歌曲详情页添加下载按钮"],
+        "tasks": [
+          { "id": "task-spec-1-0", "status": "DONE" },
+          { "id": "task-spec-1-1", "status": "DONE" }
+        ],
+        "delivery": "READY_FOR_RELEASE"
+      },
+      "turns": [
+        {
+          "text": "打回：详情页那三个按钮风格要统一",
+          "intent": {
+            "action": {
+              "type": "reject",
+              "payload": { "feedback": "详情页那三个按钮风格要统一" }
+            }
+          },
+          "expect": {
+            "replyContains": ["没做成", "reviewer"],
+            "engineCalls": 1,
+            "tasks": 2
+          }
+        }
+      ]
+    }
+  ]
+}

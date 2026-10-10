@@ -21,6 +21,8 @@ async function harness(
     delivery?: string;
     /** Bind the conversation to the problem instead of its first task. */
     bound?: "task" | "problem";
+    /** Deliverable titles, in plan order. */
+    titles?: string[];
   } = {},
 ) {
   const tasks = new InMemoryTaskStore();
@@ -44,16 +46,17 @@ async function harness(
   });
   const taskSpecs = options.tasks ?? [{ id: "task-spec-1-0", status: "DONE" }];
   for (const [index, entry] of taskSpecs.entries()) {
+    const title = options.titles?.[index] ?? `开发点 ${index + 1}`;
     await tasks.createTask({
       id: entry.id,
       repositoryId: "repo-1",
-      title: `开发点 ${index + 1}`,
+      title,
       status: entry.status as never,
     });
     await plans.createPlanItem({
       specificationId: "spec-1",
       position: index,
-      title: `开发点 ${index + 1}`,
+      title,
       taskId: entry.id,
     });
   }
@@ -126,7 +129,10 @@ describe("action → command mapping (TASK-1244)", () => {
     });
   });
 
-  it("打回 becomes a rework of the finished deliverable, with the user's words", async () => {
+  // TASK-1267: at an acceptance stage the opinion is about the *delivery*. It
+  // becomes one more round of work on top of what the user is looking at — no
+  // task is reopened, and the user is never asked which one to reopen.
+  it("an acceptance-stage opinion becomes one revision of the delivery", async () => {
     const { view } = await harness();
     const outcome = commandsForRequirementAction(
       { type: "reject", payload: { feedback: "间距应该是 24px" } },
@@ -135,8 +141,8 @@ describe("action → command mapping (TASK-1244)", () => {
 
     expect(outcome.commands).toEqual([
       {
-        type: "review.request_changes",
-        payload: { taskId: "task-spec-1-0", feedback: "间距应该是 24px" },
+        type: "delivery.revise",
+        payload: { deliveryId: "dlv-1", statement: "间距应该是 24px" },
       },
     ]);
   });
@@ -174,7 +180,10 @@ describe("action → command mapping (TASK-1244)", () => {
     expect(outcome.ask).toContain("还在跑");
   });
 
-  it("asks which deliverable to redo when the requirement has several", async () => {
+  // TASK-1267: how the delivery was split into deliverables is the harness's
+  // implementation detail. Two deliverables or ten, the answer is the same: one
+  // revision of the delivery.
+  it("does not care how the delivery was split into deliverables", async () => {
     const { view } = await harness({
       tasks: [
         { id: "task-spec-1-0", status: "DONE" },
@@ -182,10 +191,92 @@ describe("action → command mapping (TASK-1244)", () => {
       ],
       bound: "problem",
     });
+    const outcome = commandsForRequirementAction(
+      { type: "reject", payload: { feedback: "按钮风格要统一" } },
+      view,
+    );
+    expect(outcome.commands).toEqual([
+      {
+        type: "delivery.revise",
+        payload: { deliveryId: "dlv-1", statement: "按钮风格要统一" },
+      },
+    ]);
+  });
+
+  // The exact input that started this: a description of the change, with no
+  // mention of tasks, deliverables or scope — and no question back.
+  it("turns the real acceptance message into one revision", async () => {
+    const feedback =
+      "做如下调整：歌曲详情页的下载按钮，夹在播放和喜欢两个按钮之间，样式与其他两个按钮不统一。需要对这三个按钮做统一的设计，风格统一且美观。";
+    const { view } = await harness({
+      titles: [
+        "在歌曲列表添加单曲下载按钮并实现统一单曲",
+        "在歌曲详情页添加下载按钮并确认播放器无下",
+      ],
+      tasks: [
+        { id: "task-spec-1-0", status: "DONE" },
+        { id: "task-spec-1-1", status: "DONE" },
+      ],
+      bound: "problem",
+    });
+
+    const outcome = commandsForRequirementAction(
+      { type: "reject", payload: { feedback } },
+      view,
+    );
+
+    expect(outcome.ask).toBeUndefined();
+    expect(outcome.commands).toEqual([
+      {
+        type: "delivery.revise",
+        payload: { deliveryId: "dlv-1", statement: feedback },
+      },
+    ]);
+  });
+
+  // A "打回" with no words is a content question, not a task question.
+  it("asks what to change when the 打回 carries no words", async () => {
+    const { view } = await harness({
+      tasks: [
+        { id: "task-spec-1-0", status: "DONE" },
+        { id: "task-spec-1-1", status: "DONE" },
+      ],
+      bound: "problem",
+    });
+
     const outcome = commandsForRequirementAction({ type: "reject" }, view);
+
     expect(outcome.commands).toHaveLength(0);
-    expect(outcome.ask).toContain("开发点 1");
-    expect(outcome.ask).toContain("已完成");
+    expect(outcome.ask).toContain("要改哪儿");
+    expect(outcome.ask).not.toContain("开发点");
+  });
+
+  // The task-level path survives only where there is no delivery to revise yet:
+  // a deliverable stuck or waiting for a verdict while the requirement is still
+  // being built. Even there the user is never asked which one.
+  it("picks the stuck deliverable the complaint names, without asking", async () => {
+    const { view } = await harness({
+      titles: ["列表页的下载按钮", "详情页的下载按钮"],
+      tasks: [
+        { id: "task-spec-1-0", status: "BLOCKED" },
+        { id: "task-spec-1-1", status: "BLOCKED" },
+      ],
+      delivery: "IN_PROGRESS",
+      bound: "problem",
+    });
+
+    const outcome = commandsForRequirementAction(
+      { type: "reject", payload: { feedback: "详情页的下载按钮不对" } },
+      view,
+    );
+
+    expect(outcome.ask).toBeUndefined();
+    expect(outcome.commands).toEqual([
+      {
+        type: "review.request_changes",
+        payload: { taskId: "task-spec-1-1", feedback: "详情页的下载按钮不对" },
+      },
+    ]);
   });
 
   it("deploy / publish only fire when the stage allows it", async () => {
@@ -310,6 +401,24 @@ describe("intent normalisation (TASK-1244)", () => {
     expect(normalizeIntent({ action: "clarify", payload: { question: "要发布吗？" } }).action).toEqual(
       { type: "clarify", payload: { question: "要发布吗？" } },
     );
+  });
+
+  // TASK-1267: answering 「这次改哪一个？」 must survive normalisation — it used to
+  // be dropped, so the model's answer could never reach the harness.
+  it("keeps the redo scope the model read off the question", () => {
+    expect(
+      normalizeIntent({
+        action: "reject",
+        payload: { scope: "item", item: "②", feedback: "详情页按钮要统一" },
+      }).action,
+    ).toEqual({
+      type: "reject",
+      payload: { feedback: "详情页按钮要统一", scope: "item", item: "②" },
+    });
+    expect(normalizeIntent({ action: "reject", payload: { scope: "全部" } }).action).toEqual({
+      type: "reject",
+      payload: {},
+    });
   });
 
   it("treats an unknown action as no intent", () => {
