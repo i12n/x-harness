@@ -6,6 +6,7 @@ import { renderFeishuCard, renderFeishuText } from "../channel/feishu/cards.js";
 import { parseCardAction } from "../channel/feishu/cardActions.js";
 import { FeishuAdapter } from "../channel/feishu/adapter.js";
 import { HttpFeishuClient } from "../channel/feishu/client.js";
+import { renderDeployTransitionMessage } from "../channel/rendering/deploy.js";
 import type { OutgoingMessage } from "../channel/message.js";
 import { CommandDispatcher } from "../command/dispatcher.js";
 import { createDeliveryCommandHandlers } from "../command/handlers/delivery.js";
@@ -666,19 +667,16 @@ export class HarnessRuntime {
         run?: { url?: string };
       }[];
       for (const row of rows) {
-        const production = row.kind === "production";
-        const what = production ? "线上" : "测试环境";
-        const label =
-          row.state === "succeeded"
-            ? production
-              ? "🚀 已上线"
-              : "✅ 测试环境就绪"
-            : row.state === "failed"
-              ? `❌ ${what}部署失败`
-              : row.state === "stale"
-                ? `⏳ ${what}部署超时，仍在进行`
-                : `🔄 ${what}部署中`;
-        const url = production ? deployProdUrl : deployTestUrl;
+        // TASK-1258: the copy (and which states deserve a message at all) lives
+        // in the renderer, so it can be tested without booting the service.
+        const message = renderDeployTransitionMessage(row, {
+          testUrl: deployTestUrl,
+          productionUrl: deployProdUrl,
+          conversationId: row.deliveryId,
+        });
+        if (!message) {
+          continue;
+        }
         try {
           const target = await boundTarget(row.deliveryId);
           if (!target) {
@@ -687,17 +685,7 @@ export class HarnessRuntime {
           await sendToTarget(
             { ...target, receiveIdType: target.receiveIdType as "chat_id" },
             {
-              conversationId: row.deliveryId,
-              text: [
-                `${label}：${row.deliveryId}`,
-                url ? `${production ? "🌐 线上环境" : "🧪 测试环境"}：${url}` : "",
-                !production && deployTestUrl
-                  ? "打开链接即可验收（HTTP + IP + 端口，暂无鉴权）；数据为测试库，随部署更新。"
-                  : "",
-                row.run?.url ? `Workflow：${row.run.url}` : "",
-              ]
-                .filter(Boolean)
-                .join("\n"),
+              ...message,
               metadata: { receiveId: target.receiveId, receiveIdType: target.receiveIdType },
             },
           );

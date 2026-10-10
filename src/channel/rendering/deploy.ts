@@ -71,3 +71,73 @@ export function renderPromotedMessage(
     ],
   };
 }
+
+/** TASK-1258: one observed deploy transition, as the notifier sees it. */
+export interface DeployTransitionNotice {
+  deliveryId: string;
+  state: string;
+  kind?: string;
+  run?: { url?: string };
+}
+
+export interface DeployTransitionUrls {
+  testUrl?: string;
+  productionUrl?: string;
+  conversationId?: string;
+}
+
+/**
+ * TASK-1258: one message per *meaningful* deploy transition.
+ *
+ * Returns `undefined` when there is nothing worth saying — `none` only means
+ * "Actions has not queued the run yet", and announcing it as 部署中 duplicated
+ * the message a few seconds later when the same deploy reported `pending`.
+ *
+ * The environment address is only rendered once the deploy actually
+ * succeeded: showing it while 部署中 sends people to the previous build.
+ */
+export function renderDeployTransitionMessage(
+  row: DeployTransitionNotice,
+  urls: DeployTransitionUrls = {},
+): OutgoingMessage | undefined {
+  if (row.state === "none") {
+    return undefined;
+  }
+  const production = row.kind === "production";
+  const what = production ? "线上" : "测试环境";
+  const label =
+    row.state === "succeeded"
+      ? production
+        ? "🚀 已上线"
+        : "✅ 测试环境就绪"
+      : row.state === "failed"
+        ? `❌ ${what}部署失败`
+        : row.state === "stale"
+          ? `⏳ ${what}部署超时，仍在进行`
+          : `🔄 ${what}部署中`;
+  const url = row.state === "succeeded" ? (production ? urls.productionUrl : urls.testUrl) : undefined;
+  const progressHint =
+    row.state === "pending"
+      ? `${what}部署完成后我会把地址发在这里。`
+      : row.state === "failed"
+        ? production
+          ? "线上没有更新；交付仍是待发布，可以打回或重新发布。"
+          : "测试环境没有更新；可以重跑或打回。"
+        : row.state === "stale"
+          ? "监听已超时，可以用「部署状态」再查一次。"
+          : undefined;
+  return {
+    conversationId: urls.conversationId ?? row.deliveryId,
+    text: [
+      `${label}：${row.deliveryId}`,
+      url ? `${production ? "🌐 线上环境" : "🧪 测试环境"}：${url}` : "",
+      url && !production
+        ? "打开链接即可验收（HTTP + IP + 端口，暂无鉴权）；数据为测试库，随部署更新。"
+        : "",
+      progressHint ?? "",
+      row.run?.url ? `Workflow：${row.run.url}` : "",
+    ]
+      .filter(Boolean)
+      .join("\n"),
+  };
+}
