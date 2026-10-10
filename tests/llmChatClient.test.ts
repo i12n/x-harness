@@ -93,14 +93,15 @@ describe("HttpChatClient", () => {
           finish_reason: "length",
         },
       ],
-      usage: { completion_tokens: 2048, completion_tokens_details: { reasoning_tokens: 2048 } },
+      usage: { completion_tokens: 8192, completion_tokens_details: { reasoning_tokens: 8192 } },
     };
     const fetchImpl: ChatFetchLike = async (url, init) => {
       calls.push({ url, init });
-      // Two budgets burned on reasoning in a row, then an answer.
-      return calls.length <= 2
-        ? response(200, reasoningOnly)
-        : response(200, { choices: [{ message: { content: '{"ok":true}' } }] });
+    // TASK-1262: 8192 is the starting budget; two attempts burn it on hidden
+    // reasoning, the third (32768) finally writes an answer.
+    return calls.length <= 2
+      ? response(200, reasoningOnly)
+      : response(200, { choices: [{ message: { content: '{"ok":true}' } }] });
     };
     const client = new HttpChatClient({
       baseUrl: "https://api.example.com",
@@ -115,12 +116,12 @@ describe("HttpChatClient", () => {
     const first = JSON.parse(calls[0]!.init.body ?? "{}") as { max_tokens: number };
     const second = JSON.parse(calls[1]!.init.body ?? "{}") as { max_tokens: number };
     const third = JSON.parse(calls[2]!.init.body ?? "{}") as { max_tokens: number };
-    expect(first.max_tokens).toBe(2048);
-    expect(second.max_tokens).toBe(4096);
-    expect(third.max_tokens).toBe(8192);
+    expect(first.max_tokens).toBe(8192);
+    expect(second.max_tokens).toBe(16384);
+    expect(third.max_tokens).toBe(32768);
   });
 
-  it("names the token budget instead of retrying at the ceiling", async () => {
+  it("gives up after three attempts and names the last budget", async () => {
     let calls = 0;
     const client = new HttpChatClient({
       baseUrl: "https://api.example.com",
@@ -130,15 +131,15 @@ describe("HttpChatClient", () => {
         calls += 1;
         return response(200, {
           choices: [{ message: { content: "" }, finish_reason: "length" }],
-          usage: { completion_tokens_details: { reasoning_tokens: 8192 } },
+          usage: { completion_tokens_details: { reasoning_tokens: 32768 } },
         });
       },
     });
 
     await expect(
       client.complete({ messages: [], maxTokens: 8192 }),
-    ).rejects.toThrowError(/finish_reason=length[\s\S]*8192[\s\S]*reasoning/);
-    expect(calls).toBe(1);
+    ).rejects.toThrowError(/after 3 attempts[\s\S]*32768[\s\S]*reasoning/);
+    expect(calls).toBe(3);
   });
 
   // TASK-1261: JSON mode truncates silently — the caller only sees
@@ -169,10 +170,10 @@ describe("HttpChatClient", () => {
 
     expect(calls).toHaveLength(2);
     const second = JSON.parse(calls[1]!.init.body ?? "{}") as { max_tokens: number };
-    expect(second.max_tokens).toBe(4096);
+    expect(second.max_tokens).toBe(16384);
   });
 
-  it("hands over the truncated JSON at the ceiling so the caller can report it", async () => {
+  it("errors after three truncated attempts instead of handing over half an object", async () => {
     let calls = 0;
     const client = new HttpChatClient({
       baseUrl: "https://api.example.com",
@@ -186,10 +187,10 @@ describe("HttpChatClient", () => {
       },
     });
 
-    await expect(client.complete({ messages: [], json: true, maxTokens: 8192 })).resolves.toBe(
-      '{"partial":',
-    );
-    expect(calls).toBe(1);
+    await expect(
+      client.complete({ messages: [], json: true, maxTokens: 8192 }),
+    ).rejects.toThrowError(/after 3 attempts[\s\S]*32768/);
+    expect(calls).toBe(3);
   });
 
   it("requires an api key", () => {

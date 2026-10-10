@@ -54,19 +54,15 @@ export interface HttpChatClientOptions {
 }
 
 const DEFAULT_TIMEOUT_MS = 60_000;
-const DEFAULT_MAX_TOKENS = 2048;
-const DEFAULT_TEMPERATURE = 0;
-
 /**
- * Reasoning providers (DeepSeek's reasoning models) charge their hidden
- * `reasoning_content` against `max_tokens`. When the reasoning alone exhausts
- * the budget, the API still answers HTTP 200 — with `content: ""` and
- * `finish_reason: "length"` — which is indistinguishable from a model that
- * deliberately said nothing. One escalation to this ceiling yields the answer
- * in practice, so `complete()` spends a single extra call instead of handing an
- * empty answer to a caller whose only option is to report failure.
+ * TASK-1262: start where a reasoning model can actually finish — 8192 tokens.
+ * 2048 was routinely eaten by hidden reasoning, which then surfaced as an empty
+ * or half-written answer.
  */
-const MAX_ESCALATED_TOKENS = 8192;
+const DEFAULT_MAX_TOKENS = 8192;
+/** TASK-1262: at most three attempts per completion, doubling each time. */
+export const MAX_COMPLETION_ATTEMPTS = 3;
+const DEFAULT_TEMPERATURE = 0;
 
 /** The parts of `choices[0]` the client cares about. */
 export interface CompletionParse {
@@ -114,29 +110,24 @@ export class HttpChatClient implements ChatClient {
   }
 
   async complete(request: ChatCompletionRequest): Promise<string> {
-    // TASK-1251: a reasoning model can burn *several* budgets in a row on hidden
-    // reasoning before writing anything, so escalate until the ceiling instead of
-    // giving up after one doubling (2048 → 4096 → 8192).
+    // TASK-1262: at most three attempts, each with double the previous budget
+    // (8192 → 16384 → 32768). A reasoning model can burn a whole budget on
+    // hidden reasoning, and JSON mode can truncate a half-written object, so an
+    // attempt only counts as success when it produced usable content.
     let maxTokens = request.maxTokens ?? this.maxTokens;
-    for (;;) {
+    let last: CompletionParse | undefined;
+    let lastBudget = maxTokens;
+    for (let attempt = 1; attempt <= MAX_COMPLETION_ATTEMPTS; attempt += 1) {
       const parsed = await this.sendOnce(request, maxTokens);
-      // TASK-1261: JSON mode truncates silently — a partial object still counts
-      // as "content", and the caller only sees `Unexpected end of JSON input`.
-      // `finish_reason=length` means the model ran out of room, so buy more and
-      // ask again instead of handing over a half-written object.
       const truncatedJson = Boolean(request.json) && parsed.finishReason === "length";
       if (parsed.content.trim() && !truncatedJson) {
         return parsed.content;
       }
-      const next = escalateBudget(maxTokens);
-      if (next === undefined) {
-        if (parsed.content.trim()) {
-          return parsed.content;
-        }
-        throw emptyContentError(parsed, maxTokens);
-      }
-      maxTokens = next;
+      last = parsed;
+      lastBudget = maxTokens;
+      maxTokens = escalateBudget(maxTokens);
     }
+    throw completionExhaustedError(last, lastBudget);
   }
 
   private async sendOnce(
@@ -183,15 +174,29 @@ export class HttpChatClient implements ChatClient {
   }
 }
 
+/** TASK-1262: the next attempt's budget — a plain doubling, no ceiling. */
+function escalateBudget(current: number): number {
+  return Number.isFinite(current) ? current * 2 : DEFAULT_MAX_TOKENS;
+}
+
 /**
- * Doubles the output budget until {@link MAX_ESCALATED_TOKENS}; `undefined`
- * means the request already asked for the ceiling, so a retry cannot help.
+ * TASK-1262: three attempts (8192 → 16384 → 32768) and then a real error, so a
+ * caller never has to guess whether a half-written answer is worth parsing.
  */
-function escalateBudget(current: number): number | undefined {
-  if (!Number.isFinite(current) || current >= MAX_ESCALATED_TOKENS) {
-    return undefined;
-  }
-  return Math.min(current * 2, MAX_ESCALATED_TOKENS);
+function completionExhaustedError(
+  parse: CompletionParse | undefined,
+  budget: number,
+): HarnessError {
+  const spent =
+    parse?.finishReason === "length"
+      ? `the whole ${budget}-token budget of the last attempt`
+      : "no usable content";
+  const reasoning =
+    parse?.reasoningTokens !== undefined ? ` (${parse.reasoningTokens} of them reasoning)` : "";
+  return new HarnessError(
+    `chat completion failed after ${MAX_COMPLETION_ATTEMPTS} attempts: the model spent ${spent}${reasoning}; ` +
+      "raise the token budget or use a non-reasoning model",
+  );
 }
 
 function emptyContentError(parse: CompletionParse, budget?: number): HarnessError {
