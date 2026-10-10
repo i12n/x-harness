@@ -1,4 +1,5 @@
 import type { Delivery } from "../../domain/delivery.js";
+import type { EventRecord } from "../../domain/event.js";
 import type { Repository } from "../../domain/repository.js";
 import type { Run } from "../../domain/run.js";
 import type { Task } from "../../domain/task.js";
@@ -126,6 +127,15 @@ export interface ReleaseConfirmation extends ProductionStatus {
 /** The release written by the deployment itself has no human behind it. */
 const DEPLOY_ACTOR = { channel: "system", userId: "deploy-watch" };
 
+/** TASK-1272: events that open a watch, and events that close one. */
+const DEPLOY_START_EVENTS = ["TestBranchPushed", "TestMerged"] as const;
+const DEPLOY_END_EVENTS = [
+  "TestDeploySucceeded",
+  "TestDeployFailed",
+  "TestDeployStale",
+  "ReleaseConfirmed",
+] as const;
+
 /**
  * TASK-1230: the harness's whole role in deployment.
  *
@@ -189,6 +199,85 @@ export class DeployService {
 
   watched(): string[] {
     return [...this.watching.keys()];
+  }
+
+  /**
+   * TASK-1272: watches live in memory, so a restart used to drop every
+   * in-flight deployment silently — the delivery never got a terminal card
+   * (the production path had `confirmRelease` as a fallback, the test path had
+   * nothing). On startup we re-derive the unfinished ones from the event log
+   * and resume watching; the first poll then reports whatever GitHub says now.
+   *
+   * A deployment counts as unfinished when its latest "started" event
+   * (`TestBranchPushed` / `TestMerged`) has no terminal event after it.
+   * `TestDeployUnconfigured` is deliberately *not* terminal: that watch is
+   * still waiting for the repository to be fixed.
+   */
+  async restore(): Promise<number> {
+    const events = this.deps.events;
+    if (!events) {
+      return 0;
+    }
+    const starts = await this.latestEventsByDelivery(events, DEPLOY_START_EVENTS);
+    const terminals = await this.latestEventsByDelivery(events, DEPLOY_END_EVENTS);
+    let restored = 0;
+    for (const [deliveryId, start] of starts) {
+      const end = terminals.get(deliveryId);
+      if (end && end.createdAt >= start.createdAt) {
+        continue;
+      }
+      const payload = asRecord(start.payload) ?? {};
+      const kind = start.type === "TestMerged" ? "production" : "test";
+      const branch =
+        kind === "production"
+          ? await this.resolveRepository(deliveryId)
+              .then((repository) => repository.defaultBranch)
+              .catch(() => undefined)
+          : typeof payload.branch === "string"
+            ? payload.branch
+            : this.branchName(deliveryId);
+      if (!branch) {
+        continue;
+      }
+      const headSha = firstText(payload.headSha, payload.mergeCommitSha);
+      // TASK-1270: prefer the merge time when we have it; the head sha is what
+      // really pins the run, so the time is only a fallback for thin clients.
+      const sinceMs =
+        kind === "production" && typeof payload.mergedAt === "string"
+          ? Date.parse(payload.mergedAt)
+          : Date.parse(start.createdAt);
+      this.watch(deliveryId, {
+        branch,
+        kind,
+        ...(Number.isFinite(sinceMs) ? { sinceMs } : {}),
+        ...(headSha ? { headSha } : {}),
+      });
+      await this.record("DeployWatchResumed", { deliveryId, kind, branch });
+      restored += 1;
+    }
+    return restored;
+  }
+
+  /** The newest event per delivery among `types` (event log is append-only). */
+  private async latestEventsByDelivery(
+    events: EventStore,
+    types: readonly string[],
+  ): Promise<Map<string, EventRecord>> {
+    const byDelivery = new Map<string, EventRecord>();
+    for (const type of types) {
+      const rows = await events.listEvents({ type }).catch(() => [] as EventRecord[]);
+      for (const row of rows) {
+        const deliveryId = deliveryIdOf(row.payload);
+        if (!deliveryId) {
+          continue;
+        }
+        const current = byDelivery.get(deliveryId);
+        if (!current || isNewerEvent(row, current)) {
+          byDelivery.set(deliveryId, row);
+        }
+      }
+    }
+    return byDelivery;
   }
 
   /**
@@ -309,7 +398,13 @@ export class DeployService {
         `测试分支未推送（${publish.reason ?? "仓库策略拒绝推送"}）：${repository.id}`,
       );
     }
-    await this.record("TestBranchPushed", { deliveryId, repositoryId: repository.id, branch });
+    await this.record("TestBranchPushed", {
+      deliveryId,
+      repositoryId: repository.id,
+      branch,
+      // TASK-1272: enough for a restart to resume this watch (see restore()).
+      ...(publish.sha ? { headSha: publish.sha } : {}),
+    });
 
     const pullRequest =
       existing ??
@@ -446,6 +541,9 @@ export class DeployService {
         repositoryId: repository.id,
         pullRequest: merged.number,
         url: merged.url,
+        // TASK-1272: the merge commit is what the production watch pins to.
+        ...(merged.mergedAt ? { mergedAt: merged.mergedAt } : {}),
+        ...(merged.mergeCommitSha ? { mergeCommitSha: merged.mergeCommitSha } : {}),
       });
     }
     // TASK-1231: the merge itself triggers the repository's production workflow.
@@ -636,6 +734,36 @@ function summarize(run: GitHubWorkflowRun): TestDeployStatus["state"] {
     return "pending";
   }
   return run.conclusion === "success" ? "succeeded" : "failed";
+}
+
+/** The delivery an event payload belongs to, when it names one. */
+function deliveryIdOf(payload: unknown): string | undefined {
+  const record = asRecord(payload);
+  return typeof record?.deliveryId === "string" && record.deliveryId
+    ? record.deliveryId
+    : undefined;
+}
+
+/** Event log order: createdAt, then id to break same-millisecond ties. */
+function isNewerEvent(candidate: EventRecord, current: EventRecord): boolean {
+  return candidate.createdAt === current.createdAt
+    ? candidate.id > current.id
+    : candidate.createdAt > current.createdAt;
+}
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+function firstText(...values: unknown[]): string | undefined {
+  for (const value of values) {
+    if (typeof value === "string" && value) {
+      return value;
+    }
+  }
+  return undefined;
 }
 
 /** A short reason for the event log; release failures must not be silent. */

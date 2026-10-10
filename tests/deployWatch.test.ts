@@ -419,4 +419,104 @@ describe("deployment watching (TASK-1231)", () => {
     const transitions = await service.poll();
     expect(transitions.map((t) => t.state)).toEqual(["pending"]);
   });
+
+  // TASK-1272: watches live in memory, so a restart used to drop every in-flight
+  // deployment silently (no terminal card, ever). Startup re-derives the
+  // unfinished ones from the event log.
+  it("resumes an unfinished test watch after a restart", async () => {
+    const events = new InMemoryEventStore();
+    await events.record({
+      type: "TestBranchPushed",
+      payload: { deliveryId: "dlv-1", branch: "test/dlv-1", headSha: "abc123" },
+    });
+    const service = new DeployService({
+      deliveries: {
+        async load(id) {
+          return { delivery: { id } as never, tasks: [{ id: "t", repositoryId: "repo-x-music" } as never] };
+        },
+      },
+      repositories: { async findRepository() { return repository; } },
+      runs: { async listRuns() { return []; } },
+      git: { async publish() { return { pushed: true }; } },
+      github: {
+        async listWorkflowRuns() {
+          return [{ ...run("completed", "success"), headSha: "abc123" }];
+        },
+      } as unknown as GitHubClient,
+      events,
+    });
+
+    expect(service.watched()).toEqual([]);
+    expect(await service.restore()).toBe(1);
+    expect(service.watched()).toEqual(["dlv-1"]);
+
+    const transitions = await service.poll();
+    expect(transitions.map((t) => [t.state, t.kind])).toEqual([["succeeded", "test"]]);
+  });
+
+  it("does not resume a deployment whose terminal state was already recorded", async () => {
+    const events = new InMemoryEventStore();
+    await events.record({
+      type: "TestBranchPushed",
+      payload: { deliveryId: "dlv-1", branch: "test/dlv-1", headSha: "abc123" },
+    });
+    await events.record({
+      type: "TestDeploySucceeded",
+      payload: { deliveryId: "dlv-1", state: "succeeded" },
+    });
+    const service = new DeployService({
+      deliveries: {
+        async load(id) {
+          return { delivery: { id } as never, tasks: [{ id: "t", repositoryId: "repo-x-music" } as never] };
+        },
+      },
+      repositories: { async findRepository() { return repository; } },
+      runs: { async listRuns() { return []; } },
+      git: { async publish() { return { pushed: true }; } },
+      github: { async listWorkflowRuns() { return []; } } as unknown as GitHubClient,
+      events,
+    });
+
+    expect(await service.restore()).toBe(0);
+    expect(service.watched()).toEqual([]);
+  });
+
+  it("resumes a production watch from the merge commit and confirms the release", async () => {
+    const events = new InMemoryEventStore();
+    await events.record({
+      type: "TestMerged",
+      payload: {
+        deliveryId: "dlv-1",
+        mergeCommitSha: "merge1",
+        mergedAt: "2026-10-10T00:00:00Z",
+      },
+    });
+    const released: string[] = [];
+    const service = new DeployService({
+      deliveries: {
+        async load(id) {
+          return { delivery: { id } as never, tasks: [{ id: "t", repositoryId: "repo-x-music" } as never] };
+        },
+      },
+      repositories: { async findRepository() { return repository; } },
+      runs: { async listRuns() { return []; } },
+      git: { async publish() { return { pushed: true }; } },
+      github: {
+        async listWorkflowRuns() {
+          return [{ ...prodRun("completed", "success"), headSha: "merge1" }];
+        },
+      } as unknown as GitHubClient,
+      release: {
+        async release(deliveryId) {
+          released.push(deliveryId);
+        },
+      },
+      events,
+    });
+
+    expect(await service.restore()).toBe(1);
+    const transitions = await service.poll();
+    expect(transitions.map((t) => [t.state, t.kind])).toEqual([["succeeded", "production"]]);
+    expect(released).toEqual(["dlv-1"]);
+  });
 });

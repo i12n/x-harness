@@ -130,6 +130,11 @@ push 与建 PR 之间创建的 run 可能"看起来比 watch 还早"，只靠时
 `head_sha` 时才退回时间守卫。详见
 [task-1270-deploy-watch-since-guard.md](task-1270-deploy-watch-since-guard.md)。
 
+**重启不丢监听（TASK-1272）**：watch 是内存态，服务启动时从事件日志
+（`TestBranchPushed` / `TestMerged` 开着、终结事件结着）重建尚未完成的那些，
+再交给同一条轮询链路——重启期间完成的部署仍会补发「测试环境就绪 / 失败」。
+详见 [task-1272-resume-deploy-watch-after-restart.md](task-1272-resume-deploy-watch-after-restart.md)。
+
 （未来若要做 PR 打开即预览，再考虑 GitHub webhook；那需要一个新的受保护入站入口，
 属于额外工作。）
 

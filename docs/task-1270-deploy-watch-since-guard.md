@@ -67,11 +67,13 @@ run，`mergedAt` 的秒精度不再是风险点。
   commit 直接认领；
 - 不动 TTL（30 分钟）与轮询间隔（30 秒）。
 
-## 5. 已知残留（另立任务）
+## 5. 已知残留（已由 TASK-1272 处理）
 
 `watching` 仍是**内存表**：守护进程重启会静默丢掉在途的监听（生产路径有
 `confirmRelease` 兜底，测试路径没有，用户会什么都收不到）。本次事故不是它
-造成的（窗口内没有重启），但需要一个持久化或启动时对账的方案。
+造成的（窗口内没有重启）。已由
+[task-1272-resume-deploy-watch-after-restart.md](task-1272-resume-deploy-watch-after-restart.md)
+解决：启动时从事件日志重建未完成的监听。
 
 ## 6. 验证
 

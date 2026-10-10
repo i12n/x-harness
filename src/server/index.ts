@@ -924,6 +924,20 @@ export class HarnessRuntime {
       log: (message) => this.log(message),
       onError: (error) => this.log(`loop error: ${describe(error)}`),
     });
+    // TASK-1272: watches live in memory, so a restart dropped them silently.
+    // Re-derive the unfinished ones from the event log before polling starts —
+    // a deployment that finished while we were down then still reports its
+    // outcome instead of leaving the user with a "部署中" that never ends.
+    if (deployWatcher && deployService) {
+      try {
+        const resumed = await deployService.restore();
+        if (resumed > 0) {
+          this.log(`已恢复 ${resumed} 个在途部署监听`);
+        }
+      } catch (error) {
+        this.log(`恢复在途部署监听失败：${describe(error)}`);
+      }
+    }
     this.daemon.start();
 
     this.connection = new FeishuLongConnection({
