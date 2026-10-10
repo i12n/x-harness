@@ -190,7 +190,53 @@ describe("input cards (TASK-1269)", () => {
     expect(json).toContain(REQUIREMENT_NEXT_ACTION);
     expect(json).toContain("验收结果反馈");
   });
+
+  // TASK-1271 现场事故：Feishu 把 form / input / button 的 name 放在同一个
+  // 命名空间，重名会让整张卡 400（230099 … name(feedback) duplicate），消息
+  // 根本发不出去。组件名必须在卡内唯一。
+  it("gives every named element a unique name", () => {
+    const card = renderFeishuCard({
+      conversationId: "conv-1",
+      blocks: [
+        {
+          type: "input",
+          name: "feedback",
+          label: "验收结果反馈",
+          submit: {
+            action: REQUIREMENT_NEXT_ACTION,
+            label: "提交验收意见",
+            payload: { requirementId: "prob-9", action: "reject", stage: "awaiting_release" },
+          },
+        },
+      ],
+    });
+    const names = collectNames(card);
+    expect(names).toContain("feedback");
+    expect(names).toContain("feedback_form");
+    expect(new Set(names).size).toBe(names.length);
+  });
 });
+
+/** Every `name` the card declares, at any depth. */
+function collectNames(node: unknown, found: string[] = []): string[] {
+  if (Array.isArray(node)) {
+    for (const entry of node) {
+      collectNames(entry, found);
+    }
+    return found;
+  }
+  if (!node || typeof node !== "object") {
+    return found;
+  }
+  const record = node as Record<string, unknown>;
+  if (typeof record.name === "string") {
+    found.push(record.name);
+  }
+  for (const value of Object.values(record)) {
+    collectNames(value, found);
+  }
+  return found;
+}
 
 describe("ChatSession card actions", () => {
   it("re-renders the card when an option is toggled", async () => {

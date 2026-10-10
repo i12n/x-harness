@@ -84,3 +84,19 @@ tests/cardActions.test.ts              form_value 折进 payload；input 渲染�
 tests/serverSession.test.ts            反馈表单提交 → delivery.revise（携带原文 feedback）
 npm run typecheck / npm test           全绿
 ```
+
+## 7. 现场修复：Feishu 组件名必须唯一（TASK-1271）
+
+上线后第一次真实"测试环境就绪"卡被飞书拒收（HTTP 400），原因很具体：
+
+```text
+code 230099 · ErrPath: ROOT -> elements -> [2](tag: form) -> elements -> [0](tag: input)
+ErrMsg: name(feedback) duplicate
+```
+
+飞书把 `form` / `input` / `button` 的 `name` 放在**同一个命名空间**：表单容器和
+输入框都叫 `feedback`，整张卡就构建失败——不是控件不受支持，也不是"部署中"
+卡的问题（那是纯文本，能发）。修复：表单容器改名 `${name}_form`（`input` 仍是
+`${name}`、提交按钮 `${name}_submit`），三者唯一。回归用例
+`tests/cardActions.test.ts` > "gives every named element a unique name" 递归收集
+卡内所有 `name` 并断言不重复。

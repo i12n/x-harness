@@ -138,7 +138,10 @@ export function renderFeishuCard(message: OutgoingMessage): FeishuCard {
         }
         elements.push({
           tag: "form",
-          name: block.name,
+          // TASK-1271: Feishu keeps form/input/button names in one namespace —
+          // reusing the field name on the form made the whole card fail with
+          // `230099 … name(feedback) duplicate` (the card never went out).
+          name: `${block.name}_form`,
           elements: [
             {
               tag: "input",
