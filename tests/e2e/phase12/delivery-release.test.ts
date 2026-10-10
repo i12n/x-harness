@@ -28,8 +28,8 @@ describe("Phase 12 E2E — Delivery aggregation and release (TASK-1205)", () => 
     expect(data.delivery.status).toBe("IN_PROGRESS");
     expect(data.tasks).toHaveLength(2);
     const rendered = JSON.stringify(data.message.blocks);
-    expect(rendered).toContain("IN_PROGRESS");
-    expect(rendered).toContain("(not released)");
+    expect(rendered).toContain("开发中");
+    expect(rendered).toContain("（尚未发布）");
 
     // Planning is idempotent, and so is the Delivery.
     await h.planning.plan(specification.id);
@@ -62,7 +62,7 @@ describe("Phase 12 E2E — Delivery aggregation and release (TASK-1205)", () => 
       status: "RELEASED",
       createdBy: "cli:reviewer-1",
     });
-    expect(JSON.stringify(releasedData.message.blocks)).toContain("RELEASED");
+    expect(JSON.stringify(releasedData.message.blocks)).toContain("已发布");
 
     // Repeated release is idempotent: no second Release row, no extra events.
     const again = await h.dispatch(

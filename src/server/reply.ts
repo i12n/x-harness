@@ -1,4 +1,5 @@
 import type { OutgoingMessage } from "../channel/message.js";
+import { taskStatusLabel } from "../channel/rendering/copy.js";
 import { renderProblemMessage } from "../channel/rendering/problem.js";
 import { renderRunCancelMessage, renderRunMessage } from "../channel/rendering/run.js";
 import { renderPublishLines, type PublishView } from "../channel/rendering/review.js";
@@ -18,9 +19,9 @@ export function renderCommandResult(
   if (result.status !== "succeeded") {
     return {
       conversationId,
-      text: `❌ ${result.type} ${result.status}: ${
-        result.error?.code ?? "unknown"
-      } — ${result.error?.message ?? ""}`.trim(),
+      text: `❌ 这一步没做成（${result.type}）：${
+        result.error?.message ?? result.error?.code ?? "没有更多信息"
+      }`.trim(),
     };
   }
 
@@ -40,6 +41,10 @@ export function renderCommandResult(
           conversationId,
           needsInput: Boolean(data?.needsInput),
           clarifications: (data?.clarifications as Clarification[] | undefined) ?? [],
+          // TASK-1266: the card records what is confirmed in one line instead of
+          // printing questions that no longer need an answer.
+          answered:
+            (data?.answered as { question: string; answer: string }[] | undefined) ?? [],
         });
       }
       break;
@@ -49,7 +54,7 @@ export function renderCommandResult(
       if (run) {
         return {
           conversationId,
-          text: `🚀 ${run.id} queued for task ${run.taskId}`,
+          text: `🚀 已开始执行 ${run.id}（任务 ${run.taskId}）`,
           blocks: renderRunMessage(run, { conversationId }).blocks,
         };
       }
@@ -74,17 +79,21 @@ export function renderCommandResult(
       const task = asRecord(data?.task);
       if (task) {
         const verb =
-          result.type === "review.approve" ? "✅ Approved" : "🔁 Changes requested for";
+          result.type === "review.approve" ? "✅ 已通过" : "🔁 已打回";
         const publish = (data?.publish as PublishView[] | undefined) ?? [];
         const lines = publish.length > 0 ? renderPublishLines(publish) : [];
         return lines.length === 0
           ? {
               conversationId,
-              text: `${verb} ${String(task.id)} (status: ${String(task.status)})`,
+              text: `${verb} ${String(task.id)}（当前${
+                taskStatusLabel(String(task.status))
+              }）`,
             }
           : {
               conversationId,
-              text: `${verb} ${String(task.id)} (status: ${String(task.status)})`,
+              text: `${verb} ${String(task.id)}（当前${
+                taskStatusLabel(String(task.status))
+              }）`,
               blocks: [{ type: "markdown", text: lines.join("\n") }],
             };
       }
@@ -108,7 +117,7 @@ export function renderCommandResult(
 
   return {
     conversationId,
-    text: `✅ ${result.type} (${result.commandId})`,
+    text: `✅ 已完成：${result.type}`,
   };
 }
 

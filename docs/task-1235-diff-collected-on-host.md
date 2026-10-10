@@ -65,3 +65,7 @@ tests/reviewerAgent.test.ts  · 三个采集用例（runGit 注入：files/stat/
 ```
 
 `npm run typecheck` / `npm test` 全绿（809 passed）。
+
+> **后续（TASK-1265）**：本文解决的是"容器读不到 gitdir"，但 `git diff` 仍然
+> 不包含未跟踪的新文件——agent 在 Run 期间新建的文件依旧不在证据里。
+> 见 [task-1265-diff-includes-new-files.md](task-1265-diff-includes-new-files.md)。

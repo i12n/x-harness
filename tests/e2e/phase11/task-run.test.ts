@@ -61,8 +61,8 @@ describe("Phase 11 E2E — task and run", () => {
     expect(existsSync(result.workspaces[0]!.path)).toBe(true);
 
     const rendered = JSON.stringify(renderRunMessage(run).blocks);
-    expect(rendered).toContain("✓ sample-project (primary)");
-    expect(rendered).toContain("Verification: PASS");
+    expect(rendered).toContain("✓ sample-project (主仓库)");
+    expect(rendered).toContain("验证：通过");
 
     const shownRun = await h.dispatchCommand({
       messageId: "msg-run-show",

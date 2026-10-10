@@ -40,7 +40,9 @@ export function renderDeployStatusMessage(
   if (status.run) {
     blocks.push(
       markdownBlock(
-        `- Workflow：${status.run.name}\n- 结论：${status.run.conclusion ?? status.run.status}\n- Run：${status.run.url}`,
+        `- 工作流：${status.run.name}\n- 结论：${
+          status.run.conclusion ?? status.run.status
+        }\n- 运行记录：${status.run.url}`,
       ),
     );
   }
@@ -135,7 +137,7 @@ export function renderDeployTransitionMessage(
         ? "打开链接即可验收（HTTP + IP + 端口，暂无鉴权）；数据为测试库，随部署更新。"
         : "",
       progressHint ?? "",
-      row.run?.url ? `Workflow：${row.run.url}` : "",
+      row.run?.url ? `工作流：${row.run.url}` : "",
     ]
       .filter(Boolean)
       .join("\n"),

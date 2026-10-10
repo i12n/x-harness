@@ -26,7 +26,7 @@ export function renderRepositoryListMessage(
   if (repositories.length === 0) {
     blocks.push(
       markdownBlock(
-        "还没有注册任何仓库。用 CLI 注册：\n" +
+        "还没有注册任何仓库。用命令行注册：\n" +
           "```\nai repository create --id repo-x --name x --url <git-url> \\\n" +
           "  --local-path /srv/repos/x --verify \"npm test\" \\\n" +
           "  --exec-image harness/execution:node22 --git-push deny\n```",
@@ -70,7 +70,7 @@ export function renderRepositoryMessage(
     markdownBlock(
       repository.verificationCommands.length > 0
         ? `**验证命令**\n${repository.verificationCommands.map((command) => `- \`${command}\``).join("\n")}`
-        : "**验证命令**\n(未配置 —— 没有验证的 Run 不会被当作成功)\n" +
+        : "**验证命令**\n（未配置 —— 没有验证的运行不会被当作成功）\n" +
           "补：`ai repository update <id> --verify \"<命令>\"`",
     ),
   );

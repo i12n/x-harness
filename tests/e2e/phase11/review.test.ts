@@ -33,7 +33,7 @@ describe("Phase 11 E2E — review and approval", () => {
     });
     expect(shown.status).toBe("succeeded");
     const message = (shown.data as { message: { blocks?: unknown[] } }).message;
-    expect(JSON.stringify(message.blocks)).toContain("Ready for Review");
+    expect(JSON.stringify(message.blocks)).toContain("待评审");
     expect(JSON.stringify(message.blocks)).toContain("review.approve");
 
     const approved = await h.dispatchCommand({

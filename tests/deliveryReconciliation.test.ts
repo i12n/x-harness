@@ -82,9 +82,9 @@ describe("DeliveryReconciler (TASK-1206)", () => {
     const notification = h.notifier.notifications[0]!;
     expect(notification.status).toBe("READY_FOR_RELEASE");
     expect(notification.previousStatus).toBe("IN_PROGRESS");
-    expect(JSON.stringify(notification.message.blocks)).toContain("READY_FOR_RELEASE");
+    expect(JSON.stringify(notification.message.blocks)).toContain("待发布");
     expect(JSON.stringify(notification.message.blocks)).toContain("✓ task-a");
-    expect(JSON.stringify(notification.message.blocks)).toContain("(not released)");
+    expect(JSON.stringify(notification.message.blocks)).toContain("（尚未发布）");
   });
 
   it("is idempotent across repeated passes", async () => {
@@ -121,8 +121,8 @@ describe("DeliveryReconciler (TASK-1206)", () => {
       "BLOCKED",
     ]);
     const message = JSON.stringify(h.notifier.notifications[1]!.message.blocks);
-    expect(message).toContain("BLOCKED");
-    expect(message).toContain("task-b is BLOCKED");
+    expect(message).toContain("已阻塞");
+    expect(message).toContain("task-b 处于已阻塞");
     await expect(h.events.listEvents({ type: "delivery.blocked" })).resolves.toHaveLength(1);
   });
 
@@ -299,10 +299,10 @@ describe("DeliveryReconciler (TASK-1206)", () => {
     expect(report.transitions).toMatchObject([{ status: "BLOCKED" }]);
     expect(notifier.notifications).toHaveLength(1);
     const rendered = JSON.stringify(notifier.notifications[0]!.message.blocks);
-    expect(rendered).toContain("dependency-blocked (blocked by task-x)");
-    expect(rendered).toContain("Blocking chain");
-    expect(rendered).toContain("task-x X 迁移 (BLOCKED)");
-    expect(rendered).toContain("verification: npm test · exit 1");
+    expect(rendered).toContain("被依赖阻塞（等待 task-x）");
+    expect(rendered).toContain("阻塞链");
+    expect(rendered).toContain("task-x X 迁移（已阻塞）");
+    expect(rendered).toContain("验证未通过：npm test · 退出码 1");
   });
 });
 

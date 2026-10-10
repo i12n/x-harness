@@ -1,8 +1,15 @@
 import {
   CARD_CHOICE_TOGGLE,
+  type MessageBlock,
   type MessageChoice,
   type OutgoingMessage,
 } from "../channel/message.js";
+import {
+  answeredLine,
+  PROBLEM_ANSWER_ACTION,
+  PROBLEM_ANSWER_ALL_ACTION,
+  renderProblemMessage,
+} from "../channel/rendering/problem.js";
 import { parseFeishuEvent } from "../channel/feishu/events.js";
 import { prepareCommand } from "../command/engine.js";
 import type { CommandDispatcher } from "../command/dispatcher.js";
@@ -23,6 +30,7 @@ import {
 } from "../channel/rendering/requirement.js";
 import type { ConversationService } from "../conversation/service.js";
 import type { Problem } from "../domain/problem.js";
+import type { Clarification } from "../domain/problem.js";
 import type { Task } from "../domain/task.js";
 import { HarnessError } from "../errors.js";
 import { resolveRoles, type AccessConfig } from "./config.js";
@@ -571,6 +579,10 @@ export class ChatSession {
     target: ChatTarget,
     roles: Role[],
   ): CardActionOutcome {
+    // TASK-1266: one card-level submit for every clarification group.
+    if (action.actionId === PROBLEM_ANSWER_ALL_ACTION) {
+      return this.submitAllClarifications(action, target, roles);
+    }
     const cards = this.deps.cards;
     const payload: Record<string, unknown> = { ...(parseJsonRecord(action.value) ?? {}) };
     const groupId = asString(payload.groupId);
@@ -591,6 +603,9 @@ export class ChatSession {
             text: "⚠️ 请先勾选至少一个选项，再点提交。",
           },
         };
+      }
+      if (!block.submit) {
+        return { immediate: expiredCard(target.conversationId) };
       }
       payload[block.submit.selectionField ?? "optionIds"] = selected;
       labels = selected.map(
@@ -622,6 +637,117 @@ export class ChatSession {
         await this.reply(target, renderCommandResult(result, target.conversationId));
         if (result.status === "succeeded") {
           await this.afterSuccess(target, result.type, result.data);
+        }
+      },
+    };
+  }
+
+  /**
+   * TASK-1266: one click answers the whole clarification form.
+   *
+   * 1. every ticked group becomes one `problem.clarification.answer` command —
+   *    the existing single-answer path, so validation, authorization and the
+   *    "only analyze once everything is closed" rule stay in one place;
+   * 2. the card the user sees right after submitting is rebuilt **without** the
+   *    questions they just answered (answers are recorded in one line), which is
+   *    what makes "submitted means gone" true without a second message;
+   * 3. a follow-up card is posted only when the analyzer asked questions the
+   *    user has not seen yet.
+   */
+  private submitAllClarifications(
+    action: CardActionInput,
+    target: ChatTarget,
+    roles: Role[],
+  ): CardActionOutcome {
+    const card = this.deps.cards?.selectedMessage(action.messageId);
+    const problemId = asString(parseJsonRecord(action.value)?.problemId);
+    if (!card || !problemId) {
+      return { immediate: expiredCard(target.conversationId) };
+    }
+    const groups = (card.blocks ?? []).filter(
+      (block): block is MessageChoice => block.type === "choice",
+    );
+    const answered = groups
+      .map((group) => ({ group, selected: group.selected ?? [] }))
+      .filter((entry) => entry.selected.length > 0);
+    if (answered.length === 0) {
+      return {
+        immediate: {
+          conversationId: target.conversationId,
+          text: "⚠️ 还没有勾选任何选项——勾选后再点「提交全部答案」。",
+        },
+      };
+    }
+    const submittedIds = answered.map((entry) => entry.group.id);
+    const remaining = groups.filter((group) => !submittedIds.includes(group.id));
+    const summary = answered.map((entry) => ({
+      question: groupQuestion(entry.group),
+      answer: entry.selected
+        .map((id) => entry.group.options.find((option) => option.id === id)?.label ?? id)
+        .join("、"),
+    }));
+    const input: IntentInput = {
+      channel: "feishu",
+      conversationId: target.conversationId,
+      messageId: action.messageId,
+      senderId: action.operatorOpenId,
+      text: "",
+    };
+    // TASK-1266: commands are deduped per `channel:messageId:type`, so a batch
+    // that answers several questions from one card would collapse into a single
+    // command. The clarification id gives each answer its own stable key — a
+    // double click still replays the same keys and stays idempotent.
+    const commandInputFor = (clarificationId: string): IntentInput => ({
+      ...input,
+      messageId: `${action.messageId}#${clarificationId}`,
+    });
+    return {
+      immediate: rebuildClarificationCard(card, {
+        conversationId: target.conversationId,
+        problemId,
+        submittedIds,
+        summary,
+      }),
+      deferred: async () => {
+        let last: CommandResult | undefined;
+        for (const entry of answered) {
+          last = await this.deps.dispatcher.dispatch(
+            prepareCommand(commandInputFor(entry.group.id), {
+              type: PROBLEM_ANSWER_ACTION,
+              payload: {
+                problemId,
+                clarificationId: entry.group.id,
+                optionIds: entry.selected,
+              },
+            }),
+            { channel: "feishu", userId: action.operatorOpenId, roles },
+          );
+          if (last.status !== "succeeded") {
+            break;
+          }
+        }
+        if (!last) {
+          return;
+        }
+        if (last.status !== "succeeded") {
+          await this.reply(target, renderCommandResult(last, target.conversationId));
+          return;
+        }
+        // Confirming the last answer is what advances the requirement.
+        await this.afterSuccess(target, last.type, last.data);
+        const unseen = clarificationsOfData(last.data).filter(
+          (clarification) =>
+            !submittedIds.includes(clarification.id) &&
+            !remaining.some((group) => group.id === clarification.id),
+        );
+        const problem = problemOfData(last.data);
+        if (unseen.length > 0 && problem) {
+          await this.reply(target, renderProblemMessage(problem, {
+            conversationId: target.conversationId,
+            needsInput: true,
+            clarifications: unseen,
+            answered: summary,
+          }));
         }
       },
     };
@@ -1116,6 +1242,86 @@ function expiredCard(conversationId: string): OutgoingMessage {
     conversationId,
     text: "⚠️ 这张卡片已失效，请重新发送指令，或重新打开对应的问题/评审。",
   };
+}
+
+/**
+ * TASK-1266: the confirmation card right after a submit — the answered
+ * questions are gone, the rest stay tickable, and one line records what was
+ * just confirmed. Returned as the card callback's response, so Feishu updates
+ * the message in place instead of posting another copy.
+ */
+export function rebuildClarificationCard(
+  card: OutgoingMessage,
+  input: {
+    conversationId: string;
+    problemId: string;
+    submittedIds: string[];
+    summary: { question: string; answer: string }[];
+  },
+): OutgoingMessage {
+  const kept: MessageBlock[] = [];
+  const remaining: MessageChoice[] = [];
+  for (const block of card.blocks ?? []) {
+    if (block.type === "choice") {
+      if (!input.submittedIds.includes(block.id)) {
+        remaining.push(block);
+      }
+      continue;
+    }
+    // Our own submit button / "还需要确认" heading / previous summary are
+    // re-created below so they cannot go stale.
+    if (block.type === "actions") {
+      continue;
+    }
+    if (block.type === "markdown" && block.text.startsWith("**还需要确认")) {
+      continue;
+    }
+    if (block.type === "markdown" && block.text.startsWith("✅ 已确认 ")) {
+      continue;
+    }
+    kept.push(block);
+  }
+  const blocks: MessageBlock[] = [...kept];
+  if (remaining.length > 0) {
+    blocks.push({ type: "markdown", text: `**还需要确认（还剩 ${remaining.length} 项）**` });
+    blocks.push(...remaining);
+    blocks.push({
+      type: "actions",
+      actions: [
+        {
+          id: PROBLEM_ANSWER_ALL_ACTION,
+          label: "提交全部答案",
+          style: "primary",
+          value: JSON.stringify({ problemId: input.problemId }),
+        },
+      ],
+    });
+  } else {
+    blocks.push({ type: "markdown", text: "⏳ 已提交全部答案，正在确认需求…" });
+  }
+  blocks.push({ type: "markdown", text: answeredLine(input.summary) });
+  return {
+    conversationId: input.conversationId,
+    text: "已提交你的选择",
+    blocks,
+  };
+}
+
+/** The question text a choice group carries (rendered as a bold title). */
+function groupQuestion(group: MessageChoice): string {
+  return (group.title ?? "").replace(/^\*\*|\*\*$/g, "").trim();
+}
+
+function clarificationsOfData(data: unknown): Clarification[] {
+  const record = asRecord(data);
+  const value = record?.clarifications;
+  return Array.isArray(value) ? (value as Clarification[]) : [];
+}
+
+function problemOfData(data: unknown): Problem | undefined {
+  const record = asRecord(data);
+  const value = record?.problem;
+  return value && typeof value === "object" ? (value as Problem) : undefined;
 }
 
 /**

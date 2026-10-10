@@ -26,7 +26,7 @@ export async function inspectExecutionImage(
 ): Promise<ImageCheckResult> {
   const target = image.trim();
   if (!target) {
-    return { ok: false, message: "execution profile has no image" };
+    return { ok: false, message: "执行档案没有配置镜像" };
   }
   try {
     await run(target);

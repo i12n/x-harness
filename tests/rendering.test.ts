@@ -78,8 +78,8 @@ describe("Business rendering (TASK-1105)", () => {
 
     expect(message.conversationId).toBe("task-001");
     expect(rendered).toContain("task-001 · Implement authentication");
-    expect(rendered).toContain("Status: READY");
-    expect(rendered).toContain("#0 primary · rehelu (repo-a) · base main");
+    expect(rendered).toContain("状态：待执行");
+    expect(rendered).toContain("#0 主仓库 · rehelu (repo-a) · 基线 main");
     expect(rendered).toContain("- tests pass");
   });
 
@@ -100,7 +100,7 @@ describe("Business rendering (TASK-1105)", () => {
     );
 
     expect(rendered.indexOf("(repo-a)")).toBeLessThan(rendered.indexOf("(repo-b)"));
-    expect(rendered).toContain("#1 supporting · auth (repo-b)");
+    expect(rendered).toContain("#1 辅助仓库 · auth (repo-b)");
   });
 
   it("renders dependency gating without querying a store (TASK-1204)", () => {
@@ -116,16 +116,16 @@ describe("Business rendering (TASK-1105)", () => {
       }).blocks,
     );
 
-    expect(rendered).toContain("Runnable: no");
-    expect(rendered).toContain("Dependencies");
-    expect(rendered).toContain("✓ task-a 接口 (DONE)");
-    expect(rendered).toContain("⏳ task-b (REVIEW)");
+    expect(rendered).toContain("可运行：否");
+    expect(rendered).toContain("依赖");
+    expect(rendered).toContain("✓ task-a 接口（已完成）");
+    expect(rendered).toContain("⏳ task-b（待评审）");
   });
 
   it("stays unchanged when no dependency view is passed", () => {
     const rendered = textOf(renderTaskMessage(task()).blocks);
-    expect(rendered).not.toContain("Runnable:");
-    expect(rendered).not.toContain("Dependencies");
+    expect(rendered).not.toContain("可运行：");
+    expect(rendered).not.toContain("依赖");
   });
 
   it("renders a successful run with per-target verification", () => {
@@ -150,11 +150,11 @@ describe("Business rendering (TASK-1105)", () => {
     const rendered = textOf(renderRunMessage(succeeded).blocks);
 
     expect(rendered).toContain("run-001");
-    expect(rendered).toContain("Status: SUCCEEDED");
+    expect(rendered).toContain("状态：执行完成");
     expect(rendered).toContain("ai/task-001-run-001-t0");
-    expect(rendered).toContain("✓ rehelu (primary)");
-    expect(rendered).toContain("Verification: PASS");
-    expect(rendered).toContain("check: npm run build → passed (exit 0)");
+    expect(rendered).toContain("✓ rehelu (主仓库)");
+    expect(rendered).toContain("验证：通过");
+    expect(rendered).toContain("检查：npm run build → 通过 (exit 0)");
   });
 
   it("renders a failed run: failing target, check, exit code and truncated output", () => {
@@ -194,9 +194,9 @@ describe("Business rendering (TASK-1105)", () => {
     const blocks = renderRunMessage(failed, { maxOutputChars: 100 }).blocks ?? [];
     const rendered = textOf(blocks);
 
-    expect(rendered).toContain("✗ auth (supporting)");
-    expect(rendered).toContain("Verification: FAIL");
-    expect(rendered).toContain("check: npm test → failed (exit 1)");
+    expect(rendered).toContain("✗ auth (辅助仓库)");
+    expect(rendered).toContain("验证：未通过");
+    expect(rendered).toContain("检查：npm test → 未通过 (exit 1)");
 
     // Output is truncated, and target A's section never leaks target B's facts.
     const sections = blocks.filter(
@@ -205,7 +205,7 @@ describe("Business rendering (TASK-1105)", () => {
     );
     const authSection = sections.find((section) => section.title?.includes("auth"));
     const reheluSection = sections.find((section) => section.title?.includes("rehelu"));
-    expect(authSection?.text).toContain("output: ");
+    expect(authSection?.text).toContain("输出：");
     expect(authSection?.text.match(/x{100}…/)).toBeTruthy();
     expect(authSection?.text.includes("x".repeat(101))).toBe(false);
     expect(reheluSection?.text).not.toContain("npm test");
@@ -215,8 +215,8 @@ describe("Business rendering (TASK-1105)", () => {
 
   it("degrades safely when a run has no target evidence", () => {
     const rendered = textOf(renderRunMessage(run({ status: "FAILED" })).blocks);
-    expect(rendered).toContain("Status: FAILED");
-    expect(rendered).toContain("(no target details recorded)");
+    expect(rendered).toContain("状态：执行失败");
+    expect(rendered).toContain("（没有记录目标仓库详情）");
   });
 
   it("surfaces a failed agent before the verification consequence (TASK-1218)", () => {
@@ -259,11 +259,11 @@ describe("Business rendering (TASK-1105)", () => {
     const message = renderReviewMessage(reviewable);
     const rendered = textOf(message.blocks);
 
-    expect(rendered).toContain("Ready for Review");
-    expect(rendered).toContain("✓ rehelu (primary)");
-    expect(rendered).toContain("✓ auth (supporting)");
-    expect(rendered).toContain("- 2 passed");
-    expect(rendered).toContain("- 0 failed");
+    expect(rendered).toContain("待评审");
+    expect(rendered).toContain("✓ rehelu (主仓库)");
+    expect(rendered).toContain("✓ auth (辅助仓库)");
+    expect(rendered).toContain("- 通过 2 项");
+    expect(rendered).toContain("- 未通过 0 项");
 
     const actions = (message.blocks ?? []).find(
       (block): block is Extract<MessageBlock, { type: "actions" }> =>
@@ -273,7 +273,7 @@ describe("Business rendering (TASK-1105)", () => {
       REVIEW_ACTIONS.approve,
       REVIEW_ACTIONS.requestChanges,
     ]);
-    expect(actions?.actions[0]).toMatchObject({ label: "Approve", style: "primary" });
+    expect(actions?.actions[0]).toMatchObject({ label: "通过", style: "primary" });
     // TASK-1216: the button must carry a taskId — review.approve rejects a run id.
     expect(JSON.parse(actions?.actions[0]?.value ?? "{}")).toEqual({
       taskId: reviewable.taskId,
@@ -300,9 +300,9 @@ describe("Business rendering (TASK-1105)", () => {
       },
     });
     const rendered = textOf(renderReviewMessage(reviewable).blocks);
-    expect(rendered).toContain("✗ auth (supporting)");
-    expect(rendered).toContain("- 0 passed");
-    expect(rendered).toContain("- 1 failed");
+    expect(rendered).toContain("✗ auth (辅助仓库)");
+    expect(rendered).toContain("- 通过 0 项");
+    expect(rendered).toContain("- 未通过 1 项");
   });
 
   it("renders a delivery aggregation with blocking and release state (TASK-1205)", () => {
@@ -338,14 +338,14 @@ describe("Business rendering (TASK-1105)", () => {
       }).blocks,
     );
 
-    expect(rendered).toContain("dlv-001 · Delivery");
-    expect(rendered).toContain("Specification: spec-001");
-    expect(rendered).toContain("Status: BLOCKED");
-    expect(rendered).toContain("✓ task-a 接口 · DONE · required");
-    expect(rendered).toContain("✗ task-b 页面 · BLOCKED · required");
-    expect(rendered).toContain("○ task-c 文档 · REVIEW · optional");
-    expect(rendered).toContain("task-b is BLOCKED");
-    expect(rendered).toContain("(not released)");
+    expect(rendered).toContain("dlv-001 · 交付");
+    expect(rendered).toContain("规格：spec-001");
+    expect(rendered).toContain("状态：已阻塞");
+    expect(rendered).toContain("✓ task-a 接口 · 已完成 · 必需");
+    expect(rendered).toContain("✗ task-b 页面 · 已阻塞 · 必需");
+    expect(rendered).toContain("○ task-c 文档 · 待评审 · 可选");
+    expect(rendered).toContain("task-b 处于已阻塞");
+    expect(rendered).toContain("（尚未发布）");
   });
 
   it("renders a released delivery with its release record", () => {
@@ -366,9 +366,9 @@ describe("Business rendering (TASK-1105)", () => {
       }).blocks,
     );
 
-    expect(rendered).toContain("Status: RELEASED");
-    expect(rendered).toContain("rel-001 · RELEASED");
-    expect(rendered).toContain("by cli:reviewer-1");
+    expect(rendered).toContain("状态：已上线");
+    expect(rendered).toContain("rel-001 · 已发布");
+    expect(rendered).toContain("由 cli:reviewer-1");
   });
 
   it("renders task dependency-blocked facts with chain and latest failure (TASK-1207)", () => {
@@ -394,16 +394,16 @@ describe("Business rendering (TASK-1105)", () => {
       }).blocks,
     );
 
-    expect(rendered).toContain("Status: READY");
-    expect(rendered).toContain("Runnable: no");
-    expect(rendered).toContain("Dependency blocked: yes");
-    expect(rendered).toContain("Blocked by");
-    expect(rendered).toContain("task-x — BLOCKED");
-    expect(rendered).toContain("Blocking chain");
+    expect(rendered).toContain("状态：待执行");
+    expect(rendered).toContain("可运行：否");
+    expect(rendered).toContain("依赖阻塞：是");
+    expect(rendered).toContain("被谁阻塞");
+    expect(rendered).toContain("task-x —— 已阻塞");
+    expect(rendered).toContain("阻塞链");
     expect(rendered).toContain("task-x X 迁移");
     expect(rendered).toContain("task-b B 页面");
-    expect(rendered).toContain("Latest failure");
-    expect(rendered).toContain("verification: npm test · exit 1");
+    expect(rendered).toContain("最近一次失败");
+    expect(rendered).toContain("验证未通过：npm test · 退出码 1");
     expect(rendered).toContain("3 tests failed");
   });
 
@@ -440,14 +440,63 @@ describe("Business rendering (TASK-1105)", () => {
       }).blocks,
     );
 
-    expect(rendered).toContain("Status: BLOCKED");
-    expect(rendered).toContain("✓ task-a A 接口 · DONE · required");
-    expect(rendered).toContain("✗ task-b B 页面 · dependency-blocked (blocked by task-x)");
-    expect(rendered).toContain("Blocking chain");
-    expect(rendered).toContain("task-x X 迁移 (BLOCKED)");
-    expect(rendered).toContain("blocked by task-x");
-    expect(rendered).toContain("Failure");
-    expect(rendered).toContain("task-x: verification: npm test · exit 1");
+    expect(rendered).toContain("状态：已阻塞");
+    expect(rendered).toContain("✓ task-a A 接口 · 已完成 · 必需");
+    expect(rendered).toContain("✗ task-b B 页面 · 被依赖阻塞（等待 task-x）");
+    expect(rendered).toContain("阻塞链");
+    expect(rendered).toContain("task-x X 迁移（已阻塞）");
+    expect(rendered).toContain("等待 task-x");
+    expect(rendered).toContain("失败原因");
+    expect(rendered).toContain("task-x: 验证未通过：npm test · 退出码 1");
     expect(rendered).toContain("3 tests failed");
+  });
+});
+
+describe("Run card next step (TASK-1264)", () => {
+  it("says what happens next and what the user must do", () => {
+    const rendered = textOf(
+      renderRunMessage(run(), {
+        nextStep: {
+          automatic: "按评审意见自动重跑一轮（第 2 轮）",
+          yours: "不用你操作，这一轮结果我会发在这里。",
+        },
+      }).blocks,
+    );
+
+    expect(rendered).toContain("接下来");
+    expect(rendered).toContain("会自动：按评审意见自动重跑一轮（第 2 轮）");
+    expect(rendered).toContain("需要你：不用你操作");
+  });
+
+  it("offers the buttons when a human decision is needed", () => {
+    const message = renderRunMessage(run(), {
+      nextStep: {
+        yours: "选一个下一步：「推测试环境」",
+        actions: [{ id: "requirement.next", label: "推测试环境", style: "primary" }],
+      },
+    });
+    const actions = (message.blocks ?? []).find(
+      (block): block is Extract<MessageBlock, { type: "actions" }> =>
+        block.type === "actions",
+    );
+
+    expect(actions?.actions.map((action) => action.label)).toEqual(["推测试环境"]);
+  });
+
+  it("never leaves a run card without a next step", () => {
+    const rejected = renderRunMessage(
+      run({
+        result: {
+          review: { verdict: "request_changes", criteria: [], risks: [], notes: "n" },
+        },
+      }),
+    );
+    expect(textOf(rejected.blocks)).toContain("接下来");
+    expect(textOf(rejected.blocks)).toContain("按评审意见自动重跑一轮（第 2 轮）");
+
+    // No review at all: still says the user is not needed.
+    const plain = textOf(renderRunMessage(run()).blocks);
+    expect(plain).toContain("接下来");
+    expect(plain).toContain("需要你：不用你操作");
   });
 });

@@ -87,7 +87,7 @@ describe("task CLI commands", () => {
 
     const result = await validateTaskCommand(tasks, repositories, "task-001");
     expect(result.task.status).toBe("BLOCKED");
-    expect(result.issues).toContain("repository not found: repo-missing");
+    expect(result.issues).toContain("没有找到仓库：repo-missing");
   });
 
   it("list filters and show return the expected tasks", async () => {

@@ -40,7 +40,7 @@ describe("Verifier", () => {
     const result = await new Verifier().run({ workspacePath: workspace, commands: [] });
 
     expect(result.passed).toBe(false);
-    expect(result.checks[0]?.output).toContain("no verification commands");
+    expect(result.checks[0]?.output).toContain("没有配置验证命令");
   });
 
   it("kills a check that exceeds its timeout", async () => {

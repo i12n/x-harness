@@ -34,7 +34,7 @@ export class TaskIntakeService {
     try {
       await this.deps.repositories.findRepository(task.repositoryId);
     } catch {
-      issues.push(`repository not found: ${task.repositoryId}`);
+      issues.push(`没有找到仓库：${task.repositoryId}`);
     }
     issues.push(...assessTask(task).issues);
 

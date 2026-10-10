@@ -24,7 +24,7 @@ export function renderPreviewMessage(
           .map(
             (command) =>
               `- ${command.status === "passed" ? "✓" : "✗"} ${command.command}` +
-              `（exit ${command.exitCode ?? "?"}，${command.durationSeconds}s）`,
+              `（退出码 ${command.exitCode ?? "?"}，耗时 ${command.durationSeconds} 秒）`,
           )
           .join("\n")}`,
       ),

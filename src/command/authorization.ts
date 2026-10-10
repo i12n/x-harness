@@ -21,6 +21,6 @@ export function authorize(
   }
   return {
     allowed: false,
-    reason: `${command.type} requires one of: ${required.join(", ")}`,
+    reason: `${command.type} 需要以下角色之一：${required.join("、")}`,
   };
 }

@@ -7,6 +7,7 @@ import {
   statusMark,
   testCounts,
 } from "./common.js";
+import { SECTION, targetRoleLabel } from "./copy.js";
 import type { RenderOptions } from "./task.js";
 
 export const REVIEW_ACTIONS = {
@@ -124,7 +125,7 @@ export function renderReviewMessage(
   const targets = collectRunTargets(run);
   const { passed, failed } = testCounts(targets);
   const blocks = [
-    sectionBlock(`${run.id} · Ready for Review`, `Task: ${run.taskId}`),
+    sectionBlock(`${run.id} · 待评审`, `任务：${run.taskId}`),
   ];
 
   const targetLines =
@@ -134,13 +135,15 @@ export function renderReviewMessage(
             (target) =>
               `- ${statusMark(target.passed)} ${
                 target.repository ?? target.repositoryId
-              } (${target.role ?? "supporting"})`,
+              } (${targetRoleLabel(target.role)})`,
           )
           .join("\n")
-      : "(no target details recorded)";
-  blocks.push(markdownBlock(`**Targets**\n${targetLines}`));
+      : "（没有记录目标仓库详情）";
+  blocks.push(markdownBlock(`**${SECTION.targets}**\n${targetLines}`));
   blocks.push(
-    markdownBlock(`**Verification**\n- ${passed} passed\n- ${failed} failed`),
+    markdownBlock(
+      `**${SECTION.verification}**\n- 通过 ${passed} 项\n- 未通过 ${failed} 项`,
+    ),
   );
   blocks.push({
     type: "actions",
@@ -149,13 +152,13 @@ export function renderReviewMessage(
       // mismatch that made both buttons unroutable).
       {
         id: REVIEW_ACTIONS.approve,
-        label: "Approve",
+        label: "通过",
         style: "primary",
         value: JSON.stringify({ taskId: run.taskId }),
       },
       {
         id: REVIEW_ACTIONS.requestChanges,
-        label: "Request Changes",
+        label: "打回修改",
         style: "danger",
         value: JSON.stringify({ taskId: run.taskId }),
       },
@@ -164,7 +167,7 @@ export function renderReviewMessage(
 
   return {
     conversationId: options.conversationId ?? run.id,
-    text: `${run.id} ready for review`,
+    text: `${run.id} 待评审`,
     blocks,
   };
 }

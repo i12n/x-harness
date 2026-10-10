@@ -47,6 +47,7 @@ export async function collectGitDiff(
 ): Promise<CollectedDiff> {
   const run = options.runGit ?? hostGitRunner(options);
   const limit = options.maxPatchChars ?? MAX_PATCH_CHARS;
+  await includeUntrackedFiles(run, workdir);
   const names = await safeRun(run, ["diff", "--name-only"], workdir);
   const stat = await safeRun(run, ["diff", "--stat"], workdir);
   const patch = await safeRun(run, ["diff"], workdir);
@@ -58,6 +59,39 @@ export async function collectGitDiff(
     stat: stat.trim(),
     patch: truncate(patch, limit),
   };
+}
+
+/**
+ * TASK-1265: `git diff` only reports *tracked* files, so every file the agent
+ * created during a Run was invisible to the reviewer and to the harness's own
+ * "production code changed without tests" check. The agent never runs
+ * `git add` (publishing does), so on a real Run that meant "新增文件完全不在
+ * diff 里": a task that shipped the unified download method, its component, its
+ * API route and its unit tests was rejected three times in a row
+ * (run-2877ce4260 / run-9a70657e35 / run-6e85d50e1d) for "missing tests".
+ *
+ * `add --intent-to-add` records the path only — no content is staged — and from
+ * then on `git diff` reports the new file like any other change. It is
+ * idempotent (the paths stop being "untracked"), and the later `git add -A` at
+ * publish time still stages the real content.
+ */
+async function includeUntrackedFiles(
+  run: (args: string[], cwd: string) => Promise<string>,
+  workdir: string,
+): Promise<void> {
+  const listing = await safeRun(
+    run,
+    ["ls-files", "--others", "--exclude-standard"],
+    workdir,
+  );
+  const files = listing
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  if (files.length === 0) {
+    return;
+  }
+  await safeRun(run, ["add", "--intent-to-add", "--", ...files], workdir);
 }
 
 /**

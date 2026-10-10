@@ -249,10 +249,10 @@ describe("Phase 12 E2E — failure, retry and delivery recovery (TASK-1207)", ()
     // IN_PROGRESS is recorded but never notified; only BLOCKED reaches a human.
     expect(h.notifier.notifications.map((entry) => entry.status)).toEqual(["BLOCKED"]);
     const blockedMessage = JSON.stringify(h.notifier.notifications[0]!.message.blocks);
-    expect(blockedMessage).toContain("BLOCKED");
+    expect(blockedMessage).toContain("已阻塞");
     expect(blockedMessage).toContain(h.taskA.id);
-    expect(blockedMessage).toContain("Failure");
-    expect(blockedMessage).toContain("verification: sh check.sh");
+    expect(blockedMessage).toContain("失败原因");
+    expect(blockedMessage).toContain("验证未通过：sh check.sh");
     expect(await h.deliveries.listReleases(h.delivery.id)).toEqual([]);
 
     // B cannot run while its prerequisite is blocked.

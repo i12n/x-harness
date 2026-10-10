@@ -168,6 +168,7 @@ export class WorkspaceManager {
     base = "HEAD",
     maxBytes = 200_000,
   ): Promise<string> {
+    await this.includeUntrackedFiles(workspacePath);
     const stat = await this.runGit(["diff", "--stat", base], workspacePath);
     let body = "";
     try {
@@ -179,6 +180,29 @@ export class WorkspaceManager {
     return combined.length <= maxBytes
       ? combined
       : `${combined.slice(0, maxBytes)}\n...[truncated]`;
+  }
+
+  /**
+   * TASK-1265: a file the agent created is untracked until someone runs
+   * `git add`, and both `git diff` and `git diff <base>` ignore untracked
+   * files. Mark them intent-to-add so the reviewer sees the whole change.
+   */
+  private async includeUntrackedFiles(workspacePath: string): Promise<void> {
+    try {
+      const { stdout } = await this.runGit(
+        ["ls-files", "--others", "--exclude-standard"],
+        workspacePath,
+      );
+      const files = stdout
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter(Boolean);
+      if (files.length > 0) {
+        await this.runGit(["add", "--intent-to-add", "--", ...files], workspacePath);
+      }
+    } catch {
+      // A diff without the new files still beats no diff at all.
+    }
   }
 
   private async runGit(args: string[], cwd: string): Promise<{ stdout: string }> {

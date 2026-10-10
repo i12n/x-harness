@@ -262,11 +262,11 @@ describe("delivery.show / delivery.release commands (TASK-1205)", () => {
       { taskId: "task-b", state: "dependency-blocked" },
     ]);
     const rendered = JSON.stringify(data.message.blocks);
-    expect(rendered).toContain("dependency-blocked (blocked by task-x)");
-    expect(rendered).toContain("Blocking chain");
-    expect(rendered).toContain("task-x X 迁移 (BLOCKED)");
-    expect(rendered).toContain("Failure");
-    expect(rendered).toContain("task-x: verification: npm test · exit 1");
+    expect(rendered).toContain("被依赖阻塞（等待 task-x）");
+    expect(rendered).toContain("阻塞链");
+    expect(rendered).toContain("task-x X 迁移（已阻塞）");
+    expect(rendered).toContain("失败原因");
+    expect(rendered).toContain("task-x: 验证未通过：npm test · 退出码 1");
     expect(rendered).toContain("3 tests failed");
   });
 });

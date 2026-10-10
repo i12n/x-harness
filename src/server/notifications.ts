@@ -1,5 +1,5 @@
 import type { OutgoingMessage } from "../channel/message.js";
-import { renderRunMessage } from "../channel/rendering/run.js";
+import { renderRunMessage, type RunNextStep } from "../channel/rendering/run.js";
 import { isTerminalRunStatus, RUN_STATUSES } from "../domain/run.js";
 import type { Run } from "../domain/run.js";
 import type { EventStore } from "../store/eventStore.js";
@@ -37,6 +37,13 @@ export interface RunChatNotifierOptions {
    * with its "下一步" buttons. Best effort — the run card already went out.
    */
   followUp?: (run: Run, target: ChatTarget) => Promise<OutgoingMessage | undefined>;
+  /**
+   * TASK-1264: what happens next / what the user must do, shown inside the run
+   * card. The caller has the stores (task status after review, requirement
+   * stage), so it can be specific; without it the card falls back to a
+   * conservative sentence derived from the Run's own verdict.
+   */
+  nextStep?: (run: Run) => Promise<RunNextStep | undefined>;
 }
 
 /**
@@ -81,8 +88,11 @@ export class RunChatNotifier {
         continue;
       }
       try {
+        const nextStep = this.options.nextStep
+          ? await this.options.nextStep(run).catch(() => undefined)
+          : undefined;
         await this.options.send(resolved, {
-          ...renderRunMessage(run, { conversationId: resolved.conversationId }),
+          ...renderRunMessage(run, { conversationId: resolved.conversationId, nextStep }),
           metadata: {
             receiveId: resolved.receiveId,
             receiveIdType: resolved.receiveIdType ?? "chat_id",

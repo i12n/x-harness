@@ -66,7 +66,7 @@ export class CommandDispatcher {
         commandId: command.id,
         type: command.type,
         status: "rejected",
-        error: { code: "unauthorized", message: decision.reason ?? "not allowed" },
+        error: { code: "unauthorized", message: decision.reason ?? "没有权限" },
       };
     }
 
@@ -83,7 +83,7 @@ export class CommandDispatcher {
         status: "failed",
         error: {
           code: "handler_not_configured",
-          message: `no handler configured for ${command.type}`,
+          message: `没有为 ${command.type} 配置处理器`,
         },
       };
     }

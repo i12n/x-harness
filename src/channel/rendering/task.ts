@@ -2,6 +2,7 @@ import type { Task } from "../../domain/task.js";
 import type { FailureEvidence } from "../../domain/failureEvidence.js";
 import type { OutgoingMessage } from "../message.js";
 import { markdownBlock, sectionBlock } from "./common.js";
+import { SECTION, targetRoleLabel, taskStatusLabel } from "./copy.js";
 
 /** Dependency facts a renderer may display (never queried from a store here). */
 export interface TaskDependencyFacts {
@@ -48,12 +49,12 @@ export function renderTaskMessage(
   if (options.dependency && options.dependency.prerequisites.length > 0) {
     blocks.push(
       markdownBlock(
-        `**Dependencies**\n${options.dependency.prerequisites
+        `**${SECTION.dependencies}**\n${options.dependency.prerequisites
           .map(
             (prerequisite) =>
               `- ${prerequisite.status === "DONE" ? "✓" : "⏳"} ${prerequisite.id}` +
               (prerequisite.title ? ` ${prerequisite.title}` : "") +
-              ` (${prerequisite.status})`,
+              `（${taskStatusLabel(prerequisite.status)}）`,
           )
           .join("\n")}`,
       ),
@@ -62,12 +63,14 @@ export function renderTaskMessage(
   if (options.dependency?.blockingTaskIds?.length) {
     blocks.push(
       markdownBlock(
-        `**Blocked by**\n${options.dependency.blockingTaskIds
+        `**${SECTION.blockedBy}**\n${options.dependency.blockingTaskIds
           .map((id) => {
             const entry = options.dependency?.blockingChain?.find(
               (chainEntry) => chainEntry.taskId === id,
             );
-            return `- ${id}${entry?.status ? ` — ${entry.status}` : ""}`;
+            return `- ${id}${
+              entry?.status ? ` —— ${taskStatusLabel(entry.status)}` : ""
+            }`;
           })
           .join("\n")}`,
       ),
@@ -76,11 +79,11 @@ export function renderTaskMessage(
   if (options.dependency?.blockingChain && options.dependency.blockingChain.length > 1) {
     blocks.push(
       markdownBlock(
-        `**Blocking chain**\n${options.dependency.blockingChain
+        `**${SECTION.blockingChain}**\n${options.dependency.blockingChain
           .map(
             (entry) =>
               `${entry.taskId}${entry.title ? ` ${entry.title}` : ""}` +
-              (entry.status ? ` (${entry.status})` : ""),
+              (entry.status ? `（${taskStatusLabel(entry.status)}）` : ""),
           )
           .join("\n  ↓\n")}`,
       ),
@@ -93,7 +96,7 @@ export function renderTaskMessage(
         : "";
     blocks.push(
       markdownBlock(
-        `**Latest failure**\n${source}${formatFailure(options.latestFailure)}`,
+        `**${SECTION.latestFailure}**\n${source}${formatFailure(options.latestFailure)}`,
       ),
     );
   }
@@ -102,38 +105,40 @@ export function renderTaskMessage(
       ? task.targets
           .map(
             (target) =>
-              `- #${target.position} ${target.role} · ${repositoryName(
+              `- #${target.position} ${targetRoleLabel(target.role)} · ${repositoryName(
                 target.repositoryId,
               )} (${target.repositoryId})` +
-              (target.baseRef ? ` · base ${target.baseRef}` : ""),
+              (target.baseRef ? ` · 基线 ${target.baseRef}` : ""),
           )
           .join("\n")
-      : "(no targets)";
-  blocks.push(markdownBlock(`**Targets**\n${targets}`));
+      : "（没有目标仓库）";
+  blocks.push(markdownBlock(`**${SECTION.targets}**\n${targets}`));
   if (task.acceptance.length > 0) {
     blocks.push(
       markdownBlock(
-        `**Acceptance**\n${task.acceptance.map((item) => `- ${item}`).join("\n")}`,
+        `**${SECTION.acceptance}**\n${task.acceptance
+          .map((item) => `- ${item}`)
+          .join("\n")}`,
       ),
     );
   }
   if (task.description) {
-    blocks.push(sectionBlock("Description", task.description));
+    blocks.push(sectionBlock(SECTION.description, task.description));
   }
 
   return {
     conversationId: options.conversationId ?? task.id,
-    text: `${task.id} ${task.title} (${task.status})`,
+    text: `${task.id} ${task.title}（${taskStatusLabel(task.status)}）`,
     blocks,
   };
 }
 
 function renderHeader(task: Task, dependency?: TaskDependencyFacts): string {
-  const lines = [`Status: ${task.status}`];
+  const lines = [`${SECTION.status}：${taskStatusLabel(task.status)}`];
   if (dependency) {
-    lines.push(`Runnable: ${dependency.runnable ? "yes" : "no"}`);
+    lines.push(`可运行：${dependency.runnable ? "是" : "否"}`);
     if (dependency.dependencyBlocked) {
-      lines.push("Dependency blocked: yes");
+      lines.push("依赖阻塞：是");
     }
   }
   return lines.join("\n");
@@ -142,12 +147,12 @@ function renderHeader(task: Task, dependency?: TaskDependencyFacts): string {
 /** Facts only: command/exit code/message plus already-truncated output. */
 export function formatFailure(evidence: FailureEvidence): string {
   if (evidence.kind === "verification") {
-    const parts = [`verification: ${evidence.command ?? "(unknown command)"}`];
+    const parts = [`验证未通过：${evidence.command ?? "（未知命令）"}`];
     if (evidence.exitCode !== undefined && evidence.exitCode !== null) {
-      parts.push(`exit ${evidence.exitCode}`);
+      parts.push(`退出码 ${evidence.exitCode}`);
     }
     return parts.join(" · ") + (evidence.output ? `\n${evidence.output}` : "");
   }
-  const label = evidence.kind === "unknown" ? "failure" : evidence.kind;
-  return `${label}: ${evidence.message ?? "(no details)"}`;
+  const label = evidence.kind === "unknown" ? SECTION.failure : evidence.kind;
+  return `${label}：${evidence.message ?? "（没有详情）"}`;
 }

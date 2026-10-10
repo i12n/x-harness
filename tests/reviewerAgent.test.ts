@@ -150,6 +150,9 @@ describe("diff evidence", () => {
     const asked: string[] = [];
     const runGit = async (args: string[]): Promise<string> => {
       asked.push(args.join(" "));
+      if (args[0] === "ls-files") {
+        return "";
+      }
       if (args.includes("--name-only")) {
         return "a.ts\nb.ts\n";
       }
@@ -163,7 +166,12 @@ describe("diff evidence", () => {
     expect(diff.files).toEqual(["a.ts", "b.ts"]);
     expect(diff.stat).toBe("2 files changed");
     expect(diff.patch).toContain("truncated");
-    expect(asked).toEqual(["diff --name-only", "diff --stat", "diff"]);
+    expect(asked).toEqual([
+      "ls-files --others --exclude-standard",
+      "diff --name-only",
+      "diff --stat",
+      "diff",
+    ]);
   });
 
   it("returns an empty diff when git is unavailable", async () => {
@@ -199,6 +207,20 @@ describe("diff evidence", () => {
     expect(diff.files).toEqual(["app.css"]);
     expect(diff.patch).toContain(".breadcrumbs .sep");
   });
+
+  // TASK-1265: new files must be in the diff, otherwise the reviewer rejects
+  // real work as "tests missing" (this cost three attempts on 2026-10-10).
+  it("sees files the agent created but never committed", async () => {
+    const repo = makeRepo();
+    writeFileSync(join(repo, "component.tsx"), "export const B = () => null;\n");
+    writeFileSync(join(repo, "component.test.ts"), "import './component';\n");
+
+    const diff = await collectGitDiff(repo);
+
+    expect(diff.files).toEqual(["component.test.ts", "component.tsx"]);
+    expect(diff.patch).toContain("component.tsx");
+    expect(diff.stat).toContain("component.tsx");
+  });
 });
 
 describe("run card reviewer block (TASK-1221)", () => {
@@ -228,7 +250,7 @@ describe("run card reviewer block (TASK-1221)", () => {
         }),
       ).blocks,
     );
-    expect(text).toContain("Reviewer");
+    expect(text).toContain("评审结论");
     expect(text).toContain("add a test");
     expect(text).toContain("no regression test");
   });

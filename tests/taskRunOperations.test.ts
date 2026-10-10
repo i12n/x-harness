@@ -269,8 +269,8 @@ describe("Task / Run operations (TASK-1108)", () => {
     expect((await tasks.findTask("task-001")).status).toBe("REVIEW");
     const run = await runs.findRun(data.runId);
     const rendered = JSON.stringify(renderRunMessage(run).blocks);
-    expect(rendered).toContain("✓ rehelu (primary)");
-    expect(rendered).toContain("Verification: PASS");
+    expect(rendered).toContain("✓ rehelu (主仓库)");
+    expect(rendered).toContain("验证：通过");
   });
 
   it("renders multi-repository tasks and runs", async () => {
@@ -302,8 +302,8 @@ describe("Task / Run operations (TASK-1108)", () => {
     );
     const run = await runs.findRun((ran.data as { runId: string }).runId);
     const runText = JSON.stringify(renderRunMessage(run).blocks);
-    expect(runText).toContain("✓ rehelu (primary)");
-    expect(runText).toContain("✓ auth (supporting)");
+    expect(runText).toContain("✓ rehelu (主仓库)");
+    expect(runText).toContain("✓ auth (辅助仓库)");
   });
 
   it("run.show renders a failed run with the failing target", async () => {
@@ -337,7 +337,7 @@ describe("Task / Run operations (TASK-1108)", () => {
     const run = (shown.data as { run: { status: string } }).run;
     expect(run.status).toBe("FAILED");
     const rendered = JSON.stringify(renderRunMessage(await runs.findRun(runId)).blocks);
-    expect(rendered).toContain("✗ auth (supporting)");
+    expect(rendered).toContain("✗ auth (辅助仓库)");
   });
 
   it("cancels a QUEUED run synchronously", async () => {
@@ -561,8 +561,8 @@ describe("Task / Run operations (TASK-1108)", () => {
       { id: "task-blocker", status: "REVIEW" },
     ]);
     const rendered = JSON.stringify(data.message.blocks);
-    expect(rendered).toContain("Runnable: no");
-    expect(rendered).toContain("⏳ task-blocker 先完成接口 (REVIEW)");
+    expect(rendered).toContain("可运行：否");
+    expect(rendered).toContain("⏳ task-blocker 先完成接口（待评审）");
 
     // The gate opens once the prerequisite is DONE.
     await tasks.updateTaskStatus("task-blocker", "DONE");
@@ -581,9 +581,9 @@ describe("Task / Run operations (TASK-1108)", () => {
       message: { blocks?: unknown[] };
     };
     expect(unblockedData.runnable).toBe(true);
-    expect(JSON.stringify(unblockedData.message.blocks)).toContain("Runnable: yes");
+    expect(JSON.stringify(unblockedData.message.blocks)).toContain("可运行：是");
     expect(JSON.stringify(unblockedData.message.blocks)).toContain(
-      "✓ task-blocker 先完成接口 (DONE)",
+      "✓ task-blocker 先完成接口（已完成）",
     );
   });
 
@@ -680,12 +680,12 @@ describe("Task / Run operations (TASK-1108)", () => {
     ]);
 
     const rendered = JSON.stringify(data.message.blocks);
-    expect(rendered).toContain("Runnable: no");
-    expect(rendered).toContain("Dependency blocked: yes");
-    expect(rendered).toContain("task-blocker — BLOCKED");
-    expect(rendered).toContain("Blocking chain");
-    expect(rendered).toContain("Latest failure");
-    expect(rendered).toContain("verification: npm test · exit 1");
+    expect(rendered).toContain("可运行：否");
+    expect(rendered).toContain("依赖阻塞：是");
+    expect(rendered).toContain("task-blocker —— 已阻塞");
+    expect(rendered).toContain("阻塞链");
+    expect(rendered).toContain("最近一次失败");
+    expect(rendered).toContain("验证未通过：npm test · 退出码 1");
     // The task itself is untouched: dependency-blocked is a computed fact.
     await expect(tasks.findTask("task-001")).resolves.toMatchObject({ status: "READY" });
   });

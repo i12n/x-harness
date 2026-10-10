@@ -104,7 +104,7 @@ describe("TASK-1219 auto start", () => {
 
     expect(outcome.tasks[0]!.status).toBe("BLOCKED");
     const blocked = await stores.events.listEvents({ type: "TaskBlocked" });
-    expect(JSON.stringify(blocked[0]?.payload)).toContain("repository not found");
+    expect(JSON.stringify(blocked[0]?.payload)).toContain("没有找到仓库");
   });
 
   it("never re-intakes a task on a replayed plan", async () => {

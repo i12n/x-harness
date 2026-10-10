@@ -92,6 +92,23 @@ describe("WorkspaceManager (git worktrees)", () => {
       }),
     ).rejects.toThrow(/outside workspaces base/);
   });
+
+  // TASK-1265: new files are untracked and invisible to `git diff`; the
+  // reviewer must still see them.
+  it("shows files the agent created but never added", async () => {
+    const manager = new WorkspaceManager({ baseDir });
+    const workspace = await manager.createWorkspace({
+      repositoryLocalPath: repoPath,
+      taskId: "task-001",
+      runId: "run-001",
+    });
+    writeFileSync(join(workspace.path, "new-component.tsx"), "export const x = 1;\n");
+
+    const diff = await manager.showDiff(workspace.path);
+
+    expect(diff).toContain("new-component.tsx");
+    expect(diff).toContain("export const x = 1;");
+  });
 });
 
 function runGit(args: string[], cwd: string): void {

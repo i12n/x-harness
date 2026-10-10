@@ -58,11 +58,11 @@ describe("task.list", () => {
     const data = result.data as { tasks: { id: string }[]; message: unknown };
     expect(data.tasks).toHaveLength(3);
     const rendered = JSON.stringify(data.message);
-    expect(rendered).toContain("REVIEW（1）");
+    expect(rendered).toContain("待评审（1）");
     expect(rendered).toContain("task-1");
     expect(rendered).toContain("demo-app");
     // Running/verifying work sorts above finished work.
-    expect(rendered.indexOf("REVIEW（1）")).toBeLessThan(rendered.indexOf("DONE（1）"));
+    expect(rendered.indexOf("待评审（1）")).toBeLessThan(rendered.indexOf("已完成（1）"));
   });
 
   it("filters by status, case-insensitively", async () => {

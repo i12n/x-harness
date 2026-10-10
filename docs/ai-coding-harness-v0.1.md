@@ -1356,8 +1356,13 @@ MVP 跑通以后，再增加：
            ├── Dependency DAG
            ├── Reviewer Agent
            ├── Human Approval
+           ├── Feishu Copy in Chinese
            └── GitHub Integration
 ```
+
+> 「Feishu Copy in Chinese」= 飞书文案统一中文：状态、区块标题、按钮、空态
+> 全部中文且同一说法只出现一次，唯一来源 `src/channel/rendering/copy.ts`。
+> 词表与规则见 [task-1263-feishu-copy.md](task-1263-feishu-copy.md)。
 
 再以后：
 

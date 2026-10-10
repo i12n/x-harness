@@ -3,6 +3,12 @@ import type { SpecificationPlanItem } from "../../domain/specificationPlan.js";
 import type { Task } from "../../domain/task.js";
 import type { OutgoingMessage } from "../message.js";
 import { markdownBlock, sectionBlock } from "./common.js";
+import {
+  SECTION,
+  specificationStatusLabel,
+  targetRoleLabel,
+  taskStatusLabel,
+} from "./copy.js";
 
 export interface SpecificationRenderOptions {
   /** Destination override; renderers do not know the channel. */
@@ -31,16 +37,16 @@ export function renderSpecificationMessage(
   const blocks = [
     sectionBlock(
       `${specification.id} · ${specification.title}`,
-      `Status: ${specification.status}`,
+      `${SECTION.status}：${specificationStatusLabel(specification.status)}`,
     ),
   ];
   if (specification.summary) {
-    blocks.push(sectionBlock("Summary", specification.summary));
+    blocks.push(sectionBlock(SECTION.summary, specification.summary));
   }
   if (specification.requirements.length > 0) {
     blocks.push(
       markdownBlock(
-        `**Requirements**\n${specification.requirements
+        `**${SECTION.requirements}**\n${specification.requirements
           .map((requirement) => `- ${requirement}`)
           .join("\n")}`,
       ),
@@ -49,7 +55,7 @@ export function renderSpecificationMessage(
   if (specification.acceptance.length > 0) {
     blocks.push(
       markdownBlock(
-        `**Acceptance**\n${specification.acceptance
+        `**${SECTION.acceptance}**\n${specification.acceptance
           .map((item) => `- ${item}`)
           .join("\n")}`,
       ),
@@ -60,19 +66,21 @@ export function renderSpecificationMessage(
       ? specification.targets
           .map(
             (target) =>
-              `- #${target.position} ${target.role} · ${repositoryName(
+              `- #${target.position} ${targetRoleLabel(target.role)} · ${repositoryName(
                 target.repositoryId,
               )} (${target.repositoryId})` +
-              (target.baseRef ? ` · base ${target.baseRef}` : ""),
+              (target.baseRef ? ` · 基线 ${target.baseRef}` : ""),
           )
           .join("\n")
-      : "(no targets)";
-  blocks.push(markdownBlock(`**Targets**\n${targets}`));
-  blocks.push(markdownBlock(`**Plan**\n${renderPlan(plan)}`));
+      : "（没有目标仓库）";
+  blocks.push(markdownBlock(`**${SECTION.targets}**\n${targets}`));
+  blocks.push(markdownBlock(`**${SECTION.plan}**\n${renderPlan(plan)}`));
 
   return {
     conversationId: options.conversationId ?? specification.id,
-    text: `${specification.id} ${specification.title} (${specification.status})`,
+    text: `${specification.id} ${specification.title}（${specificationStatusLabel(
+      specification.status,
+    )}）`,
     blocks,
   };
 }
@@ -80,14 +88,14 @@ export function renderSpecificationMessage(
 function renderPlan(plan: SpecificationPlanView): string {
   const items = plan.planItems ?? [];
   if (items.length === 0) {
-    return "(not planned)";
+    return "（还没有拆解）";
   }
   const tasks = new Map((plan.tasks ?? []).map((task) => [task.id, task]));
   return items
     .map((item) => {
       const task = item.taskId ? tasks.get(item.taskId) : undefined;
-      const link = item.taskId ?? "(no task)";
-      const status = task ? ` · ${task.status}` : "";
+      const link = item.taskId ?? "（还没有任务）";
+      const status = task ? ` · ${taskStatusLabel(task.status)}` : "";
       return `- #${item.position} ${item.title} → ${link}${status}`;
     })
     .join("\n");

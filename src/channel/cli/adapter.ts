@@ -74,7 +74,7 @@ function renderBlock(block: MessageBlock): string[] {
             (option) =>
               `[${block.selected?.includes(option.id) ? "✅" : "⬜"} ${option.label}]`,
           ),
-          `[${block.submit.label}]`,
+          ...(block.submit ? [`[${block.submit.label}]`] : []),
         ].join(" "),
       ];
   }

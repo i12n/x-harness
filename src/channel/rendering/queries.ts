@@ -1,5 +1,10 @@
 import type { MessageBlock, OutgoingMessage } from "../message.js";
 import { markdownBlock, sectionBlock } from "./common.js";
+import {
+  deliveryStatusLabel,
+  problemStatusLabel,
+  runStatusLabel,
+} from "./copy.js";
 
 export interface RunListEntry {
   id: string;
@@ -52,7 +57,9 @@ export function renderRunListMessage(
       runs
         .map((run) => {
           const lines = [
-            `**${run.status}** \`${run.id}\` · ${run.taskId} ${run.taskTitle}`,
+            `**${runStatusLabel(run.status)}** \`${run.id}\` · ${run.taskId} ${
+              run.taskTitle
+            }`,
             `  尝试 ${run.attempt} · ${run.finishedAt ?? run.createdAt}`,
           ];
           if (run.failureSummary) {
@@ -88,7 +95,7 @@ export function renderProblemListMessage(
       problems
         .map(
           (problem) =>
-            `**${problem.status}** \`${problem.id}\` ${problem.title}` +
+            `**${problemStatusLabel(problem.status)}** \`${problem.id}\` ${problem.title}` +
             (problem.openQuestions > 0 ? ` · 待回答 ${problem.openQuestions} 个问题` : ""),
         )
         .join("\n"),
@@ -116,7 +123,9 @@ export function renderDeliveryListMessage(
       deliveries
         .map(
           (delivery) =>
-            `**${delivery.status}** \`${delivery.id}\` ${delivery.title}\n` +
+            `**${deliveryStatusLabel(delivery.status)}** \`${delivery.id}\` ${
+              delivery.title
+            }\n` +
             `  ${delivery.doneTasks}/${delivery.requiredTasks} 个必需任务完成`,
         )
         .join("\n"),

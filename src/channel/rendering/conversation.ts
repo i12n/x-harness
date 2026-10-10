@@ -1,5 +1,6 @@
 import type { MessageBlock, OutgoingMessage } from "../message.js";
 import { markdownBlock, sectionBlock } from "./common.js";
+import { subjectTypeLabel } from "./copy.js";
 
 export interface TranscriptEntry {
   at: string;
@@ -41,7 +42,9 @@ export function renderTranscriptMessage(
       "聊天记录",
       [
         header,
-        options.subject ? `当前主题：${options.subject.type} ${options.subject.id}` : "当前主题：(无)",
+        options.subject
+          ? `当前主题：${subjectTypeLabel(options.subject.type)} ${options.subject.id}`
+          : "当前主题：（无）",
       ].join("\n"),
     ),
   ];
@@ -50,7 +53,7 @@ export function renderTranscriptMessage(
   let used = 0;
   for (const entry of [...entries].reverse()) {
     const who =
-      entry.speaker === "user" ? `user ${entry.senderId ?? ""}`.trim() : "harness";
+      entry.speaker === "user" ? `用户 ${entry.senderId ?? ""}`.trim() : "助手";
     const text = truncate(entry.text.replace(/\n{2,}/g, "\n"), perMessage);
     const line = `**${formatTime(entry.at)} · ${who}**\n${text}`;
     if (used + line.length > budget) {

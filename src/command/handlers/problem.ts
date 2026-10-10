@@ -16,6 +16,24 @@ function asString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
+/** The chosen option's label, else the free-text answer. */
+function answerLabel(clarification: {
+  options: { id: string; label: string }[];
+  answer?: { optionId?: string; text?: string };
+}): string {
+  const answer = clarification.answer;
+  if (!answer) {
+    return "";
+  }
+  if (answer.optionId) {
+    return (
+      clarification.options.find((option) => option.id === answer.optionId)?.label ??
+      answer.optionId
+    );
+  }
+  return answer.text ?? "";
+}
+
 function rejectDomainError(error: unknown): never {
   if (error instanceof ProblemConfirmationError) {
     throw new CommandRejectionError(error.code, error.message);
@@ -79,10 +97,22 @@ export function createProblemCommandHandlers(
             answer: asString(payload.answer),
           },
         );
+        // TASK-1266: hand the renderer the one-line record of what is already
+        // confirmed, so a re-rendered card never prints answered questions.
+        const all = await deps.problems
+          .listClarifications(String(payload.problemId))
+          .catch(() => []);
+        const answered = all
+          .filter((clarification) => clarification.status === "ANSWERED")
+          .map((clarification) => ({
+            question: clarification.question,
+            answer: answerLabel(clarification),
+          }));
         return {
           problem: outcome.problem,
           needsInput: outcome.needsInput,
           clarifications: outcome.clarifications,
+          answered,
         };
       } catch (error) {
         rejectDomainError(error);

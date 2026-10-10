@@ -580,7 +580,8 @@ describe("ChatSession", () => {
     await session.handleEvent(event("om-1", "通过 task-1"));
 
     expect(sent).toHaveLength(1);
-    expect(textOf(sent[0]!.message)).toContain("unauthorized");
+    expect(textOf(sent[0]!.message)).toContain("这一步没做成");
+    expect(textOf(sent[0]!.message)).toContain("需要以下角色之一");
   });
 
   it("binds a queued run to the conversation that started it", async () => {
@@ -600,7 +601,7 @@ describe("ChatSession", () => {
     await session.handleEvent(event("om-run", "运行 task-1"));
 
     expect(bound).toHaveLength(1);
-    expect(textOf(sent[0]!.message)).toContain("queued");
+    expect(textOf(sent[0]!.message)).toContain("已开始执行");
   });
 
   it("ignores messages sent by the bot itself", async () => {

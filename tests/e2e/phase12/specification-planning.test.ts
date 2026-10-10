@@ -58,7 +58,7 @@ describe("Phase 12 E2E — Specification → Task Planning (TASK-1202)", () => {
     );
     expect(shown.status).toBe("succeeded");
     expect(JSON.stringify((shown.data as { message: unknown }).message)).toContain(
-      "PLANNED",
+      "已拆解",
     );
 
     // 5. Nothing executed: planning never creates Runs

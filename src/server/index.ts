@@ -7,7 +7,12 @@ import { parseCardAction } from "../channel/feishu/cardActions.js";
 import { FeishuAdapter } from "../channel/feishu/adapter.js";
 import { HttpFeishuClient } from "../channel/feishu/client.js";
 import { renderDeployTransitionMessage } from "../channel/rendering/deploy.js";
-import { renderRequirementCard } from "../channel/rendering/requirement.js";
+import {
+  REQUIREMENT_NEXT_ACTION,
+  renderRequirementCard,
+} from "../channel/rendering/requirement.js";
+import { REVIEW_ACTIONS } from "../channel/rendering/review.js";
+import type { RunNextStep } from "../channel/rendering/run.js";
 import type { OutgoingMessage } from "../channel/message.js";
 import { CommandDispatcher } from "../command/dispatcher.js";
 import { createDeliveryCommandHandlers } from "../command/handlers/delivery.js";
@@ -35,7 +40,7 @@ import { GitPublishService } from "../git/publishService.js";
 import { InMemoryIdempotencyStore } from "../command/idempotency.js";
 import { LlmIntentEngine } from "../command/llmIntentEngine.js";
 import type { ConversationMessage } from "../domain/conversation.js";
-import { ACTIVE_RUN_STATUSES } from "../domain/run.js";
+import { ACTIVE_RUN_STATUSES, type Run } from "../domain/run.js";
 import { HarnessError } from "../errors.js";
 import { ConversationService } from "../conversation/service.js";
 import { DeliveryReconciler } from "../delivery/application/reconciler.js";
@@ -55,6 +60,7 @@ import { Loop } from "../loop/loop.js";
 import { LlmProblemAnalyzer } from "../problem/application/llmAnalyzer.js";
 import { ProblemService } from "../problem/application/service.js";
 import { ConfirmationLoop } from "../problem/confirmationLoop.js";
+import { requirementActionPlan } from "../requirement/application/actions.js";
 import { ReviewService, deliveryStatusForTask } from "../review/application/reviewService.js";
 import { RunService } from "../run/application/runService.js";
 import { TaskRunService } from "../run/application/taskRunService.js";
@@ -442,6 +448,101 @@ export class HarnessRuntime {
       tasks: stores.tasks,
     });
 
+    /** The requirement a Task belongs to, when the chain is resolvable. */
+    const requirementViewOfTask = async (taskId: string) => {
+      const specificationId = specificationIdOfTask(taskId);
+      const specification = specificationId
+        ? await stores.specifications
+            .findSpecification(specificationId)
+            .catch(() => undefined)
+        : undefined;
+      if (!specification) {
+        return undefined;
+      }
+      return requirements
+        .resolveByProblemId(specification.problemId)
+        .catch(() => undefined);
+    };
+
+    /**
+     * TASK-1264: every Run card must answer "接下来做什么、我要做什么".
+     *
+     * The Run alone cannot: whether the harness auto-retries, stops, or waits
+     * for a human is decided after it finishes (settleAfterReview), and the
+     * requirement-level decision points live one layer up. So the answer is
+     * derived here, from the task's *post-review* status and the requirement's
+     * stage, and handed to the renderer.
+     */
+    const describeRunNextStep = async (run: Run): Promise<RunNextStep | undefined> => {
+      const task = await stores.tasks.findTask(run.taskId).catch(() => undefined);
+      if (!task) {
+        return undefined;
+      }
+      const view = await requirementViewOfTask(task.id);
+      const plan = view ? requirementActionPlan(view) : [];
+      const primary = plan.find((option) => option.style === "primary") ?? plan[0];
+      if (
+        view &&
+        primary &&
+        (view.stage === "awaiting_acceptance" || view.stage === "awaiting_release")
+      ) {
+        return {
+          automatic: "你选完我就立刻执行",
+          yours: `选一个下一步：「${primary.label}」—— ${primary.nextStep}`,
+          actions: plan.map((option) => ({
+            id: REQUIREMENT_NEXT_ACTION,
+            label: option.label,
+            style: option.style ?? "default",
+            value: JSON.stringify({
+              requirementId: view.problemId,
+              action: option.type,
+              stage: view.stage,
+            }),
+          })),
+        };
+      }
+      switch (task.status) {
+        case "READY":
+          return {
+            automatic: `已自动排下一轮（第 ${run.attempt + 1} 轮，最多 ${task.maxAttempts} 轮）`,
+            yours: "不用你操作，这一轮的结果我会发在这里。",
+          };
+        case "RUNNING":
+          return { automatic: "正在继续开发这一轮", yours: "不用你操作。" };
+        case "VERIFYING":
+          return { automatic: "正在验证这一轮的结果", yours: "不用你操作。" };
+        case "REVIEW":
+          return {
+            yours: "改动已完成，等你评审：看下面的改动，点「通过」或「打回修改」。",
+            actions: [
+              {
+                id: REVIEW_ACTIONS.approve,
+                label: "通过",
+                style: "primary",
+                value: JSON.stringify({ taskId: task.id }),
+              },
+              {
+                id: REVIEW_ACTIONS.requestChanges,
+                label: "打回修改",
+                style: "danger",
+                value: JSON.stringify({ taskId: task.id }),
+              },
+            ],
+          };
+        case "BLOCKED":
+        case "FAILED":
+          return {
+            automatic: `已用完 ${task.maxAttempts} 轮自动重试，停下来了`,
+            yours:
+              "需要你决定：回一句「重跑」再试一轮，或「打回并说明问题」把问题讲清楚。",
+          };
+        case "DONE":
+          return { automatic: "这个任务已完成，接着做下一件", yours: "不用你操作。" };
+        default:
+          return undefined;
+      }
+    };
+
     const notifier = new RunChatNotifier({
       runs: stores.runs,
       events: stores.events,
@@ -486,19 +587,21 @@ export class HarnessRuntime {
       // TASK-1259: a Run that leaves the requirement at a decision point is
       // followed by the question card ("做完了，先看测试环境？").
       followUp: async (run) => {
+        // TASK-1264: the run card now carries 「接下来」 plus the buttons, so a
+        // second card would just repeat itself. Only fall back to the
+        // requirement card when the next-step block could not be derived.
+        const step = await describeRunNextStep(run).catch(() => undefined);
+        if (step) {
+          return undefined;
+        }
         const task = await stores.tasks.findTask(run.taskId).catch(() => undefined);
-        const specificationId = task ? specificationIdOfTask(task.id) : undefined;
-        const specification = specificationId
-          ? await stores.specifications.findSpecification(specificationId).catch(() => undefined)
-          : undefined;
-        const view = specification
-          ? await requirements.resolveByProblemId(specification.problemId).catch(() => undefined)
-          : undefined;
+        const view = task ? await requirementViewOfTask(task.id) : undefined;
         if (!view || view.stage !== "awaiting_acceptance") {
           return undefined;
         }
         return renderRequirementCard(view, { conversationId: "" });
       },
+      nextStep: describeRunNextStep,
       ...(config.feishu.defaultChatId
         ? {
             defaultTarget: {

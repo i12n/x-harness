@@ -1,5 +1,6 @@
 import type { MessageBlock, OutgoingMessage } from "../message.js";
 import { markdownBlock, sectionBlock } from "./common.js";
+import { taskStatusLabel } from "./copy.js";
 
 /** Task facts for the list view (plain data). */
 export interface TaskListEntry {
@@ -51,7 +52,7 @@ export function renderTaskListMessage(
     const entries = byStatus.get(status)!;
     blocks.push(
       markdownBlock(
-        `**${status}（${entries.length}）**\n${entries
+        `**${taskStatusLabel(status)}（${entries.length}）**\n${entries
           .map((task) => `- \`${task.id}\` ${task.title} · ${task.repositoryName}`)
           .join("\n")}`,
       ),

@@ -3,7 +3,11 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { ConversationService } from "../src/conversation/service.js";
 import { InMemoryConversationStore } from "../src/store/inMemoryConversationStore.js";
-import { PROBLEM_ANSWER_ACTION, renderProblemMessage } from "../src/channel/rendering/problem.js";
+import {
+  PROBLEM_ANSWER_ACTION,
+  PROBLEM_ANSWER_ALL_ACTION,
+  renderProblemMessage,
+} from "../src/channel/rendering/problem.js";
 import {
   CommandDispatcher,
   InMemoryIdempotencyStore,
@@ -140,8 +144,9 @@ describe("Problem confirmation via commands (TASK-1107)", () => {
     expect(conversation.subjectType).toBe("problem");
     expect(conversation.subjectId).toBe(data.problem.id);
 
-    // Structured clarifications render as a multi-select choice group whose
-    // submit carries every ticked option at once (TASK-1216).
+    // TASK-1266: structured clarifications render as toggle groups with no
+    // per-group submit; the card carries one 「提交全部答案」 button, so several
+    // questions are answered in a single click.
     const problem = await problems.findProblem(data.problem.id);
     const rendered = renderProblemMessage(problem, {
       needsInput: true,
@@ -149,11 +154,13 @@ describe("Problem confirmation via commands (TASK-1107)", () => {
     });
     const text = JSON.stringify(rendered.blocks);
     expect(text).toContain("所有用户");
+    expect(text).toContain(PROBLEM_ANSWER_ALL_ACTION);
+    expect(text).toContain("**影响范围是什么？**");
     const choices = (rendered.blocks ?? []).filter(
       (block) => block.type === "choice",
     );
     expect(choices).toHaveLength(1);
-    expect(JSON.stringify(choices)).toContain(PROBLEM_ANSWER_ACTION);
+    expect(JSON.stringify(choices)).not.toContain(PROBLEM_ANSWER_ACTION);
     expect(JSON.stringify(choices)).toContain("all_users");
   });
 

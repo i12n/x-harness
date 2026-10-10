@@ -265,10 +265,10 @@ describe("PlanningService (TASK-1202)", () => {
   it("does not plan an unknown specification", async () => {
     const h = harness();
     await expect(h.planning.plan("spec-missing")).rejects.toThrow(
-      /specification not found/,
+      /没有找到规格/,
     );
     await expect(h.planning.show("spec-missing")).rejects.toThrow(
-      /specification not found/,
+      /没有找到规格/,
     );
   });
 

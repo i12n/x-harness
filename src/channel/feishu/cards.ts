@@ -33,7 +33,7 @@ export function renderFeishuText(message: OutgoingMessage): string {
               (option) =>
                 `[${block.selected?.includes(option.id) ? "✅" : "⬜"} ${option.label}]`,
             ),
-            `[${block.submit.label}]`,
+            ...(block.submit ? [`[${block.submit.label}]`] : []),
           ].join(" "),
         );
         break;
@@ -107,18 +107,22 @@ export function renderFeishuCard(message: OutgoingMessage): FeishuCard {
                 },
               };
             }),
-            {
-              tag: "button",
-              text: { tag: "plain_text", content: block.submit.label },
-              type: "primary",
-              value: {
-                action: block.submit.action,
-                value: JSON.stringify({
-                  ...(block.submit.payload ?? {}),
-                  groupId: block.id,
-                }),
-              },
-            },
+            ...(block.submit
+              ? [
+                  {
+                    tag: "button",
+                    text: { tag: "plain_text", content: block.submit.label },
+                    type: "primary",
+                    value: {
+                      action: block.submit.action,
+                      value: JSON.stringify({
+                        ...(block.submit.payload ?? {}),
+                        groupId: block.id,
+                      }),
+                    },
+                  },
+                ]
+              : []),
           ],
         });
         break;

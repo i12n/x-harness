@@ -60,7 +60,7 @@ export class Verifier {
         command: "",
         status: "failed",
         exitCode: null,
-        output: "no verification commands configured for this repository",
+        output: "该仓库没有配置验证命令",
         durationSeconds: 0,
       });
     } else {

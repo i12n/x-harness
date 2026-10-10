@@ -245,10 +245,10 @@ describe("Phase 12 E2E — Delivery Loop (TASK-1206)", () => {
     expect(third.deliveryNotifications).toBe(1);
     expect(h.notifier.notifications).toHaveLength(1);
     const message = JSON.stringify(h.notifier.notifications[0]!.message.blocks);
-    expect(message).toContain("READY_FOR_RELEASE");
+    expect(message).toContain("待发布");
     expect(message).toContain("✓ " + h.taskA.id);
     expect(message).toContain("✓ " + h.taskB.id);
-    expect(message).toContain("(not released)");
+    expect(message).toContain("（尚未发布）");
 
     // Release stays a human decision: repeated ticks must not release.
     await h.loop.tick();
@@ -277,7 +277,7 @@ describe("Phase 12 E2E — Delivery Loop (TASK-1206)", () => {
     expect(first.deliveryTransitions.map((entry) => entry.status)).toEqual(["BLOCKED"]);
     expect(first.deliveryNotifications).toBe(1);
     expect(JSON.stringify(h.notifier.notifications[0]!.message.blocks)).toContain(
-      `${h.taskB.id} is BLOCKED`,
+      `${h.taskB.id} 处于已阻塞`,
     );
 
     // Later ticks are quiet, and the Delivery does not drift.

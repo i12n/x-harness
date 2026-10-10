@@ -146,7 +146,7 @@ describe("spec.show / spec.plan commands (TASK-1202)", () => {
     ]);
     expect(data.replayed).toBe(false);
     expect(JSON.stringify(data.message.blocks)).toContain("task-spec-001-0");
-    expect(JSON.stringify(data.message.blocks)).toContain("PLANNED");
+    expect(JSON.stringify(data.message.blocks)).toContain("已拆解");
   });
 
   it("shows the specification and its plan for guests", async () => {

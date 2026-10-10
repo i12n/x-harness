@@ -115,12 +115,12 @@ describe("run card acceptance block (TASK-1220)", () => {
       ).blocks,
     );
 
-    expect(text).toContain("Acceptance");
+    expect(text).toContain("验收标准");
     expect(text).toContain("可见空隙");
     expect(text).toContain("需要人验收");
   });
 
   it("stays out of the way when a run has no acceptance evidence", () => {
-    expect(textOf(renderRunMessage(run(undefined)).blocks)).not.toContain("Acceptance");
+    expect(textOf(renderRunMessage(run(undefined)).blocks)).not.toContain("验收标准");
   });
 });

@@ -41,7 +41,13 @@ export interface MessageChoice {
   multi: boolean;
   /** Current selection; filled in every time the card is (re-)rendered. */
   selected?: string[];
-  submit: {
+  /**
+   * TASK-1266: absent = a toggle-only group. The card carries one shared
+   * submit button (`actions` block) that collects every group at once, so a
+   * form with several questions is answered in a single click instead of one
+   * submit per question.
+   */
+  submit?: {
     /** Command type dispatched when the user presses submit. */
     action: string;
     label: string;

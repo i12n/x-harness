@@ -190,7 +190,7 @@ describe("Authorization (TASK-1106)", () => {
       status: "rejected",
       error: { code: "unauthorized" },
     });
-    expect(result.error?.message).toContain("requires one of");
+    expect(result.error?.message).toContain("需要以下角色之一");
     expect(calls).toEqual([]);
   });
 });

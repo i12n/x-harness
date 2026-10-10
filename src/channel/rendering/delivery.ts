@@ -5,6 +5,14 @@ import type { OutgoingMessage } from "../message.js";
 import type { DeliveryAcceptanceView } from "../../delivery/application/acceptance.js";
 import { markdownBlock, sectionBlock } from "./common.js";
 import { formatFailure } from "./task.js";
+import {
+  SECTION,
+  deliveryStatusLabel,
+  noteLabel,
+  releaseStatusLabel,
+  reviewVerdictLabel,
+  taskStatusLabel,
+} from "./copy.js";
 
 export interface DeliveryRenderOptions {
   conversationId?: string;
@@ -33,10 +41,11 @@ export function renderDeliveryMessage(
   const { delivery } = facts;
   const blocks = [
     sectionBlock(
-      `${delivery.id} · Delivery`,
-      [`Specification: ${delivery.specificationId}`, `Status: ${delivery.status}`].join(
-        "\n",
-      ),
+      `${delivery.id} · 交付`,
+      [
+        `规格：${delivery.specificationId}`,
+        `${SECTION.status}：${deliveryStatusLabel(delivery.status)}`,
+      ].join("\n"),
     ),
   ];
 
@@ -47,32 +56,32 @@ export function renderDeliveryMessage(
             const fact = facts.blockingFacts?.find((entry) => entry.taskId === task.id);
             const state =
               fact?.state === "dependency-blocked"
-                ? "dependency-blocked" +
+                ? "被依赖阻塞" +
                   (fact.blockingTaskIds.length > 0
-                    ? ` (blocked by ${fact.blockingTaskIds.join(", ")})`
+                    ? `（等待 ${fact.blockingTaskIds.join("、")}）`
                     : "")
-                : task.status;
+                : taskStatusLabel(task.status);
             return (
               `- ${fact ? "✗" : taskMark(task)} ${task.id} ${task.title} · ${state}` +
-              (isOptional(task) ? " · optional" : " · required")
+              (isOptional(task) ? " · 可选" : " · 必需")
             );
           })
           .join("\n")
-      : "(no tasks)";
-  blocks.push(markdownBlock(`**Tasks**\n${tasks}`));
+      : "（还没有任务）";
+  blocks.push(markdownBlock(`**${SECTION.tasks}**\n${tasks}`));
 
   const chains = collectChains(facts);
   if (chains.length > 0) {
     blocks.push(
       markdownBlock(
-        `**Blocking chain**\n${chains
+        `**${SECTION.blockingChain}**\n${chains
           .map((chain) =>
             chain
               .map(
                 (entry) =>
                   `${entry.taskId}${entry.title ? ` ${entry.title}` : ""}` +
-                  (entry.status ? ` (${entry.status})` : "") +
-                  (entry.note ? ` — ${entry.note}` : ""),
+                  (entry.status ? `（${taskStatusLabel(entry.status)}）` : "") +
+                  (entry.note ? ` —— ${noteLabel(entry.note)}` : ""),
               )
               .join("\n  ↓\n"),
           )
@@ -82,8 +91,8 @@ export function renderDeliveryMessage(
   } else if (facts.blocking && facts.blocking.length > 0) {
     blocks.push(
       markdownBlock(
-        `**Blocking**\n${facts.blocking
-          .map((task) => `- ${task.id} is ${task.status}`)
+        `**${SECTION.blockedBy}**\n${facts.blocking
+          .map((task) => `- ${task.id} 处于${taskStatusLabel(task.status)}`)
           .join("\n")}`,
       ),
     );
@@ -95,7 +104,7 @@ export function renderDeliveryMessage(
   if (failures.length > 0) {
     blocks.push(
       markdownBlock(
-        `**Failure**\n${failures
+        `**${SECTION.failure}**\n${failures
           .map(
             (entry) =>
               `${failureOwner(entry.fact)}: ${formatFailure(entry.evidence!)}`,
@@ -109,10 +118,10 @@ export function renderDeliveryMessage(
   blocks.push(
     markdownBlock(
       release
-        ? `**Release**\n- ${release.id} · ${release.status}` +
+        ? `**${SECTION.release}**\n- ${release.id} · ${releaseStatusLabel(release.status)}` +
             (release.releasedAt ? ` · ${release.releasedAt}` : "") +
-            (release.createdBy ? ` · by ${release.createdBy}` : "")
-        : "**Release**\n(not released)",
+            (release.createdBy ? ` · 由 ${release.createdBy}` : "")
+        : `**${SECTION.release}**\n（尚未发布）`,
     ),
   );
 
@@ -122,13 +131,15 @@ export function renderDeliveryMessage(
   if (acceptance) {
     const lines = acceptance.tasks.map((task) => {
       const marks = [
-        task.status === "DONE" ? "✓" : `(${task.status})`,
-        task.review ? `评审 ${task.review.verdict}` : undefined,
+        task.status === "DONE" ? "✓" : `(${taskStatusLabel(task.status)})`,
+        task.review ? `评审${reviewVerdictLabel(task.review.verdict)}` : undefined,
         task.acceptance?.requiresHumanAcceptance ? "有不可验证标准" : undefined,
       ].filter(Boolean);
       return `- ${task.taskId} ${task.title} · ${marks.join(" · ")}`;
     });
-    blocks.push(markdownBlock(`**验收**\n${lines.join("\n") || "(no tasks)"}`));
+    blocks.push(
+      markdownBlock(`**${SECTION.acceptance}**\n${lines.join("\n") || "（还没有任务）"}`),
+    );
     if (acceptance.requiresHumanAcceptance) {
       blocks.push(
         markdownBlock(`⚠️ 需要人验收：${acceptance.reasons.slice(0, 5).join("；")}`),
@@ -151,7 +162,9 @@ export function renderDeliveryMessage(
 
   return {
     conversationId: options.conversationId ?? delivery.id,
-    text: `${delivery.id} ${delivery.specificationId} (${delivery.status})`,
+    text: `${delivery.id} ${delivery.specificationId}（${deliveryStatusLabel(
+      delivery.status,
+    )}）`,
     blocks,
   };
 }
