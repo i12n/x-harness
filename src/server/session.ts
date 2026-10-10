@@ -15,8 +15,12 @@ import type {
 } from "../command/types.js";
 import type { IncomingMessage } from "../channel/message.js";
 import { commandsForRequirementAction } from "../requirement/application/actions.js";
-import type { RequirementResolver } from "../requirement/application/resolver.js";
-import { renderRequirementCard } from "../channel/rendering/requirement.js";
+import type { RequirementResolver, RequirementView } from "../requirement/application/resolver.js";
+import {
+  renderRequirementCard,
+  REQUIREMENT_NEXT_ACTION,
+  stageLabel,
+} from "../channel/rendering/requirement.js";
 import type { ConversationService } from "../conversation/service.js";
 import type { Problem } from "../domain/problem.js";
 import type { Task } from "../domain/task.js";
@@ -309,6 +313,7 @@ export class ChatSession {
           roles,
           decision.action,
           routing,
+          decision.requirementId,
         );
         if (handled) {
           return;
@@ -355,7 +360,171 @@ export class ChatSession {
     if (action.actionId === CARD_CHOICE_TOGGLE) {
       return { immediate: this.toggleChoice(action, target) };
     }
+    // TASK-1259: the "next step" buttons on a requirement card.
+    if (action.actionId === REQUIREMENT_NEXT_ACTION) {
+      return this.requirementNextAction(action, target, roles);
+    }
     return this.submitCardCommand(action, target, roles);
+  }
+
+  /**
+   * TASK-1259: a one-tap stage action. The card carries
+   * `{requirementId, action, stage}`, so the click works even when the card is
+   * older than the conversation it lives in — and a stale click says so
+   * instead of quietly doing the wrong thing.
+   */
+  private requirementNextAction(
+    action: CardActionInput,
+    target: ChatTarget,
+    roles: Role[],
+  ): CardActionOutcome {
+    const value = parseJsonRecord(action.value) ?? {};
+    const requirementId = asString(value.requirementId);
+    const actionType = asString(value.action);
+    const stage = asString(value.stage);
+    if (!requirementId || !actionType || !this.deps.requirements) {
+      return { immediate: expiredCard(target.conversationId) };
+    }
+    return {
+      immediate: {
+        conversationId: target.conversationId,
+        text: "⏳ 收到，正在处理…（结果会发在这条需求的话题里）",
+      },
+      deferred: async () => {
+        try {
+          const outcome = await this.applyRequirementNext({
+            fallback: target,
+            senderId: action.operatorOpenId,
+            roles,
+            requirementId,
+            actionType,
+            ...(stage ? { stage } : {}),
+          });
+          await this.reply(
+            outcome.target.target,
+            outcome.message,
+            outcome.target.routing,
+          );
+        } catch (error) {
+          await this.reply(
+            target,
+            {
+              conversationId: target.conversationId,
+              text: `⚠️ 这一步没做成：${describeError(error)}`,
+            },
+            undefined,
+          );
+        }
+      },
+    };
+  }
+
+  /**
+   * Runs one requirement action and answers in the requirement's own topic —
+   * the id in the button decides *which* requirement, never the chat the card
+   * happened to sit in.
+   */
+  private async applyRequirementNext(input: {
+    fallback: ChatTarget;
+    senderId: string;
+    roles: Role[];
+    requirementId: string;
+    actionType: string;
+    stage?: string;
+  }): Promise<{ target: { target: ChatTarget; routing?: ReplyRouting }; message: OutgoingMessage }> {
+    const fallback = { target: input.fallback, routing: undefined };
+    const view = await this.deps.requirements!
+      .resolveByProblemId(input.requirementId)
+      .catch(() => undefined);
+    if (!view) {
+      return {
+        target: fallback,
+        message: {
+          conversationId: input.fallback.conversationId,
+          text: `找不到 ${input.requirementId} 这条需求，可能已被删除。`,
+        },
+      };
+    }
+    const where = await this.requirementTarget(view, input.fallback);
+    if (input.stage && input.stage !== view.stage) {
+      return {
+        target: where,
+        message: {
+          conversationId: where.target.conversationId,
+          text: `这步已经做过了——「${view.title}」现在是「${stageLabel(view.stage)}」。`,
+          blocks: renderRequirementCard(view, { conversationId: where.target.conversationId })
+            .blocks,
+        },
+      };
+    }
+    const outcome = commandsForRequirementAction(
+      { type: input.actionType as IntentAction["type"], payload: {} },
+      view,
+    );
+    if (outcome.ask) {
+      return {
+        target: where,
+        message: { conversationId: where.target.conversationId, text: outcome.ask },
+      };
+    }
+    const commandInput: IntentInput = {
+      channel: "feishu",
+      conversationId: where.target.conversationId,
+      messageId: `card-${input.requirementId}`,
+      senderId: input.senderId,
+      text: "",
+    };
+    let last: OutgoingMessage | undefined;
+    for (const command of outcome.commands) {
+      const result = await this.deps.dispatcher.dispatch(prepareCommand(commandInput, command), {
+        channel: "feishu",
+        userId: input.senderId,
+        roles: input.roles,
+      });
+      last = renderCommandResult(result, where.target.conversationId);
+      if (result.status === "succeeded") {
+        await this.afterSuccess(where.target, result.type, result.data);
+      }
+    }
+    return {
+      target: where,
+      message:
+        last ?? renderRequirementCard(view, { conversationId: where.target.conversationId }),
+    };
+  }
+
+  /** Where a requirement's answers belong: its own conversation and topic. */
+  private async requirementTarget(
+    view: RequirementView,
+    fallback: ChatTarget,
+  ): Promise<{ target: ChatTarget; routing?: ReplyRouting }> {
+    if (!view.problemId) {
+      return { target: fallback };
+    }
+    try {
+      const conversations = await this.deps.conversations.findBySubject({
+        channel: "feishu",
+        type: "problem",
+        id: view.problemId,
+      });
+      const conversation = conversations.at(-1);
+      if (!conversation) {
+        return { target: fallback };
+      }
+      return {
+        target: {
+          conversationId: conversation.id,
+          receiveId: conversation.externalChatId,
+          receiveIdType: "chat_id",
+        },
+        routing: conversation.anchorMessageId
+          ? { replyToMessageId: conversation.anchorMessageId, replyInThread: true }
+          : undefined,
+      };
+    } catch (error) {
+      this.log(`could not resolve the requirement conversation: ${describeError(error)}`);
+      return { target: fallback };
+    }
   }
 
   private async cardTarget(chatId: string): Promise<ChatTarget> {
@@ -595,17 +764,33 @@ export class ChatSession {
     roles: Role[],
     action: IntentAction,
     routing: ReplyRouting | undefined,
+    explicitRequirementId?: string,
   ): Promise<boolean> {
     if (action.type === "chat" || !this.deps.requirements) {
       return false;
     }
-    // Pasted ids are ignored on purpose; say so once instead of failing.
-    const hint = pastedIdHint(message.text);
+    // TASK-1259: `prob-…` is a supported handle now; the machine ids
+    // (spec-/task-/run-/dlv-) are still ignored, with one short line saying so.
+    const hint = pastedIdHint(message.text, explicitRequirementId);
     // TASK-1250: a new requirement is created without resolving anything — that
     // ordering bug is why a fresh chat got "I don't know which one you mean".
-    const view = await this.deps.requirements
-      .resolve(target.conversationId)
-      .catch(() => undefined);
+    // TASK-1259: a named prob id wins over the conversation's binding.
+    const view = explicitRequirementId
+      ? await this.deps.requirements.resolveByProblemId(explicitRequirementId).catch(() => undefined)
+      : await this.deps.requirements.resolve(target.conversationId).catch(() => undefined);
+    if (explicitRequirementId && !view) {
+      await this.reply(
+        target,
+        {
+          conversationId: target.conversationId,
+          text: `找不到 ${explicitRequirementId} 这条需求（可能编号不对，或被删掉了）。`,
+        },
+        routing,
+      );
+      return true;
+    }
+    const idHint = explicitRequirementId ? `（按你点名的 ${explicitRequirementId} 处理）` : undefined;
+    const prefix = [hint, idHint].filter(Boolean).join("\n") || undefined;
     // TASK-1257: a new requirement must never be opened inside someone else's
     // topic — that is exactly how two requirements ended up sharing one Feishu
     // thread (the new requirement's cards were threaded under the old topic's
@@ -640,7 +825,7 @@ export class ChatSession {
         target,
         {
           conversationId: target.conversationId,
-          text: [hint, question, options.length > 0 ? `[${options.join("] [")}]` : undefined]
+          text: [prefix, question, options.length > 0 ? `[${options.join("] [")}]` : undefined]
             .filter(Boolean)
             .join("\n"),
         },
@@ -658,7 +843,7 @@ export class ChatSession {
           // TASK-1249: name the requirement the bot acted on. When a chat has
           // more than one similar requirement, this is what shows the operator
           // that the answer belongs to a different one than they meant.
-          text: [hint, view ? `「${view.title}」：${outcome.ask}` : outcome.ask]
+          text: [prefix, view ? `「${view.title}」：${outcome.ask}` : outcome.ask]
             .filter(Boolean)
             .join("\n"),
         },
@@ -677,7 +862,7 @@ export class ChatSession {
         target,
         {
           conversationId: target.conversationId,
-          text: [hint, "这项需求还没到能开工的阶段——先确认要做什么。"].filter(Boolean).join("\n"),
+          text: [prefix, "这项需求还没到能开工的阶段——先确认要做什么。"].filter(Boolean).join("\n"),
         },
         routing,
       );
@@ -689,7 +874,7 @@ export class ChatSession {
       });
       await this.reply(
         target,
-        hint ? { ...card, text: `${hint}\n${card.text ?? ""}` } : card,
+        prefix ? { ...card, text: `${prefix}\n${card.text ?? ""}` } : card,
         routing,
       );
       return true;
@@ -715,7 +900,7 @@ export class ChatSession {
       const rendered = renderCommandResult(result, target.conversationId);
       await this.reply(
         target,
-        hint && first ? { ...rendered, text: `${hint}\n${rendered.text ?? ""}` } : rendered,
+        prefix && first ? { ...rendered, text: `${prefix}\n${rendered.text ?? ""}` } : rendered,
         routing,
       );
       first = false;
@@ -935,8 +1120,10 @@ function describeError(error: unknown): string {
  * action still runs against the current requirement — and one short line says
  * so, instead of silently ignoring what they typed.
  */
-function pastedIdHint(text: string): string | undefined {
-  return /\b(?:prob|spec|task|run|dlv)-[A-Za-z0-9_-]{4,}/.test(text)
+function pastedIdHint(text: string, explicitRequirementId?: string): string | undefined {
+  // TASK-1259: a prob-… id is a real handle now, so only the machine ids get
+  // the "I ignored that" line.
+  return !explicitRequirementId && /\b(?:spec|task|run|dlv)-[A-Za-z0-9_-]{4,}/.test(text)
     ? "（编号我忽略了——直接说就行，我知道你说的是哪件事）"
     : undefined;
 }

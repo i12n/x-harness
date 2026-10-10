@@ -49,6 +49,12 @@ export interface RequirementView {
 
 export interface RequirementResolver {
   resolve(conversationId: string): Promise<RequirementView | undefined>;
+  /**
+   * TASK-1259: the requirement behind a `prob-…` id — the user-facing handle.
+   * Progress queries and stage actions resolve through this, so they work
+   * regardless of which topic the message was typed in.
+   */
+  resolveByProblemId(problemId: string): Promise<RequirementView | undefined>;
 }
 
 export interface RequirementResolverDeps {
@@ -118,24 +124,51 @@ export function createRequirementResolver(
             .catch(() => undefined)
         : undefined;
       const tasks = specification ? await tasksOfSpecification(deps, specification.id) : [];
-      const explicitBound = boundTask;
-      const currentTask =
-        explicitBound ??
-        (tasks.length > 0
-          ? (tasks.find((task) => task.status !== "DONE") ?? tasks[tasks.length - 1])
-          : undefined);
-
-      return {
-        ...(problem ? { problemId: problem.id, problem } : {}),
-        title: problem?.title ?? specification?.title ?? boundTask?.title ?? "(未命名需求)",
-        stage: deriveStage(problem, delivery, tasks),
-        ...(specification ? { specification } : {}),
-        ...(delivery ? { delivery } : {}),
-        tasks,
-        ...(explicitBound ? { boundTask: explicitBound } : {}),
-        ...(currentTask ? { currentTask } : {}),
-      };
+      return buildView({ problem, specification, delivery, tasks, boundTask });
     },
+
+    async resolveByProblemId(problemId: string): Promise<RequirementView | undefined> {
+      const problem = await deps.problems.findProblem(problemId).catch(() => undefined);
+      if (!problem) {
+        return undefined;
+      }
+      const specification = await deps.specifications
+        .findSpecificationByProblem(problemId)
+        .catch(() => undefined);
+      const delivery = specification
+        ? await deps.deliveries
+            .findDeliveryBySpecification(specification.id)
+            .catch(() => undefined)
+        : undefined;
+      const tasks = specification ? await tasksOfSpecification(deps, specification.id) : [];
+      return buildView({ problem, specification, delivery, tasks });
+    },
+  };
+}
+
+/** One shape for both lookups, so the two paths cannot drift apart. */
+function buildView(input: {
+  problem?: Problem;
+  specification?: Specification;
+  delivery?: Delivery;
+  tasks: Task[];
+  boundTask?: Task;
+}): RequirementView {
+  const { problem, specification, delivery, tasks, boundTask } = input;
+  const currentTask =
+    boundTask ??
+    (tasks.length > 0
+      ? (tasks.find((task) => task.status !== "DONE") ?? tasks[tasks.length - 1])
+      : undefined);
+  return {
+    ...(problem ? { problemId: problem.id, problem } : {}),
+    title: problem?.title ?? specification?.title ?? boundTask?.title ?? "(未命名需求)",
+    stage: deriveStage(problem, delivery, tasks),
+    ...(specification ? { specification } : {}),
+    ...(delivery ? { delivery } : {}),
+    tasks,
+    ...(boundTask ? { boundTask } : {}),
+    ...(currentTask ? { currentTask } : {}),
   };
 }
 

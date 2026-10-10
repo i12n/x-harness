@@ -28,6 +28,90 @@ export interface RequirementActionOutcome {
   advance?: boolean;
 }
 
+/**
+ * TASK-1259: one thing the user can do right now, with the sentence that says
+ * what it will do. The card renderer and the button handler both read this
+ * list, so the prompt ("下一步会做什么") and the buttons can never disagree.
+ */
+export interface RequirementActionOption {
+  type: IntentAction["type"];
+  label: string;
+  /** One concrete sentence: what happens, where, how long. Shown as 下一步. */
+  nextStep: string;
+  style?: "primary" | "danger" | "default";
+}
+
+/**
+ * The actions that make sense at this stage, the recommended one first.
+ *
+ * Stages with nothing to ask (`released`) return an empty list — the card then
+ * says what to do in words instead of offering a button that cannot work.
+ */
+export function requirementActionPlan(view: RequirementView): RequirementActionOption[] {
+  switch (view.stage) {
+    case "clarifying":
+      return [];
+    case "developing":
+      return [
+        {
+          type: "show",
+          label: "看看进展",
+          nextStep: "看当前这轮的进展与最近一次结论（不会改动任何东西）",
+          style: "primary",
+        },
+        {
+          type: "rerun",
+          label: "重跑",
+          nextStep: "从 origin/main 新建工作区，重新跑一轮开发",
+        },
+      ];
+    case "awaiting_acceptance":
+      return [
+        {
+          type: "deploy",
+          label: "推测试环境",
+          nextStep:
+            "把这次改动推到 test 分支、开/更新 PR 并部署到测试环境，完成后把地址发在这里（约 2 分钟）",
+          style: "primary",
+        },
+        {
+          type: "approve",
+          label: "通过",
+          nextStep: "直接接受这次改动，交付转为「待发布」（这一步还不会上线）",
+        },
+        {
+          type: "reject",
+          label: "打回并说明问题",
+          nextStep: "带上你的意见回到开发并自动重跑一轮；请接着把问题说清楚",
+          style: "danger",
+        },
+      ];
+    case "awaiting_release":
+      return [
+        {
+          type: "publish",
+          label: "发布",
+          nextStep:
+            "合并 PR 到 main 并触发生产部署；部署成功后交付标记为已上线（约 3–5 分钟）",
+          style: "primary",
+        },
+        {
+          type: "deploy",
+          label: "再看测试环境",
+          nextStep: "重新部署一次测试环境（改动有更新时会同步更新 PR）",
+        },
+        {
+          type: "reject",
+          label: "打回并说明问题",
+          nextStep: "带上你的意见回到开发并自动重跑一轮；请接着把问题说清楚",
+          style: "danger",
+        },
+      ];
+    case "released":
+      return [];
+  }
+}
+
 export function commandsForRequirementAction(
   action: IntentAction,
   view: RequirementView | undefined,

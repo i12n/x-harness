@@ -31,6 +31,12 @@ export interface RunChatNotifierOptions {
    * to be dropped even though the conversation that asked for the work exists.
    */
   resolveTarget?: (run: Run) => Promise<ChatTarget | undefined>;
+  /**
+   * TASK-1259: rendered right after the run card. A Run that leaves the
+   * requirement at a decision point (待验收) is followed by the question card
+   * with its "下一步" buttons. Best effort — the run card already went out.
+   */
+  followUp?: (run: Run, target: ChatTarget) => Promise<OutgoingMessage | undefined>;
 }
 
 /**
@@ -82,6 +88,17 @@ export class RunChatNotifier {
             receiveIdType: resolved.receiveIdType ?? "chat_id",
           },
         });
+        const followUp = await this.options.followUp?.(run, resolved);
+        if (followUp) {
+          await this.options.send(resolved, {
+            ...followUp,
+            conversationId: resolved.conversationId,
+            metadata: {
+              receiveId: resolved.receiveId,
+              receiveIdType: resolved.receiveIdType ?? "chat_id",
+            },
+          });
+        }
       } catch {
         // A transient send failure leaves the Run unmarked, so the next flush
         // retries it.

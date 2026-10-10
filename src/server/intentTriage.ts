@@ -13,6 +13,12 @@ export interface TriageDecision {
   command?: unknown;
   /** TASK-1244: user-level action; absent when the engine produced a command. */
   action?: IntentAction;
+  /**
+   * TASK-1259: the requirement the user named with a `prob-…` id. Deterministic
+   * (extracted before the model runs) and it wins over the conversation's
+   * binding — the id is the user-facing handle for progress and actions.
+   */
+  requirementId?: string;
   confidence: number;
   /** Where the decision came from — deterministic rules or the model. */
   stage: "rule" | "model";
@@ -34,6 +40,13 @@ export interface IntentTriageOptions {
 }
 
 const DEFAULT_CONFIRM_THRESHOLD = 0.6;
+
+const REQUIREMENT_ID_PATTERN = /\b(prob-[0-9a-f]{8,})\b/i;
+
+/** TASK-1259: `prob-…` ids may appear anywhere in the message. */
+export function extractRequirementId(text: string): string | undefined {
+  return REQUIREMENT_ID_PATTERN.exec(text)?.[1]?.toLowerCase();
+}
 
 /** Commands that only read facts — they never change anything. */
 const QUERY_COMMANDS = new Set<CommandType>([
@@ -94,22 +107,33 @@ export function createIntentTriage(options: IntentTriageOptions): IntentTriage {
 
   return {
     async classify(input): Promise<TriageDecision> {
+      const requirementId = useRules ? extractRequirementId(input.text) : undefined;
       if (useRules) {
         const rule = matchRule(input.text);
         if (rule) {
-          return {
+          return withRequirementId({
             kind: commandKind(rule),
             command: rule,
             confidence: 1,
             stage: "rule",
             reason: "识别到「动作 + 具名对象」的固定句式",
             needsConfirmation: false,
-          };
+          }, requirementId);
         }
       }
-      return decideFromIntentResult(await options.engine.parse(input), threshold, "model");
+      return withRequirementId(
+        decideFromIntentResult(await options.engine.parse(input), threshold, "model"),
+        requirementId,
+      );
     },
   };
+}
+
+function withRequirementId(
+  decision: TriageDecision,
+  requirementId: string | undefined,
+): TriageDecision {
+  return requirementId ? { ...decision, requirementId } : decision;
 }
 
 function matchRule(text: string): unknown {

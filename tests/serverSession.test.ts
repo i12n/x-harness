@@ -16,7 +16,9 @@ import { RunService } from "../src/run/application/runService.js";
 import { TaskRunService } from "../src/run/application/taskRunService.js";
 import type { ChatTarget, RunChatNotifier } from "../src/server/notifications.js";
 import { ChatSession } from "../src/server/session.js";
+import { createIntentTriage } from "../src/server/intentTriage.js";
 import type { SpecificationBootstrap } from "../src/server/specificationBootstrap.js";
+import { REQUIREMENT_NEXT_ACTION } from "../src/channel/rendering/requirement.js";
 import { InMemoryConversationStore } from "../src/store/inMemoryConversationStore.js";
 import { InMemoryEventStore } from "../src/store/inMemoryEventStore.js";
 import { InMemoryProblemStore } from "../src/store/inMemoryProblemStore.js";
@@ -293,6 +295,143 @@ describe("ChatSession", () => {
     const reply = textOf(sent.at(-1)!.message);
     expect(reply).toContain("新需求");
     expect(reply).toContain("面包屑分隔符间距");
+  });
+
+  // TASK-1259: prob-… is the user-facing handle — it wins over whatever the
+  // conversation happens to be about.
+  it("resolves a prob-… id in the message instead of the conversation binding", async () => {
+    const seenIds: string[] = [];
+    const intent = new StubIntentEngine({ command: undefined, action: { type: "show" } });
+    const { session, sent } = await buildSession(intent, ["ou_dev"], {
+      triage: createIntentTriage({ engine: intent }),
+      requirements: {
+        resolve: async () => {
+          throw new Error("the conversation binding must not be used");
+        },
+        resolveByProblemId: async (id) => {
+          seenIds.push(id);
+          return {
+            problemId: id,
+            title: "专辑页「播放全部」间距",
+            stage: "awaiting_release" as const,
+            tasks: [],
+            delivery: {
+              id: "dlv-9",
+              specificationId: "spec-9",
+              status: "READY_FOR_RELEASE",
+            } as never,
+          };
+        },
+      },
+    });
+
+    await session.handleEvent(event("om-1", "prob-950662cc5b 现在到哪一步了"));
+
+    expect(seenIds).toEqual(["prob-950662cc5b"]);
+    const reply = textOf(sent.at(-1)!.message);
+    expect(reply).toContain("专辑页「播放全部」间距");
+    expect(reply).toContain("按你点名的 prob-950662cc5b");
+  });
+
+  // TASK-1259: the card's "next step" buttons run the same action pipeline as
+  // typing it — including the role check.
+  it("runs a stage action from a card button", async () => {
+    const seen: Record<string, unknown>[] = [];
+    const dispatcher = new CommandDispatcher({
+      handlers: {
+        "deploy.test": async (payload) => {
+          seen.push(payload);
+          return { message: { conversationId: "x", text: "🚀 已开始测试部署" } };
+        },
+      },
+      idempotency: new InMemoryIdempotencyStore(),
+    });
+    const intent = new StubIntentEngine({ command: undefined });
+    const { session, sent } = await buildSession(intent, ["ou_reviewer"], {
+      dispatcher,
+      access: {
+        allowedUserIds: ["ou_reviewer"],
+        roleMap: { ou_reviewer: "reviewer" },
+        defaultRole: "developer",
+      },
+      requirements: {
+        resolve: async () => undefined,
+        resolveByProblemId: async (id) => ({
+          problemId: id,
+          title: "专辑页「播放全部」间距",
+          stage: "awaiting_acceptance" as const,
+          tasks: [],
+          delivery: {
+            id: "dlv-9",
+            specificationId: "spec-9",
+            status: "IN_PROGRESS",
+          } as never,
+        }),
+      },
+    });
+
+    const outcome = await session.handleCardAction({
+      messageId: "om-card",
+      chatId: "oc_chat",
+      operatorOpenId: "ou_reviewer",
+      actionId: REQUIREMENT_NEXT_ACTION,
+      value: JSON.stringify({
+        requirementId: "prob-9",
+        action: "deploy",
+        stage: "awaiting_acceptance",
+      }),
+    });
+    await outcome.deferred?.();
+
+    expect(seen).toEqual([{ deliveryId: "dlv-9" }]);
+    expect(textOf(sent.at(-1)!.message)).toContain("测试部署");
+  });
+
+  it("refuses a card button the sender's role cannot use", async () => {
+    const seen: unknown[] = [];
+    const dispatcher = new CommandDispatcher({
+      handlers: {
+        "deploy.promote": async (payload) => {
+          seen.push(payload);
+          return { message: { conversationId: "x", text: "已合并" } };
+        },
+      },
+      idempotency: new InMemoryIdempotencyStore(),
+    });
+    const intent = new StubIntentEngine({ command: undefined });
+    const { session, sent } = await buildSession(intent, ["ou_dev"], {
+      dispatcher,
+      requirements: {
+        resolve: async () => undefined,
+        resolveByProblemId: async (id) => ({
+          problemId: id,
+          title: "专辑页「播放全部」间距",
+          stage: "awaiting_release" as const,
+          tasks: [],
+          delivery: {
+            id: "dlv-9",
+            specificationId: "spec-9",
+            status: "READY_FOR_RELEASE",
+          } as never,
+        }),
+      },
+    });
+
+    const outcome = await session.handleCardAction({
+      messageId: "om-card",
+      chatId: "oc_chat",
+      operatorOpenId: "ou_dev",
+      actionId: REQUIREMENT_NEXT_ACTION,
+      value: JSON.stringify({
+        requirementId: "prob-9",
+        action: "publish",
+        stage: "awaiting_release",
+      }),
+    });
+    await outcome.deferred?.();
+
+    expect(seen).toEqual([]);
+    expect(textOf(sent.at(-1)!.message)).toContain("deploy.promote");
   });
 
   // TASK-1252: "开始做吧 / 重试生成规格" on a confirmed requirement whose

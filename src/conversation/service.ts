@@ -69,6 +69,23 @@ export class ConversationService {
   }
 
   /**
+   * TASK-1259: conversations bound to a subject — used to report a stage
+   * result back into the requirement's own topic (a `prob-…` id is enough;
+   * the chat the button was clicked in is irrelevant).
+   */
+  async findBySubject(input: {
+    channel: string;
+    type: SubjectType;
+    id: string;
+  }): Promise<Conversation[]> {
+    return this.store.listConversations({
+      channel: input.channel,
+      subjectType: input.type,
+      subjectId: input.id,
+    });
+  }
+
+  /**
    * Idempotent inbound handling. The duplicate check happens BEFORE any other
    * side effect, so a retried webhook neither creates a second conversation
    * nor re-triggers downstream commands.

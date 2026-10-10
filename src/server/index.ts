@@ -7,6 +7,7 @@ import { parseCardAction } from "../channel/feishu/cardActions.js";
 import { FeishuAdapter } from "../channel/feishu/adapter.js";
 import { HttpFeishuClient } from "../channel/feishu/client.js";
 import { renderDeployTransitionMessage } from "../channel/rendering/deploy.js";
+import { renderRequirementCard } from "../channel/rendering/requirement.js";
 import type { OutgoingMessage } from "../channel/message.js";
 import { CommandDispatcher } from "../command/dispatcher.js";
 import { createDeliveryCommandHandlers } from "../command/handlers/delivery.js";
@@ -428,6 +429,19 @@ export class HarnessRuntime {
       idempotency: new InMemoryIdempotencyStore(),
     });
 
+    // TASK-1259: one resolver, shared by the session and the notification
+    // paths — a stage card must describe exactly what its buttons do, so both
+    // sides read the same view.
+    const requirements = createRequirementResolver({
+      conversations: stores.conversations,
+      problems: stores.problems,
+      specifications: stores.specifications,
+      deliveries: stores.deliveries,
+      plans: stores.specificationPlans,
+      runs: stores.runs,
+      tasks: stores.tasks,
+    });
+
     const notifier = new RunChatNotifier({
       runs: stores.runs,
       events: stores.events,
@@ -468,6 +482,22 @@ export class HarnessRuntime {
           // Fall through to the default chat, then to silence.
         }
         return undefined;
+      },
+      // TASK-1259: a Run that leaves the requirement at a decision point is
+      // followed by the question card ("做完了，先看测试环境？").
+      followUp: async (run) => {
+        const task = await stores.tasks.findTask(run.taskId).catch(() => undefined);
+        const specificationId = task ? specificationIdOfTask(task.id) : undefined;
+        const specification = specificationId
+          ? await stores.specifications.findSpecification(specificationId).catch(() => undefined)
+          : undefined;
+        const view = specification
+          ? await requirements.resolveByProblemId(specification.problemId).catch(() => undefined)
+          : undefined;
+        if (!view || view.stage !== "awaiting_acceptance") {
+          return undefined;
+        }
+        return renderRequirementCard(view, { conversationId: "" });
       },
       ...(config.feishu.defaultChatId
         ? {
@@ -528,15 +558,7 @@ export class HarnessRuntime {
       triage: createIntentTriage({ engine: intent }),
       // TASK-1244: the chat resolves a user-level action against "what this
       // conversation is about" instead of asking the user for ids.
-      requirements: createRequirementResolver({
-        conversations: stores.conversations,
-        problems: stores.problems,
-        specifications: stores.specifications,
-        deliveries: stores.deliveries,
-        plans: stores.specificationPlans,
-        runs: stores.runs,
-        tasks: stores.tasks,
-      }),
+      requirements,
       dispatcher,
       access: config.access,
       botOpenId,
@@ -567,6 +589,47 @@ export class HarnessRuntime {
     // ---- delivery notifications ----------------------------------------
     const deliveryNotifier: DeliveryNotifier = {
       notify: async (notification) => {
+        // TASK-1259: 交付到了"该人决定"的点（待发布 / 卡住）时，发到该需求
+        // 自己的话题，并带上"下一步"按钮；找不到需求才退回默认群。
+        try {
+          const specification = await stores.specifications
+            .findSpecification(notification.delivery.specificationId)
+            .catch(() => undefined);
+          const view = specification
+            ? await requirements.resolveByProblemId(specification.problemId).catch(() => undefined)
+            : undefined;
+          if (view?.problemId) {
+            const bound = await conversations.findBySubject({
+              channel: "feishu",
+              type: "problem",
+              id: view.problemId,
+            });
+            const conversation = bound.at(-1);
+            if (conversation) {
+              await sendToTarget(
+                {
+                  conversationId: conversation.id,
+                  receiveId: conversation.externalChatId,
+                  receiveIdType: "chat_id",
+                },
+                {
+                  ...renderRequirementCard(view, { conversationId: conversation.id }),
+                  ...(conversation.anchorMessageId
+                    ? {
+                        metadata: {
+                          replyToMessageId: conversation.anchorMessageId,
+                          replyInThread: true,
+                        },
+                      }
+                    : {}),
+                },
+              );
+              return;
+            }
+          }
+        } catch (error) {
+          this.log(`需求卡发送失败，回退到默认群：${describe(error)}`);
+        }
         if (!config.feishu.defaultChatId) {
           return;
         }
