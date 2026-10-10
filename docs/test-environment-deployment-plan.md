@@ -122,6 +122,14 @@ harness 服务用飞书长连接，**没有 HTTP server、没有公网回调**�
 线上同理换成 `deploy-prod.yml` 与默认分支），
 状态变化才写事件、才更新飞书卡片。这样不需要新增公网入口，也不需反向代理。
 
+**一次 watch 怎么认领 run（TASK-1270）**：watch 锚在**这一次 push** 上——
+`sinceMs` 取 push 之前的时间戳（不是 watch 调用时间），并用这次 push 的 commit
+`head_sha` 认领 run。两条一起用，是因为 GitHub 的 `createdAt` 只有秒精度：
+push 与建 PR 之间创建的 run 可能"看起来比 watch 还早"，只靠时间比较会被永久
+过滤，监听停在 `none`，直到 30 分钟 TTL 才误报"部署超时"。只有 API 没给
+`head_sha` 时才退回时间守卫。详见
+[task-1270-deploy-watch-since-guard.md](task-1270-deploy-watch-since-guard.md)。
+
 （未来若要做 PR 打开即预览，再考虑 GitHub webhook；那需要一个新的受保护入站入口，
 属于额外工作。）
 

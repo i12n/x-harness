@@ -305,4 +305,118 @@ describe("deployment watching (TASK-1231)", () => {
     // Not terminal: fixing the repository lets the same watch recover.
     expect(service.watched()).toEqual(["dlv-1"]);
   });
+
+  // TASK-1270 现场事故（dlv-3ee9ed0da9）：run 与 watch 起点落在同一秒，而
+  // GitHub 的 createdAt 只有秒精度——`createdAt >= sinceMs` 每次都把它排除，
+  // 监听第一跳就报 none，撑到 30 分钟 TTL 才发"部署超时"。commit sha 才是
+  // 这次 watch 的身份，时间守卫不能先把它否掉。
+  it("matches a run from the same second when the commit pins it", async () => {
+    const sha = "5116fb80c5850a978ea4d23c5d0dc105e26da299";
+    const w = watcher([{ ...run("in_progress"), headSha: sha }]);
+    w.advance(180); // the watch starts 180ms into the run's (second-truncated) second
+    w.service.watch("dlv-1", { headSha: sha });
+
+    const transitions = await w.service.poll();
+
+    expect(transitions.map((t) => t.state)).toEqual(["pending"]);
+  });
+
+  // TASK-1231 的语义仍然保留：没有 commit 可对齐时，早于 watch 的 run 不算数
+  // （否则重新部署会拿上一次的结论当本次结果）。
+  it("still ignores a run older than the watch when no commit is known", async () => {
+    const w = watcher([run("in_progress")]);
+    w.advance(5_000);
+    w.service.watch("dlv-1");
+
+    // The old run is not this watch's run: report "none", never its result.
+    const transitions = await w.service.poll();
+    expect(transitions.map((t) => t.state)).toEqual(["none"]);
+  });
+
+  // TASK-1270: push 与 watch 之间还隔着建 PR 的往返。sinceMs 必须取 push 之前，
+  // 否则 run（createdAt 秒精度）看起来比 watch 还早，同样会被永久过滤。
+  it("counts a run created between the push and the later watch start", async () => {
+    let nowMs = Date.parse("2026-10-10T05:53:46Z");
+    const service = new DeployService({
+      deliveries: {
+        async load(id) {
+          return {
+            delivery: { id, status: "IN_PROGRESS" } as never,
+            tasks: [{ id: "task-1", repositoryId: "repo-x-music" } as never],
+          };
+        },
+      },
+      repositories: { async findRepository() { return repository; } },
+      runs: {
+        async listRuns() {
+          return [
+            {
+              id: "run-1",
+              taskId: "task-1",
+              status: "SUCCEEDED",
+              result: {
+                workspaces: [
+                  { targetId: "task-1-target-0", path: "/root/ai-workspaces/task-1/run-1/t0" },
+                ],
+              },
+            } as never,
+          ];
+        },
+      },
+      git: {
+        async publish() {
+          nowMs += 1_400; // push + the PR round-trip that used to eat the run
+          return { pushed: true };
+        },
+      },
+      github: {
+        async findPullRequest() {
+          return undefined;
+        },
+        async openPullRequest(input: { head: string; base: string }) {
+          return {
+            number: 7,
+            url: "https://github.com/i12n/x-music/pull/7",
+            state: "open",
+            merged: false,
+            head: input.head,
+            base: input.base,
+          };
+        },
+        async listWorkflows() {
+          return [
+            {
+              id: 1,
+              name: "Deploy app to test environment",
+              path: ".github/workflows/deploy-test.yml",
+              state: "active",
+            },
+          ];
+        },
+        async listWorkflowRuns() {
+          return [
+            {
+              id: 1,
+              name: "Deploy app to test environment",
+              branch: "test/dlv-1",
+              status: "in_progress",
+              url: "https://github.com/i12n/x-music/actions/runs/1",
+              createdAt: "2026-10-10T05:53:47Z", // created 1s into a 1.4s round-trip
+              path: ".github/workflows/deploy-test.yml",
+              event: "push",
+            },
+          ];
+        },
+      } as unknown as GitHubClient,
+      events: new InMemoryEventStore(),
+      now: () => new Date(nowMs),
+    });
+
+    await service.deployTest("dlv-1");
+    // The watch starts *after* the run was created — that is the trap.
+    expect(nowMs).toBeGreaterThan(Date.parse("2026-10-10T05:53:47Z"));
+
+    const transitions = await service.poll();
+    expect(transitions.map((t) => t.state)).toEqual(["pending"]);
+  });
 });

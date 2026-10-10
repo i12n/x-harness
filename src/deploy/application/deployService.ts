@@ -293,6 +293,11 @@ export class DeployService {
     // `unconfigured` on its own if the workflow really is missing.
     await this.assertDeployWorkflow(repository, repo, DEPLOY_TEST_WORKFLOW, "测试环境");
 
+    // TASK-1270: take the clock *before* the push. `watch()` otherwise defaults
+    // `sinceMs` to when it is called — after the push→PR round-trip — and a run
+    // the push triggered then looks older than the watch (GitHub's `createdAt`
+    // only has second precision), so it was filtered out on every poll.
+    const pushedAt = this.now().getTime();
     const publish = await this.deps.git.publish({
       repository,
       workspacePath: worktree,
@@ -327,7 +332,11 @@ export class DeployService {
     });
     // TASK-1231: from here the loop watches the repository's own deployment.
     // TASK-1268: pinned to the commit we just pushed.
-    this.watch(deliveryId, publish.sha ? { headSha: publish.sha } : {});
+    // TASK-1270: and counting runs from the push itself, not from the watch.
+    this.watch(deliveryId, {
+      sinceMs: pushedAt,
+      ...(publish.sha ? { headSha: publish.sha } : {}),
+    });
     return { deliveryId, repositoryId: repository.id, branch, pullRequest };
   }
 
@@ -375,15 +384,25 @@ export class DeployService {
       }
       throw error;
     }
-    // Newest first, so the first run at/after `sinceMs` is the one we watch.
-    const run = runs.find(
-      (candidate) =>
-        Date.parse(candidate.createdAt) >= sinceMs &&
-        // Both guards only bite when the API actually reported the field, so a
-        // thin client (or an older GitHub response) cannot make a watch hang.
-        (!candidate.event || candidate.event === "push") &&
-        (!options.headSha || !candidate.headSha || candidate.headSha === options.headSha),
-    );
+    // Newest first, so the first matching run is the one we watch.
+    //
+    // TASK-1270: when both sides know the commit, the sha *is* the identity of
+    // this watch. The time guard used to run first, and because GitHub
+    // timestamps only have second precision a run created in the same second
+    // as — but just before — `sinceMs` was dropped forever: the watch reported
+    // `none` on every poll and only surfaced as "部署超时" 30 minutes later.
+    // The guard still applies whenever the API did not report a head sha.
+    const run = runs.find((candidate) => {
+      // Both guards only bite when the API actually reported the field, so a
+      // thin client (or an older GitHub response) cannot make a watch hang.
+      if (candidate.event && candidate.event !== "push") {
+        return false;
+      }
+      if (options.headSha && candidate.headSha) {
+        return candidate.headSha === options.headSha;
+      }
+      return Date.parse(candidate.createdAt) >= sinceMs;
+    });
     if (!run) {
       return { deliveryId, branch, state: "none", workflow };
     }
