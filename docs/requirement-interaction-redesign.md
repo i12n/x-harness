@@ -352,6 +352,7 @@ schema migration       013 幂等
 | D8 卡片去 id | ✅（需求卡主文案只有标题 + 阶段 + 动作；id 仅在 `includeIds` 详情行） | `src/channel/rendering/requirement.ts` |
 | D4 旧命令不再面向用户 | ✅（模型不再产出 id 命令；用户粘 id 时忽略并回一句引导） | `src/server/session.ts`（`pastedIdHint`） |
 | 语料回归资产 | ✅（33 条 fixture + 离线测试 + 联网评估脚本；**未跑联网版**） | `tests/fixtures/intentPhrasings.json`、`tests/requirementIntent.test.ts`、`scripts/eval-intent.mjs` |
+| 新需求换锚点 + 上下文按话题裁剪 + 不在别人话题里开单（TASK-1257） | ✅ | `src/server/session.ts`、`src/conversation/service.ts`、`src/server/index.ts`，设计见 `docs/conversation-binding-design.md` |
 
 **部署前还要做的**：跑一次 `node scripts/eval-intent.mjs`（需要 `npm run build` 与线上同源的
 `AI_LLM_*`），确认命中率 ≥ 90% 且危险误判 = 0——这是 §10 的放行条件。命令层仍保留机器命令

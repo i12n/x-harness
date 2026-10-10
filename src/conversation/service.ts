@@ -140,6 +140,39 @@ export class ConversationService {
     return this.store.listMessages(conversationId, options);
   }
 
+  /**
+   * TASK-1257: the messages of the requirement this conversation currently
+   * carries — everything after its topic anchor.
+   *
+   * A chat-level conversation rotates between requirements (its anchor moves
+   * with each new one, because a chat has exactly one such conversation), so a
+   * plain "last N messages" window would hand the model the previous
+   * requirement's chatter and make a brand-new requirement read as a follow-up.
+   */
+  async contextSinceAnchor(
+    conversationId: string,
+    options: MessageListOptions = {},
+  ): Promise<ConversationMessage[]> {
+    const conversation = await this.store.findConversation(conversationId);
+    const anchorMessageId = conversation.anchorMessageId;
+    if (!anchorMessageId) {
+      return this.store.listMessages(conversationId, options);
+    }
+    const anchor = await this.store
+      .findMessageByExternal(conversation.channel, anchorMessageId)
+      .catch(() => undefined);
+    // `after` is exclusive, and the anchor message *is* the requirement's own
+    // description ("这个间距改成 12px" needs it) — so start one millisecond
+    // earlier to keep it in the window without changing the store contract.
+    const after = anchor
+      ? new Date(Date.parse(anchor.createdAt) - 1).toISOString()
+      : undefined;
+    return this.store.listMessages(conversationId, {
+      ...options,
+      ...(after ? { after } : {}),
+    });
+  }
+
   async attachSubject(
     conversationId: string,
     subject: { type: SubjectType; id: string },

@@ -327,14 +327,8 @@ export class ChatSession {
       { channel: message.channel, userId: message.senderId, roles },
     );
     if (result.status === "succeeded" && result.type === "problem.create") {
-      // TASK-1243: a new requirement gets its own topic — anchor it to the
-      // message that asked for it, so two requirements never share one thread.
-      try {
-        await this.deps.conversations.setAnchor(target.conversationId, message.messageId);
-        routing = { replyToMessageId: message.messageId, replyInThread: true };
-      } catch (error) {
-        this.log(`could not re-anchor the conversation: ${describeError(error)}`);
-      }
+      routing =
+        (await this.anchorNewRequirement(target.conversationId, message.messageId)) ?? routing;
     }
     const rendered = renderCommandResult(result, target.conversationId);
     await this.reply(target, rendered, routing);
@@ -612,6 +606,28 @@ export class ChatSession {
     const view = await this.deps.requirements
       .resolve(target.conversationId)
       .catch(() => undefined);
+    // TASK-1257: a new requirement must never be opened inside someone else's
+    // topic — that is exactly how two requirements ended up sharing one Feishu
+    // thread (the new requirement's cards were threaded under the old topic's
+    // root message, and the user's next reply was read as the old one's).
+    if (action.type === "create" && view?.problemId && threadOf(message)) {
+      await this.reply(
+        target,
+        {
+          conversationId: target.conversationId,
+          text: [
+            hint,
+            `这听起来像是个新需求，而你现在是在「${view.title}」这条话题里说的。`,
+            "新需求请在群里直接发一遍（不要用话题回复），我会单独给它开一条话题；",
+            `如果是要改「${view.title}」，直接说要改成什么。`,
+          ]
+            .filter(Boolean)
+            .join("\n"),
+        },
+        routing,
+      );
+      return true;
+    }
     if (action.type === "clarify") {
       const question =
         asTrimmedString(action.payload?.question) ?? "你是想做什么？";
@@ -688,6 +704,14 @@ export class ChatSession {
         prepareCommand(input, command),
         { channel: message.channel, userId: message.senderId, roles },
       );
+      // TASK-1257: the user-level `create` action reaches the same
+      // `problem.create` command as the legacy path — but it returned early
+      // through this helper, so the re-anchor below never ran for it. That is
+      // how a brand-new requirement kept the previous one's topic anchor.
+      if (result.status === "succeeded" && result.type === "problem.create") {
+        routing =
+          (await this.anchorNewRequirement(target.conversationId, message.messageId)) ?? routing;
+      }
       const rendered = renderCommandResult(result, target.conversationId);
       await this.reply(
         target,
@@ -717,6 +741,24 @@ export class ChatSession {
     } catch (error) {
       this.log(`failed to send reply: ${describeError(error)}`);
       return;
+    }
+  }
+
+  /**
+   * TASK-1257: a new requirement gets its own topic — anchor the conversation
+   * to the message that asked for it, so two requirements never share one
+   * thread, and send this turn's reply into that new topic.
+   */
+  private async anchorNewRequirement(
+    conversationId: string,
+    messageId: string,
+  ): Promise<ReplyRouting | undefined> {
+    try {
+      await this.deps.conversations.setAnchor(conversationId, messageId);
+      return { replyToMessageId: messageId, replyInThread: true };
+    } catch (error) {
+      this.log(`could not re-anchor the conversation: ${describeError(error)}`);
+      return undefined;
     }
   }
 
@@ -901,6 +943,11 @@ function pastedIdHint(text: string): string | undefined {
 
 function asTrimmedString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+/** TASK-1257: true when the message arrived inside a Feishu topic/thread. */
+function threadOf(message: IncomingMessage): string | undefined {
+  return asTrimmedString(message.metadata?.threadId);
 }
 
 /**

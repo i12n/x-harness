@@ -34,7 +34,12 @@ class StubIntentEngine implements IntentEngine {
   }
 }
 
-function event(messageId: string, text: string, openId = "ou_dev"): Record<string, unknown> {
+function event(
+  messageId: string,
+  text: string,
+  openId = "ou_dev",
+  threadId?: string,
+): Record<string, unknown> {
   return {
     schema: "2.0",
     header: { event_id: `evt-${messageId}`, event_type: "im.message.receive_v1" },
@@ -47,6 +52,7 @@ function event(messageId: string, text: string, openId = "ou_dev"): Record<strin
         message_type: "text",
         create_time: "1758240000000",
         content: JSON.stringify({ text }),
+        ...(threadId ? { thread_id: threadId } : {}),
       },
     },
   };
@@ -235,6 +241,58 @@ describe("ChatSession", () => {
     expect(created).toHaveLength(1);
     expect(created[0]!.title).toContain("面包屑间距改成 8px");
     expect(textOf(sent.at(-1)!.message)).not.toContain("我还不知道你说的是哪件事");
+  });
+
+  // TASK-1257: the user-level `create` action must move the topic anchor too.
+  // It reaches the same `problem.create` command as the legacy path but returns
+  // through a helper, so the old re-anchor never ran for it — that is how a new
+  // requirement kept the previous one's anchor and landed in its topic.
+  it("moves the topic anchor to the message that asked for a new requirement", async () => {
+    const intent = new StubIntentEngine({
+      command: undefined,
+      action: { type: "create", payload: { statement: "专辑页间距调整" } },
+    });
+    const { session, sent, conversations } = await buildSession(intent, ["ou_dev"], {
+      requirements: { resolve: async () => undefined },
+    });
+
+    await session.handleEvent(event("om-1", "第一个需求"));
+    await session.handleEvent(event("om-2", "再做一个：专辑页间距调整"));
+
+    const conversation = await conversations.findByExternal({
+      channel: "feishu",
+      externalChatId: "oc_chat",
+    });
+    expect(conversation?.anchorMessageId).toBe("om-2");
+    // The reply for the new requirement lands in its own topic, not the old one.
+    expect(sent.at(-1)!.message.metadata?.replyToMessageId).toBe("om-2");
+  });
+
+  // TASK-1257: never open a new requirement inside someone else's topic.
+  it("refuses to open a new requirement inside another requirement's topic", async () => {
+    const intent = new StubIntentEngine({
+      command: undefined,
+      action: { type: "create", payload: { statement: "把专辑页间距也改一下" } },
+    });
+    const { session, sent, problems } = await buildSession(intent, ["ou_dev"], {
+      requirements: {
+        resolve: async () => ({
+          problemId: "prob-1",
+          title: "面包屑分隔符间距",
+          stage: "developing" as const,
+          tasks: [],
+        }),
+      },
+    });
+
+    await session.handleEvent(
+      event("om-1", "把专辑页间距也改一下", "ou_dev", "omt_topic_1"),
+    );
+
+    expect(await problems.listProblems()).toHaveLength(0);
+    const reply = textOf(sent.at(-1)!.message);
+    expect(reply).toContain("新需求");
+    expect(reply).toContain("面包屑分隔符间距");
   });
 
   // TASK-1252: "开始做吧 / 重试生成规格" on a confirmed requirement whose

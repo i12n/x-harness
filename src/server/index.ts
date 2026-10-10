@@ -498,7 +498,12 @@ export class HarnessRuntime {
       context: async (input) => {
         try {
           const conversation = await conversations.findConversation(input.conversationId);
-          const messages = await conversations.context(input.conversationId, { limit: 12 });
+          // TASK-1257: scope the window to the current topic — a chat-level
+          // conversation rotates between requirements, and the previous
+          // requirement's chatter made a new one read as a follow-up.
+          const messages = await conversations.contextSinceAnchor(input.conversationId, {
+            limit: 12,
+          });
           const subject = await describeConversationSubject(conversation, {
             problems: stores.problems,
             tasks: stores.tasks,

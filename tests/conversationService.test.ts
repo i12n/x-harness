@@ -114,6 +114,36 @@ describe("ConversationService (TASK-1102)", () => {
     expect(recent.map((message) => message.content)).toEqual(["m3", "m4"]);
   });
 
+  // TASK-1257: a chat-level conversation rotates between requirements (its
+  // anchor moves with each new one), so the window the model sees must not
+  // reach back into the previous requirement.
+  it("scopes the context window to the current topic anchor", async () => {
+    const store = new InMemoryConversationStore();
+    const service = new ConversationService(store);
+    for (let index = 1; index <= 4; index += 1) {
+      await service.handleIncoming(
+        incoming({
+          messageId: `message-00${index}`,
+          text: `m${index}`,
+          timestamp: new Date(`2026-09-19T00:00:0${index}.000Z`),
+        }),
+      );
+    }
+    const conversation = await store.findConversationByExternal({
+      channel: "feishu",
+      externalChatId: "chat-1",
+    });
+    await service.setAnchor(conversation!.id, "message-003");
+
+    const scoped = await service.contextSinceAnchor(conversation!.id, { limit: 12 });
+    const unscoped = await service.context(conversation!.id, { limit: 12 });
+
+    // The anchor message itself belongs to the current topic (it is the
+    // requirement's own description).
+    expect(scoped.map((message) => message.content)).toEqual(["m3", "m4"]);
+    expect(unscoped.map((message) => message.content)).toEqual(["m1", "m2", "m3", "m4"]);
+  });
+
   it("records outgoing replies and links a subject", async () => {
     const store = new InMemoryConversationStore();
     const service = new ConversationService(store);
