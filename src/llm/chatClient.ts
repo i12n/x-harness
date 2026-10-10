@@ -120,11 +120,19 @@ export class HttpChatClient implements ChatClient {
     let maxTokens = request.maxTokens ?? this.maxTokens;
     for (;;) {
       const parsed = await this.sendOnce(request, maxTokens);
-      if (parsed.content.trim()) {
+      // TASK-1261: JSON mode truncates silently — a partial object still counts
+      // as "content", and the caller only sees `Unexpected end of JSON input`.
+      // `finish_reason=length` means the model ran out of room, so buy more and
+      // ask again instead of handing over a half-written object.
+      const truncatedJson = Boolean(request.json) && parsed.finishReason === "length";
+      if (parsed.content.trim() && !truncatedJson) {
         return parsed.content;
       }
       const next = escalateBudget(maxTokens);
       if (next === undefined) {
+        if (parsed.content.trim()) {
+          return parsed.content;
+        }
         throw emptyContentError(parsed, maxTokens);
       }
       maxTokens = next;

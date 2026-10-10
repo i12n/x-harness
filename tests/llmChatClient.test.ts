@@ -141,6 +141,57 @@ describe("HttpChatClient", () => {
     expect(calls).toBe(1);
   });
 
+  // TASK-1261: JSON mode truncates silently — the caller only sees
+  // "Unexpected end of JSON input" (this is how a problem analysis failed).
+  it("buys more room when JSON mode truncated the object", async () => {
+    const calls: { url: string; init: Parameters<ChatFetchLike>[1] }[] = [];
+    const fetchImpl: ChatFetchLike = async (url, init) => {
+      calls.push({ url, init });
+      return calls.length === 1
+        ? response(200, {
+            choices: [
+              {
+                message: { content: '{"summary":"x","clarifications":[{"question":"y"}' },
+                finish_reason: "length",
+              },
+            ],
+          })
+        : response(200, { choices: [{ message: { content: '{"summary":"x"}' } }] });
+    };
+    const client = new HttpChatClient({
+      baseUrl: "https://api.example.com",
+      apiKey: "secret",
+      model: "model-x",
+      fetchImpl,
+    });
+
+    await expect(client.complete({ messages: [], json: true })).resolves.toBe('{"summary":"x"}');
+
+    expect(calls).toHaveLength(2);
+    const second = JSON.parse(calls[1]!.init.body ?? "{}") as { max_tokens: number };
+    expect(second.max_tokens).toBe(4096);
+  });
+
+  it("hands over the truncated JSON at the ceiling so the caller can report it", async () => {
+    let calls = 0;
+    const client = new HttpChatClient({
+      baseUrl: "https://api.example.com",
+      apiKey: "secret",
+      model: "model-x",
+      fetchImpl: async () => {
+        calls += 1;
+        return response(200, {
+          choices: [{ message: { content: '{"partial":' }, finish_reason: "length" }],
+        });
+      },
+    });
+
+    await expect(client.complete({ messages: [], json: true, maxTokens: 8192 })).resolves.toBe(
+      '{"partial":',
+    );
+    expect(calls).toBe(1);
+  });
+
   it("requires an api key", () => {
     expect(
       () => new HttpChatClient({ baseUrl: "https://x", apiKey: "  ", model: "m" }),

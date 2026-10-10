@@ -270,6 +270,36 @@ describe("ChatSession", () => {
     expect(sent.at(-1)!.message.metadata?.replyToMessageId).toBe("om-2");
   });
 
+  // TASK-1261: when creating the requirement fails (model output, store error…)
+  // the reply must still open the topic of *this* message — a failure landing in
+  // the previous requirement's thread is what made the bot look like it ignored
+  // the new one.
+  it("opens the new topic even when creating the requirement fails", async () => {
+    const dispatcher = new CommandDispatcher({
+      handlers: {
+        "problem.create": async () => {
+          throw new Error("problem analyzer returned no valid JSON");
+        },
+      },
+      idempotency: new InMemoryIdempotencyStore(),
+    });
+    const intent = new StubIntentEngine({
+      command: undefined,
+      action: { type: "create", payload: { statement: "加下载按钮" } },
+    });
+    const { session, sent } = await buildSession(intent, ["ou_dev"], {
+      dispatcher,
+      requirements: { resolve: async () => undefined, resolveByProblemId: async () => undefined },
+    });
+
+    await session.handleEvent(event("om-1", "第一个需求"));
+    await session.handleEvent(event("om-2", "再加一个：下载按钮"));
+
+    const last = sent.at(-1)!.message;
+    expect(textOf(last)).toContain("problem.create");
+    expect(last.metadata?.replyToMessageId).toBe("om-2");
+  });
+
   // TASK-1257: never open a new requirement inside someone else's topic.
   it("refuses to open a new requirement inside another requirement's topic", async () => {
     const intent = new StubIntentEngine({

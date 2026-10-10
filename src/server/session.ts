@@ -814,6 +814,12 @@ export class ChatSession {
       );
       return true;
     }
+    // TASK-1261: a new requirement's reply opens its own topic from the message
+    // itself — even when creating it fails. Otherwise the failure (and the
+    // retry) lands in whatever topic the conversation was last anchored to.
+    if (action.type === "create" && !threadOf(message) && message.messageId) {
+      routing = { replyToMessageId: message.messageId, replyInThread: true };
+    }
     if (action.type === "clarify") {
       const question =
         asTrimmedString(action.payload?.question) ?? "你是想做什么？";
